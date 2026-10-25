@@ -1,6 +1,6 @@
 // SOCOM II (SCUS-97275, r0004) - free guard for runtime asset loading
 //
-// Libraries loaded mid-round (socom_bots.py loadlib) came back with their texture objects overwritten a few
+// Libraries loaded mid-round (test.py loadlib) came back with their texture objects overwritten a few
 // seconds later: the loader/reader tear-down that runs inside the same game_call frees memory those objects
 // still use. While the flag at 0x000D06F8 is set, free (0x00180280) and delete (0x00180AD0) return without
 // freeing and count the skipped calls at 0x000D06FC. The script sets the flag only around the load, so the
