@@ -1,0 +1,13 @@
+/* Map Editor: the Model Editor layout (model-editor-page.css) plus the map outliner groups. */
+
+app-map-editor-page { display: block; height: 100vh; }
+
+.mp-group { display: flex; align-items: center; gap: 5px; padding: 3px 4px 1px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--me-muted); }
+.mp-group > span:first-of-type { flex: 1; }
+.mp-twist { background: none; border: none; color: var(--me-muted); cursor: pointer; padding: 0; width: 12px; font-size: 9px; }
+.mp-model { padding-left: 14px; }
+.mp-inst { padding-left: 32px; color: var(--me-muted); }
+.mp-inst.sel { color: var(--vscode-foreground, #cccccc); }
+.mp-place { display: flex; flex-direction: column; gap: 6px; }
+.mp-lib { max-height: 260px; overflow: auto; border: 1px solid var(--me-border); border-radius: 4px; padding: 2px; }
+.mp-progress { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); padding: 2px 10px; border-radius: 3px; background: rgba(0, 0, 0, 0.6); font-size: 11px; }

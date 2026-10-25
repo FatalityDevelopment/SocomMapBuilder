@@ -1,0 +1,39 @@
+/* VS Code "Dark Modern" theme tokens. The panels read these through var(--vscode-*) with the same fallbacks the
+   VS Code webviews used, so the page looks the same outside VS Code. */
+:root {
+  --vscode-font-family: 'Segoe UI', system-ui, sans-serif;
+  --vscode-editor-background: #1f1f1f;
+  --vscode-foreground: #cccccc;
+  --vscode-descriptionForeground: #9d9d9d;
+  --vscode-panel-border: #2b2b2b;
+  --vscode-sideBar-background: #181818;
+  --vscode-titleBar-activeBackground: #181818;
+  --vscode-toolbar-hoverBackground: #2a2d2e;
+  --vscode-focusBorder: #0078d4;
+  --vscode-button-background: #0e639c;
+  --vscode-button-foreground: #ffffff;
+  --vscode-input-background: #313131;
+  --vscode-input-foreground: #cccccc;
+  --vscode-input-border: #3c3c3c;
+  --vscode-menu-background: #252526;
+  --vscode-menu-foreground: #cccccc;
+  --vscode-menu-border: #454545;
+  --vscode-menu-selectionBackground: #04395e;
+  --vscode-menu-separatorBackground: #454545;
+  --vscode-list-hoverBackground: #2a2d2e;
+  --vscode-list-activeSelectionBackground: #04395e;
+  --vscode-gitDecoration-modifiedResourceForeground: #e2c08d;
+  --vscode-errorForeground: #f48771;
+  --vscode-editorWarning-foreground: #cca700;
+  --vscode-statusBar-background: #181818;
+  --vscode-statusBar-foreground: #cccccc;
+  --vscode-statusBarItem-errorBackground: #c72e0f;
+}
+
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--vscode-editor-background);
+  color: var(--vscode-foreground);
+  font-family: var(--vscode-font-family);
+  font-size: 13px;
+}

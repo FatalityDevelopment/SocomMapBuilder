@@ -1,0 +1,52 @@
+/* ── Shared utility classes used by standalone webview pages ────────────── */
+/* These mirror the lm-* definitions in disasm-editor.css so new pages      */
+/* (snapshot-manager, diff-viewer, etc.) don't need to import that full      */
+/* file. PaginatedTableComponent ships its own table/pagination styles.      */
+
+body {
+  margin: 0;
+  font-family: var(--vscode-font-family, 'Segoe UI', sans-serif);
+  font-size: 13px;
+  background: #1e1e1e;
+  color: #d4d4d4;
+}
+
+/* ── Button primitives ───────────────────────────────────────────────────── */
+.lm-tool-btn {
+  background: #3c3c3c;
+  color: #d4d4d4;
+  border: 1px solid #555;
+  border-radius: 3px;
+  padding: 3px 8px;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+  font-family: inherit;
+}
+.lm-tool-btn:hover:not(:disabled) { background: #4c4c4c; }
+.lm-tool-btn:disabled { opacity: .45; cursor: default; }
+
+.lm-danger-btn { color: #f48771; border-color: #7d3c2a; }
+.lm-danger-btn:hover:not(:disabled) { background: #5a2a1e; }
+
+.lm-row-btn {
+  background: none;
+  border: none;
+  color: #aaa;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 2px 5px;
+  border-radius: 3px;
+  white-space: nowrap;
+  font-family: inherit;
+}
+.lm-row-btn:hover { color: #ccc; background: #2a2d2e; }
+.lm-row-btn.lm-danger-btn { color: #f48771; }
+.lm-row-btn.lm-danger-btn:hover { color: #f48771; background: #3a1a12; }
+
+.lm-goto-btn { color: #569cd6; }
+.lm-goto-btn:hover { color: #9cdcfe !important; }
+
+/* ── Text utilities ──────────────────────────────────────────────────────── */
+.lm-mono  { font-family: monospace; color: #9cdcfe; }
+.lm-muted { color: #666; }

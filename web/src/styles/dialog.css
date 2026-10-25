@@ -1,0 +1,18 @@
+/* Path prompts (open, save copy, export pack). The browser cannot hand over a file path, so these take typed paths. */
+.mb-backdrop {
+  position: fixed; inset: 0; z-index: 50;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+}
+.mb-dialog {
+  width: min(460px, calc(100vw - 32px));
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 12px 14px;
+  background: var(--vscode-menu-background); border: 1px solid var(--vscode-menu-border); border-radius: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+.mb-dialog .me-field { grid-template-columns: 1fr; }
+.mb-dialog .me-field-wide { grid-template-columns: 1fr; }
+.mb-dialog .me-actions { justify-content: flex-end; }
+.mb-dialog .me-search { margin: 0; }
+.mb-dialog .me-panel-title { padding-left: 0; padding-right: 0; }

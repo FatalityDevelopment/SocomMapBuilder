@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>MapBuilder.Server</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="CodeDesigner.Ps2.FileFormats\**" />
+    <EmbeddedResource Remove="CodeDesigner.Ps2.FileFormats\**" />
+    <None Remove="CodeDesigner.Ps2.FileFormats\**" />
+    <Content Remove="CodeDesigner.Ps2.FileFormats\**" />
+  </ItemGroup>
+
+  <!-- The built web client (npm run build in ../web) is served from wwwroot next to the executable. -->
+  <ItemGroup>
+    <Content Include="..\web\dist\**" LinkBase="wwwroot" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="CodeDesigner.Ps2.FileFormats\CodeDesigner.Ps2.FileFormats.csproj" />
+  </ItemGroup>
+
+</Project>

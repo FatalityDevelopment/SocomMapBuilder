@@ -1,0 +1,13 @@
+# .NET
+bin/
+obj/
+*.user
+.vs/
+
+# Web
+node_modules/
+web/dist/
+
+# OS / editors
+.DS_Store
+Thumbs.db
