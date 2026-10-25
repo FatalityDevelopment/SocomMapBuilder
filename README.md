@@ -6,6 +6,8 @@
 
 <p align="center">Map, model, texture and animation editors for <em>SOCOM U.S. Navy SEALs II / 3/CA</em> packages (.ZDB / .CDB), from the CodeDesigner team.</p>
 
+<p align="center">Only tested on SOCOM II currently / still being worked on.</p>
+
 ---
 
 Open a package and edit the map, the models on it (props, vehicles, characters, weapons), their textures and palettes, and the character animations. Every page works on the same in-memory session, so a prop moved on the map, a texture replaced in the Model Editor and a clip keyed in the Animation Editor all save together: as a copy of the .ZDB, or as a memory-card pack the game loads from `mc0:`.
