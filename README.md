@@ -31,6 +31,8 @@ The activity bar on the left switches pages; each keeps its state while you swit
 
 ### Map Builder
 
+<img src="docs/screenshots/map.png" alt="SOCOM Map Builder" width="600">
+
 The composed map (world model, props, clutter, sky) with its textures and baked lighting.
 
 - Move, rotate, scale, duplicate and delete props and clutter; drop them to the ground.
@@ -40,6 +42,10 @@ The composed map (world model, props, clutter, sky) with its textures and baked 
 - Facade trees face the camera, as they do in game.
 
 ### Model Editor
+
+<img src="docs/screenshots/character.png" alt="SOCOM Map Builder" width="600">
+
+<img src="docs/screenshots/weapon.png" alt="SOCOM Map Builder" width="600">
 
 Props, vehicles, weapons and skinned characters.
 
@@ -52,12 +58,16 @@ Props, vehicles, weapons and skinned characters.
 
 ### Animation Editor
 
+<img src="docs/screenshots/anim.png" alt="SOCOM Map Builder" width="600">
+
 The package's character clips (MOTION_S.ZAR, editable) and the shared MOTION_P.ZAR (read-only), played on any skinned character.
 
 - Create, duplicate, rename, delete and retime clips; key bones with the gizmo or exact fields.
 - With the game's RUN folder available, weapons mount on the clip and fire their muzzle effects.
 
 ### Asset Viewer
+
+<img src="docs/screenshots/asset.png" alt="SOCOM Map Builder" width="600">
 
 A file manager for packages and archives.
 
@@ -68,6 +78,17 @@ A file manager for packages and archives.
 - **Import…**: add .ZED / .ZAR / .MPS files to a package (or merge another package's files), or any file (an .RDR, say) to a .ZAR / .ZED archive. Replace and Remove work at both levels.
 
 Edits in the editors are undoable. SOCOM 3 / Combined Assault archives and GTA: San Andreas (.ISO or .IMG) open read-only.
+
+## Examples
+
+<img src="docs/screenshots/raygun.png" alt="SOCOM Map Builder" width="600">
+
+<img src="docs/screenshots/hummer.png" alt="SOCOM Map Builder" width="600">
+
+<img src="docs/screenshots/tank.png" alt="SOCOM Map Builder" width="600">
+
+<img src="docs/screenshots/ca_char.png" alt="SOCOM Map Builder" width="600">
+
 
 ## Getting started
 
