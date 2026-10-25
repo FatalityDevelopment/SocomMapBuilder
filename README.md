@@ -93,6 +93,13 @@ Edits in the editors are undoable. SOCOM 3 / Combined Assault archives and GTA: 
 
 <img src="docs/screenshots/ca_char.png" alt="SOCOM Map Builder" width="600">
 
+### GTA - characters and props work, some vehicles. Some small things that need to be done still
+
+<img src="docs/screenshots/gta_cj.png" alt="SOCOM Map Builder" width="600">
+
+<img src="docs/screenshots/gta_dildo.png" alt="SOCOM Map Builder" width="600">
+
+<img src="docs/screenshots/gta_flame_thrower.png" alt="SOCOM Map Builder" width="600">
 
 ## Getting started
 
@@ -228,6 +235,5 @@ Open http://localhost:5173. `npm run typecheck` checks the page without building
 - Map, model and animation edits round-trip through save and reopen. Imported models and textures and textures made from images render in the editors but have not all been tested in game yet; test on copies.
 - Runtime VRAM for map props is limited: large or many new textures may not all fit in game.
 - An imported character appears in the editors; spawning it in a mission also needs its character records.
-- Save-game crafting and APACHE00 / DNAS patch tools are not part of Map Builder.
 
 *SOCOM U.S. Navy SEALs is a trademark of Sony Interactive Entertainment. This project is not affiliated with or endorsed by Sony; it ships no game files.*
