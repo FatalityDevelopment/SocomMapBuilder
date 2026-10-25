@@ -4,7 +4,7 @@
 
 <h1 align="center">SOCOM Map Builder</h1>
 
-<p align="center">Map, model, texture and animation editors for <em>SOCOM U.S. Navy SEALs II / 3/CA</em> packages (.ZDB / .CDB), from the CodeDesigner team. FTB has not been tested but should work.</p>
+<p align="center">Map, model, texture and animation editors for <em>SOCOM U.S. Navy SEALs II / 3/ CA</em> packages (.ZDB / .CDB), from the CodeDesigner team. FTB has not been tested but should work.</p>
 
 <p align="center">Code Designer AI was used to research and develop this app. Code Designer will be released at a later date.</p>
 
