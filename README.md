@@ -1,10 +1,10 @@
 <p align="center">
-  <img src="docs/icon.svg" alt="SOCOM II Map Builder" width="112">
+  <img src="docs/icon.svg" alt="SOCOM Map Builder" width="112">
 </p>
 
-<h1 align="center">SOCOM II Map Builder</h1>
+<h1 align="center">SOCOM Map Builder</h1>
 
-<p align="center">Map, model, texture and animation editors for <em>SOCOM U.S. Navy SEALs II</em> packages (.ZDB / .CDB), from the CodeDesigner team.</p>
+<p align="center">Map, model, texture and animation editors for <em>SOCOM U.S. Navy SEALs II / 3/CA</em> packages (.ZDB / .CDB), from the CodeDesigner team.</p>
 
 ---
 
