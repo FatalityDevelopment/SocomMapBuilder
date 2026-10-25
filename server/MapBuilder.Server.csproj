@@ -14,9 +14,15 @@
     <Content Remove="CodeDesigner.Ps2.FileFormats\**" />
   </ItemGroup>
 
-  <!-- The built web client (npm run build in ../web) is served from wwwroot next to the executable. -->
+  <!-- The built web client (npm run build in ../web) is served from wwwroot next to the executable. It is copied
+       as plain files, not as static web assets: those make Development runs (Visual Studio) look for a
+       server\wwwroot folder that does not exist. -->
+  <PropertyGroup>
+    <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
+  </PropertyGroup>
+
   <ItemGroup>
-    <Content Include="..\web\dist\**" LinkBase="wwwroot" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <None Include="..\web\dist\**" Link="wwwroot\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>

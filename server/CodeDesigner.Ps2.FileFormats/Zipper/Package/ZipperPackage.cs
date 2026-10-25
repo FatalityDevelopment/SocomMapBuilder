@@ -76,9 +76,13 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
                 using ZdbArchive zdb = ZdbArchive.Open(path);
                 return new ZipperPackage(path, true, zdb.Entries.Select(e => MakeEntry(e.FullPath, e.Data)).ToList());
             }
+            // A path that does not exist is an error, not "its parent folder" (that could be a drive root).
+            if (!File.Exists(path) && !Directory.Exists(path)) throw new FileNotFoundException($"Package not found: {path}", path);
             string dir = Directory.Exists(path) ? path : System.IO.Path.GetDirectoryName(path) ?? path;
             if (!Directory.Exists(dir)) throw new FileNotFoundException("Package not found", path);
-            var files = Directory.GetFiles(dir).Select(f => MakeEntry(f, File.ReadAllBytes(f))).ToList();
+            // Package files are a few MB; anything huge beside them (a disc image) is not part of the package.
+            var files = Directory.GetFiles(dir).Where(f => new FileInfo(f).Length < 512L * 1024 * 1024)
+                .Select(f => MakeEntry(f, File.ReadAllBytes(f))).ToList();
             string name = Directory.Exists(path) ? System.IO.Path.GetFileName(dir.TrimEnd('\\', '/')) : System.IO.Path.GetFileName(path);
             return new ZipperPackage(System.IO.Path.Combine(dir, name), false, files);
         }

@@ -1,0 +1,71 @@
+namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
+{
+    /// <summary>
+    /// Clip names CA's animation banks hash (CRC32; most are SOCOM II's own clip names, the rest cracked from word
+    /// combinations - Mods/SOCOMCA/ca_anim.extract + cracked.json). 290 of the 483 clips on the disc.
+    /// </summary>
+    public static class CaClipNames
+    {
+        private const string Names = @"death_buddy_crouch01 death_buddy_prone01 death_buddy_stand01 death_buddy_stand02 death_buddy_stand03
+death_crouch_back01 death_crouch_back02 death_crouch_back03 death_crouch_chest01 death_crouch_chest02
+death_crouch_chest03 death_crouch_head01 death_crouch_head03 death_prone_chest01 death_prone_chest04
+death_prone_head01 death_prone_head03 death_stand_chest04 death_stand_chest05 death_stand_groin01
+death_stand_groin04 death_stand_head01 death_stand_head02 death_stand_head03 death_stand_head04
+death_stand_head05 death_stand_larm04 death_stand_rarm03 guard_crouch_flashbang_cower
+guard_crouch_flashbang_cower2 guard_crouch_point guard_dive2prone guard_flashbang_cower guard_flashbang_cower2
+guard_get_restrained guard_hit01 guard_hit_shoulder guard_hit_stomach01 guard_injured_run01
+guard_injured_run02 guard_injured_stand guard_injured_walk01 guard_injured_walk02 guard_knife_death
+guard_knife_death_stance guard_point guard_prone_cover guard_run_attack01 guard_run_attack02 guard_salute
+guard_stand guard_stand02 guard_stand03 guard_step03 guard_surrender guard_susp_search01 guard_susp_search02
+guard_susp_signal guard_vomit guard_walk02 guard_walk03 guard_wave hostage_restrained_getup seal_180
+seal_alert_step seal_apply_restraints seal_breach_door seal_buddycarried_walk seal_buddycarry_pickup
+seal_buddycarry_stand seal_buddycarry_step seal_buddycarry_walk seal_climb_medium seal_climb_over
+seal_climbcrate seal_climbladder seal_climboffladder seal_cover_run seal_cover_walk seal_cqb_attack
+seal_cqb_attack02 seal_cqb_attack03 seal_crouch seal_crouch2binocular seal_crouch2llean seal_crouch2prone
+seal_crouch2rlean seal_crouch_alert01 seal_crouch_alert02 seal_crouch_llean_rstep seal_crouch_llean_step
+seal_crouch_recoil seal_crouch_reload seal_crouch_reload_shotgun seal_crouch_rlean_rstep
+seal_crouch_rlean_step seal_crouch_signal_deploy seal_crouch_signal_follow seal_crouch_signal_getdown
+seal_crouch_step seal_crouch_throwgrenade seal_crouchstrafe_left seal_crouchstrafe_right seal_crouchwalk
+seal_crouchwalk_bw seal_defusebomb_begin seal_defusebomb_end seal_defusebomb_loop seal_dive2prone
+seal_fallbackwards01 seal_fallforward01 seal_flipswitch seal_flipswitch_reverse seal_fp_crouch
+seal_fp_crouch_step seal_fp_crouchwalk seal_fp_crouchwalk_bw seal_fp_jog seal_fp_prone seal_fp_run
+seal_fp_run_bw seal_fp_stand seal_fp_step seal_fp_walk seal_fp_walk_bw seal_get_fromground
+seal_get_fromsurface seal_getupbackwards01 seal_getupforward01 seal_hang seal_hang2climbup seal_hang_jumpdown
+seal_healing seal_jog seal_jog_alert seal_jump seal_kickopendoor seal_knife_guard seal_ladder2slide
+seal_ladderslide seal_ladderslide_land seal_land_hard seal_land_soft seal_landbackwards01 seal_landforward01
+seal_launcher seal_launcher_crouchwalk seal_launcher_lstrafe seal_launcher_prone seal_launcher_rstrafe
+seal_launcher_step seal_llean_rstep seal_llean_step seal_lstrafe seal_lstrafe_fast seal_open_door
+seal_p_apply_restraints seal_p_buddycarry_pickup seal_p_cover_run seal_p_cover_walk seal_p_cqb_alt_attack
+seal_p_cqb_attack seal_p_crouch seal_p_crouch2binocular seal_p_crouch2llean seal_p_crouch2rlean
+seal_p_crouch_reload seal_p_crouch_step seal_p_crouchstrafe_left seal_p_crouchstrafe_right seal_p_crouchwalk
+seal_p_crouchwalk_bw seal_p_jog seal_p_kickopendoor seal_p_knife_guard seal_p_land_hard seal_p_land_soft
+seal_p_llean_rstep seal_p_llean_step seal_p_lstrafe seal_p_lstrafe_fast seal_p_place_claymore seal_p_prone
+seal_p_prone2binocular seal_p_prone2llean seal_p_prone2rlean seal_p_prone_recoil seal_p_prone_reload
+seal_p_put_onwall seal_p_recoil seal_p_reload seal_p_rlean_rstep seal_p_rlean_step seal_p_rstrafe
+seal_p_rstrafe_fast seal_p_run seal_p_run_90l seal_p_run_90r seal_p_run_bw seal_p_runningjump_launch
+seal_p_stand seal_p_stand2binocular seal_p_stand2crouch seal_p_stand2ladder seal_p_stand2llean
+seal_p_stand2prone seal_p_stand2rlean seal_p_stand2turret seal_p_step seal_p_throwgrenade seal_p_toss_rlean
+seal_p_tossgrenade seal_p_walk seal_p_walk_bw seal_pfp_crouch seal_pfp_crouch_step seal_pfp_crouchwalk
+seal_pfp_crouchwalk_bw seal_pfp_jog seal_pfp_prone seal_pfp_run seal_pfp_run_bw seal_pfp_stand seal_pfp_step
+seal_pfp_walk seal_pfp_walk_bw seal_place_claymore seal_prone seal_prone2binocular seal_prone2llean
+seal_prone2rlean seal_prone_crawl seal_prone_llean_rstrafe seal_prone_llean_step seal_prone_lstrafe
+seal_prone_recoil seal_prone_reload seal_prone_reload_shotgun seal_prone_rlean_rstrafe seal_prone_rlean_step
+seal_prone_rstrafe seal_prone_throwgrenade seal_prone_tossgrenade seal_prone_turn seal_put_onground
+seal_put_onwall seal_recoil seal_reload_shotgun seal_rlean_rstep seal_rlean_step seal_rstrafe
+seal_rstrafe_fast seal_run seal_run_90l seal_run_90r seal_run_bw seal_runningjump_in_air
+seal_runningjump_launch seal_signal_fireatwill seal_signal_follow seal_slide seal_stand seal_stand2binocular
+seal_stand2crouch seal_stand2hang seal_stand2ladder seal_stand2llean seal_stand2prone seal_stand2rlean
+seal_stand2turret seal_stand_alert01 seal_stand_alert02 seal_step seal_step_up seal_swaprifle seal_swim_death
+seal_swim_dive seal_swim_forward seal_swim_hit01 seal_swim_left seal_swim_right seal_throwgrenade
+seal_toss_llean seal_toss_rlean seal_tossgrenade seal_walk seal_walk_alert seal_walk_alert02 seal_walk_bw
+victory_cheer";
+
+        private static Dictionary<uint, string>? _byHash;
+
+        public static string? Name(uint hash)
+        {
+            _byHash ??= Names.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).ToDictionary(CaNames.Crc32, n => n);
+            return _byHash.TryGetValue(hash, out var n) ? n : null;
+        }
+    }
+}

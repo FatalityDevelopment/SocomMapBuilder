@@ -1,0 +1,1290 @@
+html,
+body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--vscode-editor-background, #1e1e1e);
+  color: var(--vscode-editor-foreground, #d4d4d4);
+  font-family: var(--vscode-font-family, "Segoe UI", sans-serif);
+  font-size: var(--vscode-font-size, 13px);
+}
+
+button,
+input {
+  font: inherit;
+}
+
+.lic {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.zip-shell {
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  height: 100vh;
+  min-width: 0;
+  min-height: 0;
+  background: var(--vscode-editor-background, #1e1e1e);
+}
+
+.zip-main {
+  flex: 1;
+  min-height: 0;
+}
+
+.zip-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 39px;
+  padding: 0 12px;
+  background: var(--vscode-sideBar-background, #252526);
+  border-bottom: 1px solid var(--vscode-sideBar-border, #2d2d30);
+}
+
+.zip-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--vscode-sideBarTitle-foreground, #bbbbbb);
+  font-weight: 600;
+}
+
+.zip-toolbar-spacer {
+  flex: 1;
+}
+
+.zip-btn,
+.zip-side-btn,
+.zip-icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 4px;
+  color: var(--vscode-button-secondaryForeground, var(--vscode-editor-foreground, #d4d4d4));
+  background: var(--vscode-button-secondaryBackground, #3a3d41);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.zip-btn {
+  height: 28px;
+  padding: 0 10px;
+}
+
+.zip-btn:hover:not(:disabled),
+.zip-side-btn:hover:not(:disabled),
+.zip-icon-btn:hover:not(:disabled) {
+  background: var(--vscode-button-secondaryHoverBackground, #45494e);
+}
+
+.zip-btn:disabled,
+.zip-side-btn:disabled,
+.zip-icon-btn:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.zip-primary {
+  color: var(--vscode-button-foreground, #ffffff);
+  background: var(--vscode-button-background, #0e639c);
+}
+
+.zip-primary:hover:not(:disabled) {
+  background: var(--vscode-button-hoverBackground, #1177bb);
+}
+
+.zip-status {
+  min-height: 25px;
+  padding: 5px 12px;
+  box-sizing: border-box;
+  text-align: left;
+  color: var(--vscode-descriptionForeground, #ccccccb3);
+  background: var(--vscode-editorGroupHeader-tabsBackground, #252526);
+  border: 0;
+  border-bottom: 1px solid var(--vscode-sideBar-border, #2d2d30);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zip-status:not(:disabled) {
+  cursor: pointer;
+}
+
+.zip-status-error {
+  color: var(--vscode-errorForeground, #f48771);
+}
+
+.zip-status-busy {
+  color: var(--vscode-progressBar-background, #0e70c0);
+}
+
+.zip-main {
+  display: grid;
+  grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+}
+
+.zip-sidebar {
+  display: grid;
+  grid-template-rows: auto auto auto auto 1fr;
+  align-content: start;
+  min-width: 0;
+  min-height: 0;
+  background: var(--vscode-sideBar-background, #252526);
+  border-right: 1px solid var(--vscode-sideBar-border, #2d2d30);
+  overflow: auto;
+}
+
+.zip-path {
+  min-width: 0;
+  padding: 10px 12px 8px;
+  color: var(--vscode-descriptionForeground, #ccccccb3);
+  border-bottom: 1px solid var(--vscode-sideBar-border, #2d2d30);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zip-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 10px;
+}
+
+.zip-meta > div,
+.zip-kv-row > div,
+.zip-save-fields > div {
+  min-width: 0;
+  padding: 8px;
+  background: var(--vscode-editorWidget-background, #252526);
+  border: 1px solid var(--vscode-widget-border, #303031);
+  border-radius: 4px;
+}
+
+.zip-meta span,
+.zip-kv-row span,
+.zip-save-fields span {
+  display: block;
+  color: var(--vscode-descriptionForeground, #ccccccb3);
+  font-size: 11px;
+}
+
+.zip-meta strong,
+.zip-kv-row strong,
+.zip-save-fields strong {
+  display: block;
+  min-width: 0;
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--vscode-editor-foreground, #d4d4d4);
+  font-weight: 600;
+}
+
+.zip-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  margin: 0 10px 10px;
+  padding: 0 9px;
+  box-sizing: border-box;
+  color: var(--vscode-input-placeholderForeground, #a6a6a6);
+  background: var(--vscode-input-background, #3c3c3c);
+  border: 1px solid var(--vscode-input-border, transparent);
+  border-radius: 4px;
+}
+
+.zip-search:focus-within {
+  border-color: var(--vscode-focusBorder, #007fd4);
+}
+
+.zip-search input {
+  width: 100%;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  color: var(--vscode-input-foreground, #cccccc);
+  background: transparent;
+}
+
+.zip-side-section {
+  display: grid;
+  gap: 6px;
+  padding: 0 10px 12px;
+}
+
+.zip-side-btn {
+  justify-content: flex-start;
+  height: 30px;
+  padding: 0 9px;
+}
+
+.zip-content {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--vscode-editor-background, #1e1e1e);
+}
+
+.zip-content > .zip-table-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.zip-content > .zip-preview {
+  flex: 0 0 auto;
+  max-height: 60%;
+  overflow: hidden;
+}
+
+.zip-preview-stage {
+  overflow: hidden;
+}
+
+.zip-preview-info {
+  max-height: 100%;
+  overflow: auto;
+}
+
+.zip-preview {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
+  gap: 12px;
+  padding: 12px;
+  min-height: 0;
+  border-bottom: 1px solid var(--vscode-editorGroup-border, #2d2d30);
+}
+
+.zip-preview-stage {
+  position: relative;
+  min-width: 0;
+  min-height: 220px;
+  background: #111318;
+  border: 1px solid var(--vscode-widget-border, #303031);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.zip-preview-canvas,
+.zip-preview-pic {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.zip-preview-canvas {
+  background-color: #111318;
+  background-image:
+    linear-gradient(rgba(86, 156, 214, 0.11) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(86, 156, 214, 0.11) 1px, transparent 1px);
+  background-size: 40px 40px;
+}
+
+.zip-preview-pic {
+  background: #111318;
+  image-rendering: pixelated;
+  object-fit: contain;
+}
+
+.zip-preview-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px;
+  color: var(--vscode-descriptionForeground, #ccccccb3);
+  text-align: center;
+  pointer-events: none;
+}
+
+.zip-preview-info {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+}
+
+.zip-preview-info > div {
+  min-width: 0;
+  padding: 8px;
+  background: var(--vscode-editorWidget-background, #252526);
+  border: 1px solid var(--vscode-widget-border, #303031);
+  border-radius: 4px;
+}
+
+.zip-preview-info span {
+  display: block;
+  color: var(--vscode-descriptionForeground, #ccccccb3);
+  font-size: 11px;
+}
+
+.zip-preview-info strong {
+  display: block;
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--vscode-editor-foreground, #d4d4d4);
+  font-weight: 600;
+}
+
+.zip-preview-tabs {
+  display: flex;
+  gap: 6px;
+}
+
+.zip-preview-tab {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--vscode-widget-border, #303031);
+  border-radius: 4px;
+  color: var(--vscode-button-secondaryForeground, var(--vscode-editor-foreground, #d4d4d4));
+  background: var(--vscode-button-secondaryBackground, #3a3d41);
+  cursor: pointer;
+}
+
+.zip-preview-tab.active {
+  border-color: var(--vscode-focusBorder, #007fd4);
+}
+
+.zip-preview-tab:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
+.zip-texrefs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-height: 88px;
+  overflow: auto;
+}
+
+.zip-tex-grid-wrap {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+
+.zip-tex-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 12px;
+}
+
+.zip-tex-tile {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  background: var(--vscode-editorWidget-background, #252526);
+  border: 1px solid var(--vscode-widget-border, #303031);
+  border-radius: 4px;
+  color: var(--vscode-editor-foreground, #d4d4d4);
+  text-align: left;
+  cursor: pointer;
+}
+
+.zip-tex-tile:hover {
+  background: var(--vscode-list-hoverBackground, #2a2d2e);
+}
+
+.zip-tex-tile.active {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: -1px;
+}
+
+.zip-tex-img-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  aspect-ratio: 1;
+  background: #111318;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.zip-tex-img-wrap img {
+  max-width: 100%;
+  max-height: 100%;
+  image-rendering: pixelated;
+  object-fit: contain;
+}
+
+.zip-tex-tile-name {
+  font-size: 11px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zip-tex-tile-meta {
+  font-size: 10px;
+  color: var(--vscode-descriptionForeground, #ccccccb3);
+}
+
+.zip-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  padding: 4px 12px;
+  background: var(--vscode-editorGroupHeader-tabsBackground, #252526);
+  border-bottom: 1px solid var(--vscode-sideBar-border, #2d2d30);
+  overflow-x: auto;
+}
+
+.zip-breadcrumb-sep {
+  color: var(--vscode-descriptionForeground, #ccccccb3);
+  padding: 0 2px;
+}
+
+.zip-chunk-select {
+  width: 100%;
+  margin-top: 4px;
+  padding: 4px 6px;
+  font: inherit;
+  color: var(--vscode-dropdown-foreground, #cccccc);
+  background: var(--vscode-dropdown-background, #3c3c3c);
+  border: 1px solid var(--vscode-dropdown-border, #3c3c3c);
+  border-radius: 4px;
+}
+
+.zip-texrefs span {
+  padding: 2px 6px;
+  border: 1px solid var(--vscode-widget-border, #303031);
+  border-radius: 3px;
+  background: var(--vscode-editorWidget-background, #252526);
+  color: var(--vscode-descriptionForeground, #ccccccb3);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+}
+
+.zip-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-height: 0;
+  color: var(--vscode-descriptionForeground, #ccccccb3);
+  text-align: center;
+  padding: 24px;
+}
+
+.zip-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 54px;
+  padding: 10px 12px;
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--vscode-editorGroup-border, #2d2d30);
+}
+
+.zip-head-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.zip-file-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--vscode-editor-foreground, #d4d4d4);
+  font-weight: 600;
+}
+
+.zip-summary {
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--vscode-descriptionForeground, #ccccccb3);
+}
+
+.zip-kv-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--vscode-editorGroup-border, #2d2d30);
+}
+
+.zip-save-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(240px, 0.8fr);
+  gap: 12px;
+  padding: 12px;
+  border-bottom: 1px solid var(--vscode-editorGroup-border, #2d2d30);
+}
+
+.zip-section-title {
+  color: var(--vscode-sideBarTitle-foreground, #bbbbbb);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  margin: 9px 0 7px;
+}
+
+.zip-save-grid .zip-section-title {
+  margin-top: 0;
+}
+
+.zip-save-fields {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.zip-module-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-height: 36px;
+  max-height: 120px;
+  overflow: auto;
+}
+
+.zip-module-list span {
+  padding: 4px 7px;
+  border: 1px solid var(--vscode-widget-border, #303031);
+  border-radius: 4px;
+  background: var(--vscode-editorWidget-background, #252526);
+  color: var(--vscode-descriptionForeground, #ccccccb3);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+}
+
+.zip-table-wrap {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.zip-table {
+  display: grid;
+  min-width: 680px;
+}
+
+.zip-table-head,
+.zip-table-row {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) 110px 110px 110px 44px;
+  align-items: center;
+  gap: 12px;
+  min-height: 34px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--vscode-tree-tableColumnsBorder, #2d2d30);
+  box-sizing: border-box;
+}
+
+.zip-record-table .zip-table-head,
+.zip-record-table .zip-table-row {
+  grid-template-columns: minmax(220px, 1fr) 72px 72px 72px 96px;
+}
+
+.zip-table-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  color: var(--vscode-descriptionForeground, #ccccccb3);
+  background: var(--vscode-editorGroupHeader-tabsBackground, #252526);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.zip-table-row {
+  width: 100%;
+  border-left: 0;
+  border-right: 0;
+  border-top: 0;
+  color: var(--vscode-editor-foreground, #d4d4d4);
+  background: transparent;
+  text-align: left;
+}
+
+.zip-entry-row {
+  cursor: pointer;
+}
+
+.zip-table-row:hover,
+.zip-table-row.active {
+  background: var(--vscode-list-hoverBackground, #2a2d2e);
+}
+
+.zip-table-row.active {
+  outline: 1px solid var(--vscode-focusBorder, #007fd4);
+  outline-offset: -1px;
+}
+
+.zip-table-row span:not(.zip-name-cell) {
+  color: var(--vscode-descriptionForeground, #ccccccb3);
+}
+
+.zip-name-cell {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zip-row-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.zip-icon-btn {
+  width: 26px;
+  height: 24px;
+  padding: 0;
+}
+
+.zip-empty-row {
+  padding: 18px 12px;
+  color: var(--vscode-descriptionForeground, #ccccccb3);
+  border-bottom: 1px solid var(--vscode-tree-tableColumnsBorder, #2d2d30);
+}
+
+/* Package-load progress bar. Same animation pattern as the disasm-editor
+   label-manager scanner. Sits below the toolbar while we fetch every entry
+   of a ZDB so the user knows the prefetch is in flight. */
+.zip-scanning-bar {
+  position: relative;
+  height: 22px;
+  margin: 0;
+  background: var(--vscode-editor-background, #1e1e1e);
+  border-top: 1px solid var(--vscode-panel-border, #3e3e42);
+  border-bottom: 1px solid var(--vscode-panel-border, #3e3e42);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.zip-scanning-bar-inner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 30%;
+  background: linear-gradient(90deg, transparent, #264f78, #3794ff, #264f78, transparent);
+  animation: zip-scan-slide 1.5s ease-in-out infinite;
+}
+@keyframes zip-scan-slide {
+  0%   { left: -30%; }
+  100% { left: 100%; }
+}
+.zip-scanning-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: #9cdcfe;
+  text-shadow: 0 0 4px #000;
+}
+
+/* Sidebar texture quick-grid (under the search input). Lists every decoded
+   .tif from the loaded package so the user has the same at-a-glance
+   inventory the HTML reference viewers display. */
+.zip-sidebar-texgrid-section {
+  margin-top: 12px;
+}
+.zip-sidebar-texgrid-title {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground, #94a3b8);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 6px;
+}
+.zip-sidebar-texgrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(60px, 1fr));
+  gap: 6px;
+  max-height: 320px;
+  overflow: auto;
+  padding-right: 2px;
+}
+.zip-sidebar-tex {
+  background: rgba(15, 23, 42, 0.6);
+  border: 1px solid var(--vscode-panel-border, #3e3e42);
+  border-radius: 5px;
+  padding: 3px;
+  display: flex;
+  flex-direction: column;
+  cursor: pointer;
+  overflow: hidden;
+}
+.zip-sidebar-tex:hover {
+  border-color: var(--vscode-focusBorder, #3794ff);
+}
+.zip-sidebar-tex.active {
+  border-color: #6ee7b7;
+  box-shadow: 0 0 0 1px rgba(110, 231, 183, 0.35);
+}
+.zip-sidebar-tex img {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  image-rendering: pixelated;
+  border-radius: 3px;
+  background: repeating-conic-gradient(#222 0 25%, #111 0 50%) 50% / 10px 10px;
+}
+.zip-sidebar-tex .zip-tex-label {
+  font-size: 9px;
+  margin-top: 3px;
+  color: var(--vscode-descriptionForeground, #94a3b8);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Map-viewer style controls inside the model preview info pane. Two-column
+   compact grid of label+select. */
+.zip-map-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+.zip-map-controls .zip-map-ctrl {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground, #94a3b8);
+}
+.zip-map-controls select,
+.zip-map-controls input {
+  background: var(--vscode-input-background, #1e1e1e);
+  color: var(--vscode-input-foreground, #d4d4d4);
+  border: 1px solid var(--vscode-panel-border, #3e3e42);
+  border-radius: 4px;
+  padding: 4px 6px;
+  font-size: 11px;
+}
+
+/* Dump-report button bank. Sits below the map controls and feeds the
+   Code Designer ZDB output channel. */
+.zip-dump-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.zip-dump-buttons .zip-btn {
+  font-size: 11px;
+  padding: 4px 8px;
+}
+
+/* Section grouping in the preview info pane so the model toolbox doesn't
+   look like one giant column of controls. Each section gets a quiet
+   uppercase title and consistent spacing. */
+.zip-pane-section {
+  border-top: 1px solid var(--vscode-panel-border, #3e3e42);
+  margin-top: 10px;
+  padding-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.zip-pane-section:first-of-type {
+  border-top: 0;
+  margin-top: 0;
+  padding-top: 0;
+}
+.zip-pane-section-title {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--vscode-descriptionForeground, #94a3b8);
+  margin-bottom: 2px;
+}
+.zip-pane-section .zip-map-controls { margin-top: 0; }
+
+/* ZANIM catalogue preview for CZANIM/LDZANIM/MZANIM style archives. These
+   are script/effect sequence records, not skeletal motion clips. */
+.zip-zanim-stage {
+  min-height: 360px;
+}
+.zip-zanim-layout {
+  display: grid;
+  grid-template-columns: minmax(210px, 34%) minmax(0, 1fr);
+  height: 100%;
+  min-height: 360px;
+}
+.zip-zanim-list {
+  border-right: 1px solid var(--vscode-panel-border, #3e3e42);
+  overflow: auto;
+  background: rgba(0, 0, 0, 0.12);
+}
+.zip-zanim-title {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 8px 10px;
+  background: var(--vscode-editorWidget-background, #252526);
+  border-bottom: 1px solid var(--vscode-panel-border, #3e3e42);
+  color: #9cdcfe;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.zip-zanim-item {
+  display: grid;
+  gap: 2px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.045);
+  background: transparent;
+  color: var(--vscode-editor-foreground, #d4d4d4);
+  text-align: left;
+  cursor: pointer;
+}
+.zip-zanim-item:hover {
+  background: rgba(55, 148, 255, 0.08);
+}
+.zip-zanim-item.active {
+  background: rgba(78, 201, 176, 0.12);
+  box-shadow: inset 2px 0 0 #4ec9b0;
+}
+.zip-zanim-item .name {
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.zip-zanim-item .meta {
+  color: var(--vscode-descriptionForeground, #94a3b8);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.zip-zanim-detail {
+  min-width: 0;
+  overflow: auto;
+  padding-bottom: 12px;
+}
+.zip-zanim-kv {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  padding: 10px;
+}
+.zip-zanim-kv div {
+  border: 1px solid var(--vscode-panel-border, #3e3e42);
+  border-radius: 4px;
+  padding: 7px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.zip-zanim-kv span,
+.zip-zanim-section > span {
+  display: block;
+  color: var(--vscode-descriptionForeground, #94a3b8);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.zip-zanim-kv strong {
+  display: block;
+  margin-top: 3px;
+  font-size: 12px;
+}
+.zip-zanim-section {
+  display: grid;
+  gap: 5px;
+  padding: 8px 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.045);
+}
+.zip-zanim-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.zip-zanim-tags span {
+  border: 1px solid var(--vscode-panel-border, #3e3e42);
+  border-radius: 999px;
+  padding: 2px 7px;
+  font-size: 10px;
+  color: #ce9178;
+  background: rgba(255, 255, 255, 0.035);
+}
+.zip-zanim-section code,
+.zip-zanim-code-list code {
+  display: block;
+  padding: 5px 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.24);
+  color: var(--vscode-editor-foreground, #d4d4d4);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.zip-zanim-code-list {
+  display: grid;
+  gap: 4px;
+}
+
+/* RDR animation preview. This ports the standalone canvas inspector into the
+   workbench while keeping the existing preview/info split. */
+.zip-animation-stage {
+  min-height: 320px;
+}
+.zip-animation-canvas {
+  background: #111318;
+  cursor: grab;
+}
+.zip-animation-canvas:active {
+  cursor: grabbing;
+}
+.zip-animation-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.zip-animation-controls .zip-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.zip-animation-scrub {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.zip-animation-scrub input {
+  width: 100%;
+}
+.zip-animation-counts,
+.zip-animation-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.zip-animation-counts span,
+.zip-animation-tags span,
+.zip-animation-row .tag,
+.zip-animation-track .tag {
+  border: 1px solid var(--vscode-panel-border, #3e3e42);
+  border-radius: 999px;
+  padding: 1px 6px;
+  font-size: 10px;
+  color: var(--vscode-editor-foreground, #d4d4d4);
+  background: rgba(255, 255, 255, 0.035);
+}
+.zip-animation-tags .weapon,
+.zip-animation-row.weapon,
+.zip-animation-track.weapon {
+  color: #ce9178;
+}
+.zip-animation-errors {
+  color: #f48771;
+  font-size: 11px;
+  line-height: 1.35;
+}
+.zip-animation-list {
+  max-height: 220px;
+  overflow: auto;
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.zip-animation-row,
+.zip-animation-track {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.045);
+  padding: 4px 0;
+}
+.zip-animation-row {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 5px;
+}
+.zip-animation-row .idx,
+.zip-animation-track .idx,
+.zip-animation-track .muted {
+  color: var(--vscode-descriptionForeground, #94a3b8);
+}
+.zip-animation-row .bone {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.zip-animation-track {
+  display: grid;
+  gap: 2px;
+}
+.zip-animation-track > div:first-child {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+.zip-animation-track strong {
+  color: var(--vscode-editor-foreground, #d4d4d4);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Collapsible RDR tree view. Replaces the raw JSON pre block. */
+.zip-rdr-tree {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  color: var(--vscode-editor-foreground, #d4d4d4);
+  padding: 6px 0;
+}
+.zip-rdr-tree-row {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 1px 6px;
+  cursor: default;
+  white-space: nowrap;
+}
+.zip-rdr-tree-row.expandable {
+  cursor: pointer;
+}
+.zip-rdr-tree-row:hover {
+  background: rgba(55, 148, 255, 0.07);
+}
+.zip-rdr-caret {
+  display: inline-block;
+  width: 12px;
+  color: var(--vscode-descriptionForeground, #94a3b8);
+}
+.zip-rdr-name {
+  color: #9cdcfe;
+}
+.zip-rdr-type {
+  color: var(--vscode-descriptionForeground, #94a3b8);
+  font-size: 10px;
+}
+.zip-rdr-value {
+  color: #ce9178;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.zip-rdr-fallback-section {
+  margin-top: 10px;
+}
+.zip-rdr-fallback-section h4 {
+  margin: 6px 0 4px 0;
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--vscode-descriptionForeground, #94a3b8);
+}
+.zip-rdr-fallback-section ul {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 11px;
+  font-family: var(--vscode-editor-font-family, monospace);
+  max-height: 200px;
+  overflow: auto;
+}
+
+/* MPS / AI map table. Compact 5-column data grid. */
+.zip-mps-table {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 11px;
+  color: var(--vscode-editor-foreground, #d4d4d4);
+  padding: 8px;
+  overflow: auto;
+}
+.zip-mps-table table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.zip-mps-table th,
+.zip-mps-table td {
+  text-align: left;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--vscode-panel-border, #3e3e42);
+}
+.zip-mps-table th {
+  color: var(--vscode-descriptionForeground, #94a3b8);
+  font-weight: normal;
+  text-transform: uppercase;
+  font-size: 10px;
+}
+
+/* RDR fallback: texture thumbnail grid shown when companion textures are
+   loaded alongside a .rdr screen entry. Uses the same card style as the
+   existing texture-archive thumbnail grid so it looks like a native part
+   of the RDR view, not a bolted-on feature. */
+.zip-rdr-tex-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 8px;
+  margin-top: 6px;
+}
+.zip-rdr-tex-card {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  border: 1px solid var(--vscode-widget-border, #303031);
+  background: var(--vscode-editorWidget-background, #252526);
+  border-radius: 4px;
+  padding: 5px;
+}
+.zip-rdr-tex-img {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 80px;
+  border-radius: 3px;
+  background: var(--vscode-editor-background, #1e1e1e);
+  overflow: hidden;
+}
+.zip-rdr-tex-img img {
+  max-width: 100%;
+  max-height: 100%;
+  image-rendering: pixelated;
+}
+.zip-rdr-tex-name {
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--vscode-editor-foreground, #d4d4d4);
+}
+.zip-rdr-tex-meta {
+  font-size: 10px;
+  color: var(--vscode-descriptionForeground, #ccccccb3);
+}
+
+@media (max-width: 900px) {
+  .zip-main {
+    grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  }
+
+  .zip-kv-row,
+  .zip-save-grid,
+  .zip-save-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Preview pane warnings (missing palette / textures, dropped chunks). */
+.zip-preview-info strong.zip-warn,
+.zip-texrefs span.zip-warn {
+  color: var(--vscode-editorWarning-foreground, #cca700);
+}
+
+/* Package status line (after the loading banner goes away). */
+.zip-package-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground, #ccccccb3);
+  border-bottom: 1px solid var(--vscode-widget-border, #303031);
+}
+.zip-package-status span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.zip-package-status.zip-package-failed {
+  color: var(--vscode-editorWarning-foreground, #cca700);
+}
+.zip-hint {
+  margin: 6px 0;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground, #ccccccb3);
+  white-space: normal;
+}
+
+/* Checkbox rows in the map controls (spawn markers). */
+.zip-map-ctrl.zip-check {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.zip-map-ctrl.zip-check input {
+  margin: 0;
+}
+
+/* File-manager list and path bar: the file browser's look (mb-fb-* in styles/dialog.css) in the Viewer. */
+.zip-fm-bar {
+  padding: 4px 12px;
+  background: var(--vscode-editorGroupHeader-tabsBackground, #252526);
+  border-bottom: 1px solid var(--vscode-sideBar-border, #2d2d30);
+}
+.mb-fb-icon-btn.on { background: var(--vscode-toolbar-activeBackground, #3a3d41); }
+.zip-fm-crumbs { flex: 1; min-width: 0; display: flex; align-items: center; gap: 2px; overflow: hidden; color: var(--vscode-descriptionForeground, #9d9d9d); }
+.zip-fm-crumb {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 260px; padding: 3px 6px;
+  background: none; border: none; border-radius: 3px; color: var(--vscode-foreground, #cccccc); font: inherit; font-size: 12px; cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.zip-fm-crumb:hover { background: var(--vscode-toolbar-hoverBackground, #2a2d2e); }
+.zip-fm-crumb:last-child { font-weight: 600; }
+.zip-fm-search {
+  display: flex; align-items: center; gap: 6px; width: 240px; height: 26px; padding: 0 8px; box-sizing: border-box;
+  background: var(--vscode-input-background, #313131); border: 1px solid var(--vscode-input-border, #3c3c3c); border-radius: 3px;
+  color: var(--vscode-descriptionForeground, #9d9d9d);
+}
+.zip-fm-search:focus-within { outline: 1px solid var(--vscode-focusBorder, #0078d4); }
+.zip-fm-search input { flex: 1; min-width: 0; background: none; border: none; outline: none; color: var(--vscode-input-foreground, #cccccc); font: inherit; font-size: 12px; }
+.zip-content > .zip-fm-list { flex: 1 1 auto; min-height: 0; margin: 8px 12px 12px; font-size: 12px; }
+.mb-fb-head.zip-fm-row, .mb-fb-row.zip-fm-row { grid-template-columns: minmax(0, 1fr) 96px minmax(0, 150px) 72px 24px; min-height: 26px; }
+.zip-fm-row .zip-fm-text { text-align: left; overflow: hidden; text-overflow: ellipsis; }
+.zip-fm-row .zip-row-actions { opacity: 0; }
+.zip-fm-row:hover .zip-row-actions, .zip-fm-row.sel .zip-row-actions { opacity: 1; }
+.zip-fm-row:focus { outline: 1px solid var(--vscode-focusBorder, #0078d4); outline-offset: -1px; }
+.zip-fm-thumb { width: 18px; height: 18px; object-fit: cover; border-radius: 2px; image-rendering: pixelated; background: #0003; flex: 0 0 auto; }
+
+/* Palette preview: the 256 CLUT entries as a 16 × 16 swatch grid. */
+.zip-pal-stage { display: flex; align-items: center; justify-content: center; padding: 16px; }
+.zip-pal-grid { display: grid; grid-template-columns: repeat(16, 22px); gap: 2px; background-image: repeating-conic-gradient(#3a3a3a 0 25%, #2a2a2a 0 50%); background-size: 12px 12px; padding: 4px; border-radius: 3px; }
+.zip-pal-cell { width: 22px; height: 22px; border-radius: 2px; }
+
+/* Right-click menu: VS Code menu colours. */
+.zip-ctx {
+  position: fixed; z-index: 60; min-width: 220px; padding: 4px 0;
+  background: var(--vscode-menu-background, #1f1f1f); border: 1px solid var(--vscode-menu-border, #454545); border-radius: 5px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.45); font-size: 12px;
+}
+.zip-ctx-item {
+  display: block; width: 100%; padding: 5px 20px; text-align: left; white-space: nowrap;
+  background: none; border: none; color: var(--vscode-menu-foreground, #cccccc); font: inherit; cursor: pointer;
+}
+.zip-ctx-item:hover:not(:disabled) { background: var(--vscode-menu-selectionBackground, #0078d4); color: var(--vscode-menu-selectionForeground, #ffffff); }
+.zip-ctx-item:disabled { opacity: 0.45; cursor: default; }
+.zip-ctx-item.danger:hover:not(:disabled) { background: var(--vscode-inputValidation-errorBackground, #5a1d1d); }
+.zip-ctx-sep { height: 1px; margin: 4px 0; background: var(--vscode-menu-separatorBackground, #454545); }
+
+/* The sidebar's texture grid fills the height left under the file info and scrolls on its own (no fixed cap, no
+   sideways scroll from the filter box). */
+.zip-sidebar { display: flex; flex-direction: column; overflow: hidden; }
+.zip-sidebar > * { flex: 0 0 auto; }
+.zip-sidebar > .zip-sidebar-texgrid-section { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.zip-sidebar-texgrid-section .zip-search-input { box-sizing: border-box; flex: 0 0 auto; }
+.zip-sidebar-texgrid { flex: 1 1 auto; min-height: 0; max-height: none; overflow-x: hidden; overflow-y: auto; align-content: start; grid-auto-rows: max-content; }

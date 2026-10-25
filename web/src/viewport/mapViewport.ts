@@ -4,8 +4,8 @@
 // go to the page, which sends them to the bridge (moveInstance / moveClutter / movePoint / addClutter ...).
 
 import * as THREE from 'three';
-import { SELECT_COLOR, ViewportCore, chunkGeometry, isIdentity, labelSprite, type MaterialSpec } from './viewportCore';
-import type { EditorMesh } from '../api/mesh';
+import { SELECT_COLOR, ViewportCore, chunkGeometry, isIdentity, labelSprite, type MaterialSpec } from '../webview/zipper-core/viewport-core';
+import type { EditorMesh } from '../webview/model-editor/mesh-data';
 
 export type MapTool = 'select' | 'move' | 'rotate' | 'scale' | 'place';
 export type MapLayer = 'world' | 'reference' | 'clutter' | 'sky' | 'points';
@@ -36,6 +36,7 @@ export interface MapCallbacks {
   onTransformCommit?: (items: Array<{ index: number; matrix: number[] }>, kind: 'move' | 'rotate' | 'scale') => void;
   onPointMove?: (name: string, position: [number, number, number]) => void;
   onPlace?: (position: [number, number, number]) => void;
+  onOpenModel?: (index: number) => void;
   onCameraChange?: () => void;
 }
 
@@ -57,13 +58,31 @@ function layerOf(inst: MapInstance): MapLayer {
 
 interface Slot { mesh: THREE.InstancedMesh; slot: number }
 
+// A vertical flat card (a facade tree): which horizontal axis it is flat along, or null for real 3D geometry.
+function cardAxis(box: THREE.Box3 | undefined): 'x' | 'z' | null {
+  if (!box || box.isEmpty()) { return null; }
+  const s = box.getSize(new THREE.Vector3());
+  if (s.y <= 0) { return null; }
+  const flat = s.y * 0.02;
+  if (s.z <= flat && s.x > flat) { return 'z'; }
+  if (s.x <= flat && s.z > flat) { return 'x'; }
+  return null;
+}
+
 export class MapViewport extends ViewportCore {
   private readonly content = new THREE.Group();
   private readonly overlay = new THREE.Group();
   private readonly pointGroup = new THREE.Group();
   private instances: MapInstance[] = [];
   private display: THREE.Matrix4[] = [];
+  // Placements as they stand right now, including a gizmo drag in progress (what a commit sends).
+  private live: THREE.Matrix4[] = [];
   private slots: Slot[][] = [];
+  // Facade clutter: flat tree cards the game turns about Y to face the camera. Value = the card's flat axis.
+  private readonly billboards = new Map<number, 'x' | 'z'>();
+  private readonly overlayHolders = new Map<number, THREE.Object3D>();
+  private readonly lastBillboardCamera = new THREE.Vector3(NaN, NaN, NaN);
+  private billboardsDirty = true;
   private targets: Array<{ mesh: THREE.Mesh; spec: MaterialSpec }> = [];
   private localBounds = new Map<string, THREE.Box3>();
   private points: Array<MapPointInfo & { y: number; obj: THREE.Object3D }> = [];
@@ -86,6 +105,7 @@ export class MapViewport extends ViewportCore {
     canvas.parentElement?.appendChild(this.boxEl);
     canvas.addEventListener('pointerdown', this.onPointerDown);
     canvas.addEventListener('pointermove', this.onPointerMove);
+    canvas.addEventListener('dblclick', this.onDoubleClick);
     window.addEventListener('pointerup', this.onPointerUp);
     canvas.addEventListener('pointerleave', () => this.callbacks.onHover?.(null));
     canvas.tabIndex = 0;
@@ -100,13 +120,41 @@ export class MapViewport extends ViewportCore {
   protected override flyEnabled(): boolean { return true; }
   protected materialTargets(): Array<{ mesh: THREE.Mesh; spec: MaterialSpec }> { return this.targets; }
   protected override onShadingChanged(): void { this.refreshOverlay(); }
+  // The base constructor renders a first frame before this class's fields exist, hence the guard.
+  protected override onFrame(): void { if (this.billboards) { this.updateBillboards(); } }
+
+  // ------------------------------------------------------------------ billboards
+
+  // The matrix a facade card is drawn with: its placement's position and scale, turned about Y to face the camera.
+  private billboardMatrix(i: number, axis: 'x' | 'z'): THREE.Matrix4 {
+    const pos = new THREE.Vector3(), rot = new THREE.Quaternion(), scale = new THREE.Vector3();
+    this.live[i].decompose(pos, rot, scale);
+    const dx = this.camera.position.x - pos.x, dz = this.camera.position.z - pos.z;
+    // Turn the card's normal (+Z for a card flat in Z, +X for one flat in X) onto the camera direction.
+    const yaw = axis === 'z' ? Math.atan2(dx, dz) : Math.atan2(-dz, dx);
+    return new THREE.Matrix4().compose(pos, rot.setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw), scale);
+  }
+
+  private updateBillboards(): void {
+    if (!this.billboards.size) { return; }
+    if (!this.billboardsDirty && this.lastBillboardCamera.equals(this.camera.position)) { return; }
+    this.lastBillboardCamera.copy(this.camera.position);
+    this.billboardsDirty = false;
+    const touched = new Set<THREE.InstancedMesh>();
+    for (const [i, axis] of this.billboards) {
+      const m = this.billboardMatrix(i, axis);
+      for (const s of this.slots[i]) { s.mesh.setMatrixAt(s.slot, m); touched.add(s.mesh); }
+      this.overlayHolders.get(i)?.matrix.copy(m);
+    }
+    touched.forEach(mesh => { mesh.instanceMatrix.needsUpdate = true; });
+  }
 
   // ------------------------------------------------------------------ content
 
   setScene(
     instances: MapInstance[],
     models: Map<string, MapModel>,
-    textures: Record<string, import('../types').ModelTexturePixels>,
+    textures: Record<string, import('../webview/zipper-workbench/zed-model-renderer').ModelTexturePixels>,
     points: MapPointInfo[],
     keepCamera: boolean,
   ): void {
@@ -151,6 +199,17 @@ export class MapViewport extends ViewportCore {
     }
 
     // Bounds of the playable map: the world and props (sky domes and fogbands would swamp it).
+    this.live = this.display.map(m => m.clone());
+    this.billboards.clear();
+    instances.forEach((inst, i) => {
+      const axis = layerOf(inst) === 'clutter' && inst.source ? cardAxis(this.localBounds.get(inst.source)) : null;
+      if (!axis) { return; }
+      this.billboards.set(i, axis);
+      // Turning a card changes its instance's extent; skip culling rather than recompute bounds every frame.
+      for (const s of this.slots[i]) { s.mesh.frustumCulled = false; }
+    });
+    this.billboardsDirty = true;
+
     this.worldBox = new THREE.Box3();
     instances.forEach((inst, i) => {
       const b = inst.source ? this.localBounds.get(inst.source) : null;
@@ -332,6 +391,7 @@ export class MapViewport extends ViewportCore {
   refreshOverlay(): void {
     this.overlay.traverse(o => { const g = (o as THREE.Mesh).geometry; if (g) { g.dispose(); } });
     this.overlay.clear();
+    this.overlayHolders.clear();
     const mat = new THREE.LineBasicMaterial({ color: SELECT_COLOR, depthTest: false, transparent: true });
     for (const i of this.selected) {
       const inst = this.instances[i];
@@ -341,10 +401,12 @@ export class MapViewport extends ViewportCore {
       box.position.copy(b.getCenter(new THREE.Vector3()));
       const holder = new THREE.Group();
       holder.matrixAutoUpdate = false;
-      holder.matrix.copy(this.currentMatrix(i));
+      const axis = this.billboards.get(i);
+      holder.matrix.copy(axis ? this.billboardMatrix(i, axis) : this.currentMatrix(i));
       holder.add(box);
       holder.renderOrder = 20;
       this.overlay.add(holder);
+      this.overlayHolders.set(i, holder);
     }
     for (const p of this.points) {
       const pillar = p.obj.children[0] as THREE.Mesh;
@@ -352,12 +414,9 @@ export class MapViewport extends ViewportCore {
     }
   }
 
+  // The placement (never a billboard's camera-facing turn, so a move commits the real transform).
   private currentMatrix(i: number): THREE.Matrix4 {
-    const s = this.slots[i][0];
-    if (!s) { return this.display[i]; }
-    const m = new THREE.Matrix4();
-    s.mesh.getMatrixAt(s.slot, m);
-    return m;
+    return this.live[i] ?? this.display[i];
   }
 
   // ------------------------------------------------------------------ gizmo
@@ -420,6 +479,9 @@ export class MapViewport extends ViewportCore {
     const touched = new Set<THREE.InstancedMesh>();
     for (const [i, m] of drag.snapshot) {
       const next = delta.clone().multiply(m);
+      this.live[i].copy(next);
+      // Billboards are drawn from their live placement on the next frame.
+      if (this.billboards.has(i)) { this.billboardsDirty = true; continue; }
       for (const s of this.slots[i]) { s.mesh.setMatrixAt(s.slot, next); touched.add(s.mesh); }
     }
     touched.forEach(m => { m.instanceMatrix.needsUpdate = true; m.computeBoundingSphere(); });
@@ -479,6 +541,13 @@ export class MapViewport extends ViewportCore {
     const i = point ? null : this.instanceOf(h);
     const p = `${h.point.x.toFixed(1)}, ${h.point.y.toFixed(1)}, ${h.point.z.toFixed(1)}`;
     this.callbacks.onHover?.(point ? `point ${point}` : i !== null ? `${this.instances[i].kind} ${this.instances[i].model} · ${p}` : p);
+  };
+
+  // Double-click a prop: open its model in the Model Editor.
+  private readonly onDoubleClick = (e: MouseEvent): void => {
+    const h = this.hit(e.clientX, e.clientY);
+    const i = h && !this.pointOf(h) ? this.instanceOf(h) : null;
+    if (i !== null) { this.callbacks.onOpenModel?.(i); }
   };
 
   private readonly onPointerUp = (e: PointerEvent): void => {

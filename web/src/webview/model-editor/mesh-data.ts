@@ -3,7 +3,7 @@
 // sky domes above the map, cars on their wheels), so display space = model
 // space; toModel* stay as the one place a conversion would go.
 
-import { base64ToBytes } from './client';
+import { base64ToBytes } from './asset-client';
 
 export interface MeshChunkWire {
   index: number;

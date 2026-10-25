@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { MapInstanceWire, MapPointWire } from '../api/client';
+import type { MapInstanceWire, MapPointWire } from '../webview/model-editor/asset-client';
 import type { MapLayer } from '../viewport/mapViewport';
 import type { ModelGroup } from '../mapModel';
 

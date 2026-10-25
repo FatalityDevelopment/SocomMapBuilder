@@ -16,3 +16,87 @@
 .mb-dialog .me-actions { justify-content: flex-end; }
 .mb-dialog .me-search { margin: 0; }
 .mb-dialog .me-panel-title { padding-left: 0; padding-right: 0; }
+.mb-dialog-error { color: var(--vscode-errorForeground, #f48771); font-size: 12px; }
+
+/* File browser: folders and files listed by the server, in the menu / dialog colours. */
+.mb-fb {
+  width: min(860px, calc(100vw - 32px)); height: min(580px, calc(100vh - 48px));
+  display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto auto auto; grid-template-columns: minmax(0, 1fr); gap: 8px;
+  padding: 12px 14px; outline: none;
+  background: var(--vscode-menu-background); border: 1px solid var(--vscode-menu-border); border-radius: 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5); font-size: 12px;
+}
+/* Long paths must not widen the dialog: every row may shrink below its content. */
+.mb-fb > * { min-width: 0; }
+.mb-fb-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--vscode-descriptionForeground, #9d9d9d); }
+.mb-fb-bar { display: flex; gap: 4px; align-items: center; }
+.mb-fb-icon-btn {
+  width: 28px; height: 26px; display: inline-flex; align-items: center; justify-content: center;
+  background: none; border: 1px solid transparent; border-radius: 3px; color: var(--vscode-foreground, #cccccc); cursor: pointer;
+}
+.mb-fb-icon-btn:hover:not(:disabled) { background: var(--vscode-toolbar-hoverBackground, #2a2d2e); }
+.mb-fb-icon-btn:disabled { opacity: 0.4; cursor: default; }
+.mb-fb-path {
+  flex: 1; min-width: 0; height: 26px; padding: 0 8px; box-sizing: border-box; font: inherit; font-family: var(--vscode-editor-font-family, Consolas, monospace);
+  background: var(--vscode-input-background, #313131); color: var(--vscode-input-foreground, #cccccc);
+  border: 1px solid var(--vscode-input-border, #3c3c3c); border-radius: 3px;
+}
+.mb-fb-path:focus { outline: 1px solid var(--vscode-focusBorder, #0078d4); }
+.mb-fb-body { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 8px; min-height: 0; }
+.mb-fb-places { overflow: auto; border-right: 1px solid var(--vscode-panel-border, #2b2b2b); padding-right: 6px; }
+.mb-fb-group { padding: 6px 6px 2px; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--vscode-descriptionForeground, #9d9d9d); }
+.mb-fb-place {
+  width: 100%; display: flex; align-items: center; gap: 6px; padding: 4px 6px; text-align: left;
+  background: none; border: none; border-radius: 3px; color: var(--vscode-foreground, #cccccc); font: inherit; cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mb-fb-place:hover { background: var(--vscode-list-hoverBackground, #2a2d2e); }
+.mb-fb-place.on { background: var(--vscode-list-activeSelectionBackground, #04395e); }
+.mb-fb-list { overflow: auto; min-height: 0; border: 1px solid var(--vscode-panel-border, #2b2b2b); border-radius: 3px; user-select: none; }
+.mb-fb-head, .mb-fb-row { display: grid; grid-template-columns: minmax(0, 1fr) 90px 130px; gap: 8px; padding: 3px 8px; align-items: center; }
+.mb-fb-head {
+  position: sticky; top: 0; z-index: 1; font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--vscode-descriptionForeground, #9d9d9d); background: var(--vscode-menu-background, #252526); border-bottom: 1px solid var(--vscode-panel-border, #2b2b2b);
+}
+.mb-fb-row { cursor: default; }
+.mb-fb-row:hover { background: var(--vscode-list-hoverBackground, #2a2d2e); }
+.mb-fb-row.sel { background: var(--vscode-list-activeSelectionBackground, #04395e); }
+.mb-fb-name { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mb-fb-ico-dir { color: #dcb67a; display: inline-flex; }
+.mb-fb-ico-file { color: var(--vscode-descriptionForeground, #9d9d9d); display: inline-flex; }
+.mb-fb-meta { color: var(--vscode-descriptionForeground, #9d9d9d); white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }
+.mb-fb-empty { padding: 16px; color: var(--vscode-descriptionForeground, #9d9d9d); }
+.mb-fb-foot { display: flex; gap: 8px; align-items: center; }
+.mb-fb-field { flex: 1; display: flex; align-items: center; gap: 8px; color: var(--vscode-descriptionForeground, #9d9d9d); }
+.mb-fb-field .me-search { flex: 1; margin: 0; }
+.mb-fb-chosen {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--vscode-editor-font-family, Consolas, monospace); color: var(--vscode-descriptionForeground, #9d9d9d);
+}
+.mb-fb-filter {
+  flex: 0 1 auto; min-width: 0; height: 26px; max-width: 320px; font: inherit; padding: 0 6px;
+  background: var(--vscode-input-background, #313131); color: var(--vscode-input-foreground, #cccccc);
+  border: 1px solid var(--vscode-input-border, #3c3c3c); border-radius: 3px;
+}
+.mb-fb-error { margin-top: -2px; }
+.mb-fb-actions { justify-content: flex-end; }
+.mb-fb-primary { background: var(--vscode-button-background, #0e639c); border-color: var(--vscode-button-background, #0e639c); color: var(--vscode-button-foreground, #ffffff); }
+.mb-fb-primary:hover:not(:disabled) { background: var(--vscode-button-hoverBackground, #1177bb); }
+
+/* Import from package: the file-browser frame with a model list, a filter bar and the target fields. */
+.mb-import { grid-template-rows: auto auto auto minmax(0, 1fr) auto auto auto auto; }
+.mb-import .mb-fb-bar .lm-tool-btn { flex: 0 0 auto; }
+.mb-import-search { flex: 1; min-width: 0; margin: 0; }
+.mb-import-row { grid-template-columns: minmax(0, 1fr) 80px 150px; }
+.mb-import .mb-fb-foot { flex-wrap: wrap; }
+.mb-import .mb-fb-foot .mb-fb-field { min-width: 240px; }
+.mb-import-note { font-size: 11px; line-height: 1.4; }
+.mb-import-single { display: grid; min-height: 0; }
+.mb-import-split { display: grid; grid-template-columns: minmax(0, 1fr) 200px; gap: 8px; min-height: 0; }
+.mb-import-single > .mb-fb-list, .mb-import-split > .mb-fb-list { min-height: 0; }
+.mb-import-preview {
+  display: flex; align-items: center; justify-content: center; min-height: 0; padding: 8px;
+  border: 1px solid var(--vscode-panel-border, #2b2b2b); border-radius: 3px;
+  background-image: repeating-conic-gradient(#333 0 25%, #262626 0 50%); background-size: 16px 16px;
+}
+.mb-import-preview img { width: 100%; height: 100%; object-fit: contain; image-rendering: pixelated; }

@@ -1,6 +1,6 @@
 // Map-side helpers shared by the page and its panels: outliner layers, placement math and text formatting.
 
-import type { MapInstanceWire, MapPointWire } from './api/client';
+import type { MapInstanceWire, MapPointWire } from './webview/model-editor/asset-client';
 import type { MapLayer } from './viewport/mapViewport';
 
 export const LAYERS: Array<{ id: MapLayer; label: string }> = [

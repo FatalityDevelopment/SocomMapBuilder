@@ -1,0 +1,69 @@
+/* CodeDesigner's shared page header (page-header.component.ts), without its MCP status chip. */
+.cd-page-header,
+.cd-page-header * {
+  box-sizing: border-box;
+}
+.cd-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex: 0 0 64px;
+  min-height: 64px;
+  width: 100%;
+  padding: 0 22px;
+  border-bottom: 1px solid var(--vscode-panel-border, #2d2d30);
+  background: #181818;
+  color: var(--vscode-foreground, #d4d4d4);
+}
+.cd-page-brand {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 10px;
+}
+.cd-page-mark {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 36px;
+  border: 1px solid #0e639c;
+  border-radius: 7px;
+  background: linear-gradient(135deg, #0e639c, #174b70);
+  color: #fff;
+}
+.cd-page-copy {
+  min-width: 0;
+}
+.cd-page-title {
+  margin: 0;
+  overflow: hidden;
+  color: var(--vscode-foreground, #f2f2f2);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cd-page-subtitle {
+  margin: 3px 0 0;
+  overflow: hidden;
+  color: var(--vscode-descriptionForeground, #929292);
+  font-size: 11px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cd-page-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+@media (max-width: 680px) {
+  .cd-page-header { padding: 0 14px; }
+  .cd-page-subtitle { display: none; }
+}

@@ -5,11 +5,24 @@ using MapBuilder.Server.Services;
 // and the built web client (web/dist, copied to wwwroot next to the executable) at the root.
 var registry = new CommandRegistry();
 new ZipperAssetService().Register(registry);
+new ZipperWeaponsService().Register(registry);
+new ZipperFileFormatsService().Register(registry);
+new ViewerService().Register(registry);
+new FileSystemService().Register(registry);
+new PackageFilesService().Register(registry);
+
+// The page: wwwroot next to the executable (copied there by the build), else ../web/dist when running from source.
+// Without either the API still runs; the console says how to build the page.
+string? webRoot = new[]
+{
+    Path.Combine(AppContext.BaseDirectory, "wwwroot"),
+    Path.GetFullPath(Path.Combine(Directory.GetCurrentDirectory(), "..", "web", "dist")),
+}.FirstOrDefault(d => File.Exists(Path.Combine(d, "index.html")));
 
 var builder = WebApplication.CreateBuilder(new WebApplicationOptions
 {
     Args = args,
-    WebRootPath = Path.Combine(AppContext.BaseDirectory, "wwwroot"),
+    WebRootPath = webRoot,
 });
 string url = builder.Configuration["urls"] ?? "http://127.0.0.1:8770";
 builder.WebHost.UseUrls(url);
@@ -38,5 +51,12 @@ app.MapPost("/api/command", (CommandMessage command) =>
     }
 });
 
-app.Lifetime.ApplicationStarted.Register(() => Console.WriteLine($"Map Builder running at {url}"));
+app.Lifetime.ApplicationStarted.Register(() =>
+{
+    Console.WriteLine($"Map Builder running at {url}");
+    if (webRoot == null)
+    {
+        Console.WriteLine("The page is not built yet: run `npm ci` and `npm run build` in web/, then restart (or use `npm run dev`).");
+    }
+});
 app.Run();

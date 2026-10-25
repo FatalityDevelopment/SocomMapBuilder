@@ -161,3 +161,6 @@ app-model-editor-page { display: block; height: 100vh; }
 .me-dialog-list { overflow: auto; max-height: 240px; display: flex; flex-direction: column; gap: 2px; padding: 4px;
   border: 1px solid var(--vscode-panel-border, #444); border-radius: 3px; }
 .me-dialog-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+
+/* Pages with the shared page header (icon tile, title) above the menu bar. */
+.me-app.has-header { grid-template-rows: auto 28px 34px 1fr 22px; }

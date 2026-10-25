@@ -1,4 +1,4 @@
-import type { SessionStatus } from '../api/client';
+import type { SessionStatus } from '../webview/model-editor/asset-client';
 import { fileName } from '../mapModel';
 
 export interface MenuItem {

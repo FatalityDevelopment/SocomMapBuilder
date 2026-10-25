@@ -1,16 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AssetClient, TextureCache, type MapInstanceWire, type MapPointWire, type ModelSummary, type SessionStatus } from './api/client';
-import { decodeMesh, type MeshWire } from './api/mesh';
-import type { ModelTexturePixels } from './types';
+import { AssetClient, type MapInstanceWire, type MapPointWire, type ModelSummary, type SessionStatus } from './webview/model-editor/asset-client';
+import { TextureCache } from './webview/model-editor/model-loader';
+import { decodeMesh, type MeshWire } from './webview/model-editor/mesh-data';
+import type { ModelTexturePixels } from './webview/zipper-workbench/zed-model-renderer';
 import { MapViewport, type MapLayer, type MapModel, type MapTool } from './viewport/mapViewport';
-import type { Shading, ViewPreset } from './viewport/viewportCore';
+import type { Shading, ViewPreset } from './webview/zipper-core/viewport-core';
 import { LAYERS, errText, layerOf, movable, placementOp, pointKindCounts, scaleOf, yawOf, type ModelGroup } from './mapModel';
 import { MenuBar, type Menu } from './components/MenuBar';
+import { PageHeader } from './shared/PageHeader';
 import { Outliner } from './components/Outliner';
 import { PropsPanel, type PropTab } from './components/PropsPanel';
-import { PathDialog, type PathDialogSpec } from './components/PathDialog';
 import { ViewportView } from './components/ViewportView';
 import { NumField } from './components/NumField';
+import { activePage, host, modalOpen, openRequest, useSignals } from './shared';
 
 const SHADINGS: Array<{ id: Shading; label: string }> = [
   { id: 'textured', label: 'Textured' },
@@ -30,7 +32,7 @@ export const TOOLS: Array<{ id: MapTool; label: string; key: string; glyph: stri
 
 const SHADING_ORDER: Shading[] = ['textured', 'solid', 'wireframe', 'xray'];
 
-export function App() {
+export function MapPage() {
   const clientRef = useRef(new AssetClient());
   const texturesRef = useRef(new TextureCache(clientRef.current));
   const meshCacheRef = useRef(new Map<string, MapModel>());
@@ -75,7 +77,6 @@ export function App() {
   const [placeYaw, setPlaceYaw] = useState(0);
   const [placeScale, setPlaceScale] = useState(1);
   const [randomYaw, setRandomYaw] = useState(false);
-  const [dialog, setDialog] = useState<PathDialogSpec | null>(null);
 
   const dirtyCount = status?.dirty.length ?? 0;
   const single = selection.length === 1 ? instances[selection[0]] ?? null : null;
@@ -175,6 +176,15 @@ export function App() {
     }
   }, [reload, say, setBusyFlag, setStatus]);
 
+  // Another page asked for a package here (the Asset Viewer's "Open map in Map Builder").
+  useSignals();
+  const request = openRequest();
+  useEffect(() => {
+    if (request?.page === 'map') { void openPackage(request.path); }
+    // openPackage is stable for the page's life; only a new request should open.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [request]);
+
   // Edits made by anyone on the session (an assistant on the same backend) show up here.
   useEffect(() => {
     const timer = setInterval(async () => {
@@ -197,7 +207,7 @@ export function App() {
   const edit = useCallback(async (label: string, op: Record<string, unknown>): Promise<Record<string, unknown> | null> => {
     setBusyFlag(true);
     try {
-      const raw = await clientRef.current.edit({ label, ...op }) as Record<string, unknown>;
+      const raw = await clientRef.current.edit({ label, ...op }) as unknown as Record<string, unknown>;
       const result = (raw['result'] ?? raw) as { revision: number; description?: string };
       setStatus(await clientRef.current.status());
       say(`${result.description ?? label} (revision ${result.revision})`);
@@ -321,6 +331,16 @@ export function App() {
     }
   };
 
+  // A prop's model in the Model Editor: the same package (and session) with that model selected.
+  const openModel = (index: number) => {
+    const inst = instancesRef.current[index];
+    const s = statusRef.current;
+    if (!inst?.source || !s) { return; }
+    const cut = inst.source.indexOf(':');
+    host.open('models', s.path, { archive: inst.source.slice(0, cut), name: inst.source.slice(cut + 1) });
+    say(`Opening ${inst.model} in the Model Editor…`);
+  };
+
   // ------------------------------------------------------------------ save
 
   const save = async (args: { mode: 'zdb' | 'pack'; outputPath?: string; packName?: string }) => {
@@ -335,49 +355,37 @@ export function App() {
     }
   };
 
-  const saveCopy = () => {
+  const saveCopy = async () => {
     const s = statusRef.current;
     if (!s || !s.dirty.length) { return; }
     // A .CDB pack keeps its name (the game mounts mc0:/BASCUS-97275<NAME>/<NAME>.CDB); a .ZDB gets an _edit copy.
-    const suggested = /\.cdb$/i.test(s.path) ? s.path : s.path.replace(/(\.zdb)$/i, '_edit$1');
-    setDialog({
-      title: 'Save copy',
-      submitLabel: 'Save',
-      fields: [{ key: 'path', label: 'Output .ZDB path', value: suggested }],
-      onSubmit: values => {
-        setDialog(null);
-        if (cleanPath(values['path'])) { void save({ mode: 'zdb', outputPath: cleanPath(values['path']) }); }
-      },
-    });
+    const picked = await host.pickSavePath('zdb', /.cdb$/i.test(s.path) ? s.path : s.path.replace(/(.zdb)$/i, '_edit$1'));
+    if (picked.path) { void save({ mode: 'zdb', outputPath: picked.path }); }
   };
 
-  const exportPack = () => {
-    setDialog({
-      title: 'Export memory-card pack',
-      submitLabel: 'Export',
-      fields: [
-        { key: 'packName', label: 'Pack name (max 7 chars)', value: 'MMAP' },
-        { key: 'path', label: 'Output folder', value: '' },
-      ],
-      onSubmit: values => {
-        setDialog(null);
-        // An empty folder lets the backend pick <package folder>/packs/<name>.
-        void save({ mode: 'pack', packName: values['packName'].trim(), outputPath: cleanPath(values['path']) || undefined });
-      },
-    });
+  const exportPack = async () => {
+    const picked = await host.pickSavePath('pack', 'MMAP');
+    if (picked.packName && picked.path) { void save({ mode: 'pack', packName: picked.packName, outputPath: picked.path }); }
   };
 
-  const openDialog = () => {
-    setDialog({
-      title: 'Open package',
-      submitLabel: 'Open',
-      fields: [{ key: 'path', label: 'Path to a .ZDB or an unpacked package folder', value: '' }],
-      onSubmit: values => {
-        setDialog(null);
-        const path = cleanPath(values['path']);
-        if (path) { void openPackage(path); }
-      },
-    });
+  // Copies a model from another package (importModel) and makes it the one the Place tool drops.
+  const importFromPackage = async () => {
+    const session = clientRef.current.session;
+    if (!session || status?.readOnly) { return; }
+    const result = await host.importModel(session);
+    if (!result) { return; }
+    const list = await clientRef.current.listModels();
+    setModels(list);
+    setStatus(await clientRef.current.status());
+    const added = list.find(m => m.archive === result.archive && m.name === result.name) ?? null;
+    if (added) { setPlaceModel(added); setTool('place'); }
+    const warn = result.warnings.length ? ' ' + result.warnings.join(' ') : '';
+    say(`Imported ${result.name} into ${result.archive} (${result.textures.length} texture(s), ${Object.keys(result.palettes).length} palette(s)); click the ground to place it.${warn}`, !!warn);
+  };
+
+  const openDialog = async () => {
+    const path = await host.pickPackage();
+    if (path) { void openPackage(path); }
   };
 
   // ------------------------------------------------------------------ view
@@ -526,11 +534,12 @@ export function App() {
   const menus: Menu[] = [
     {
       id: 'file', label: 'File', items: [
-        { label: 'Open package…', shortcut: 'Ctrl+O', action: openDialog },
+        { label: 'Open package…', shortcut: 'Ctrl+O', action: () => void openDialog() },
         { label: 'Reload', action: () => void reload(true, true), disabled: () => !status },
+        { label: 'Import from package…', action: () => void importFromPackage(), disabled: () => !status || !!status.readOnly || busy },
         { separator: true, label: '' },
-        { label: 'Save copy…', shortcut: 'Ctrl+S', action: saveCopy, disabled: () => !dirtyCount },
-        { label: 'Export memory-card pack…', action: exportPack, disabled: () => !dirtyCount },
+        { label: 'Save copy…', shortcut: 'Ctrl+S', action: () => void saveCopy(), disabled: () => !dirtyCount },
+        { label: 'Export memory-card pack…', action: () => void exportPack(), disabled: () => !dirtyCount },
       ],
     },
     {
@@ -541,6 +550,8 @@ export function App() {
         { label: 'Duplicate', shortcut: 'Shift+D', action: () => void duplicateSelection(), disabled: () => !movableCount },
         { label: 'Delete', shortcut: 'X / Delete', action: () => void deleteSelection(), disabled: () => !movableCount },
         { label: 'Drop to ground', shortcut: 'End', action: () => void dropToGround(), disabled: () => !movableCount },
+        { separator: true, label: '' },
+        { label: 'Open model…', action: () => openModel(selection[0]), disabled: () => selection.length !== 1 || !single?.source },
       ],
     },
     {
@@ -570,6 +581,7 @@ export function App() {
         { label: 'Orbit: middle drag or Alt+left drag · Pan: right drag · Zoom: wheel' },
         { label: 'Select: click, Shift adds, Ctrl removes, drag for box' },
         { label: 'Tools: V select · G move · R rotate · T scale · P place' },
+        { label: 'Double-click a prop to open its model in the Model Editor' },
       ],
     },
   ];
@@ -577,8 +589,8 @@ export function App() {
   // The keyboard handler is read through a ref so the window listener is installed once.
   const keyHandlerRef = useRef<(e: KeyboardEvent) => void>(() => undefined);
   keyHandlerRef.current = (e: KeyboardEvent) => {
-    // The path dialog owns the keyboard while it is open (it closes itself on Escape).
-    if (dialog) { return; }
+    // Only the page in front takes keys, and none while a prompt or the file browser is open.
+    if (activePage() !== 'map' || modalOpen()) { return; }
     const target = e.target as HTMLElement;
     if (target && ['INPUT', 'SELECT', 'TEXTAREA'].includes(target.tagName)) { return; }
     const ctrl = e.ctrlKey || e.metaKey;
@@ -586,8 +598,8 @@ export function App() {
     let handled = true;
     if (ctrl && k === 'z') { void history(true); }
     else if (ctrl && (k === 'y' || (e.shiftKey && k === 'z'))) { void history(false); }
-    else if (ctrl && k === 's') { saveCopy(); }
-    else if (ctrl && k === 'o') { openDialog(); }
+    else if (ctrl && k === 's') { void saveCopy(); }
+    else if (ctrl && k === 'o') { void openDialog(); }
     else if (e.code === 'Numpad1') { view('front'); }
     else if (e.code === 'Numpad3') { view('right'); }
     else if (e.code === 'Numpad7') { view('top'); }
@@ -619,8 +631,8 @@ export function App() {
   // ------------------------------------------------------------------ viewport wiring
 
   // The viewport calls these; they are read through a ref so they always see the current state.
-  const handlersRef = useRef({ commitTransforms, place, syncSelection, edit, setHover, setPropTab, openDialog });
-  handlersRef.current = { commitTransforms, place, syncSelection, edit, setHover, setPropTab, openDialog };
+  const handlersRef = useRef({ commitTransforms, place, syncSelection, edit, setHover, setPropTab, openDialog, openModel });
+  handlersRef.current = { commitTransforms, place, syncSelection, edit, setHover, setPropTab, openDialog, openModel };
 
   const onViewportReady = useCallback((canvas: HTMLCanvasElement) => {
     if (viewportRef.current) { return; }
@@ -633,6 +645,7 @@ export function App() {
       onTransformCommit: (items, kind) => void handlersRef.current.commitTransforms(items, kind),
       onPointMove: (name, position) => void handlersRef.current.edit(`move point ${name}`, { op: 'movePoint', name, position }),
       onPlace: position => void handlersRef.current.place(position),
+      onOpenModel: index => handlersRef.current.openModel(index),
     });
     vp.setLighting(false);
     vp.setSnap(null, null, null);
@@ -654,7 +667,8 @@ export function App() {
   };
 
   return (
-    <div className="me-app" onPointerDown={e => { if (!(e.target as HTMLElement).closest('.me-menu')) { setOpenMenu(null); } }}>
+    <div className="me-app has-header" onPointerDown={e => { if (!(e.target as HTMLElement).closest('.me-menu')) { setOpenMenu(null); } }}>
+      <PageHeader icon="globe" title="Map Builder" subtitle="Props, clutter and spawn points of SOCOM II maps" />
       <MenuBar {...menuBarProps} />
 
       <div className="me-header">
@@ -748,6 +762,7 @@ export function App() {
             onDuplicate={() => void duplicateSelection()}
             onDelete={() => void deleteSelection()}
             onDrop={() => void dropToGround()}
+            onOpenModel={() => openModel(selection[0])}
             library={library}
             libQuery={libQuery}
             setLibQuery={setLibQuery}
@@ -759,6 +774,7 @@ export function App() {
             setPlaceScale={setPlaceScale}
             randomYaw={randomYaw}
             setRandomYaw={setRandomYaw}
+            onImport={() => void importFromPackage()}
           />
         </aside>
       </div>
@@ -770,14 +786,8 @@ export function App() {
         <span>{selection.length} selected</span>
       </div>
 
-      {dialog && <PathDialog spec={dialog} onCancel={() => setDialog(null)} />}
     </div>
   );
-}
-
-// Trims a typed path and drops the quotes Explorer's "Copy as path" adds.
-function cleanPath(value: string | undefined): string {
-  return (value ?? '').trim().replace(/^"(.*)"$/, '$1');
 }
 
 function toggled<T>(set: Set<T>, value: T): Set<T> {

@@ -1,4 +1,4 @@
-import type { MapInstanceWire, MapPointWire, ModelSummary, SessionStatus } from '../api/client';
+import type { MapInstanceWire, MapPointWire, ModelSummary, SessionStatus } from '../webview/model-editor/asset-client';
 import { fmt, movable, scaleOf, yawOf } from '../mapModel';
 import { NumField } from './NumField';
 
@@ -30,6 +30,7 @@ interface PropsPanelProps {
   onDuplicate: () => void;
   onDelete: () => void;
   onDrop: () => void;
+  onOpenModel: () => void;
   library: ModelSummary[];
   libQuery: string;
   setLibQuery: (q: string) => void;
@@ -41,6 +42,8 @@ interface PropsPanelProps {
   setPlaceScale: (v: number) => void;
   randomYaw: boolean;
   setRandomYaw: (on: boolean) => void;
+  // Import from package… (a model from another package into this one).
+  onImport: () => void;
 }
 
 export function PropsPanel(p: PropsPanelProps) {
@@ -156,7 +159,7 @@ function ItemTab(p: PropsPanelProps) {
   }
   return (
     <>
-      <div className="me-empty">Click a prop, clutter or point to select it (Shift adds, drag for a box).</div>
+      <div className="me-empty">Click a prop, clutter or point to select it (Shift adds, drag for a box). Double-click opens its model in the Model Editor.</div>
     </>
   );
 }
@@ -170,6 +173,7 @@ function Actions(p: PropsPanelProps) {
         <button className="lm-tool-btn" disabled={p.busy || !p.movableCount} onClick={p.onDuplicate}>Duplicate (Shift+D)</button>
         <button className="lm-tool-btn lm-danger-btn" disabled={p.busy || !p.movableCount} onClick={p.onDelete}>Delete (X)</button>
         <button className="lm-tool-btn" disabled={p.busy || !p.movableCount} onClick={p.onDrop}>Drop to ground</button>
+        <button className="lm-tool-btn" disabled={p.selection.length !== 1 || !p.single?.source} onClick={p.onOpenModel}>Open model…</button>
       </div>
     </div>
   );
@@ -179,6 +183,9 @@ function PlaceTab(p: PropsPanelProps) {
   return (
     <div className="me-card mp-place">
       <div className="me-card-title">Place clutter</div>
+      <div className="me-actions">
+        <button className="lm-tool-btn" disabled={p.busy || !p.status || !!p.status.readOnly} onClick={p.onImport} title="Copy a prop, vehicle, weapon or character from another package into this one">Import from package…</button>
+      </div>
       <input className="me-search" type="text" placeholder="Filter models…" value={p.libQuery} onChange={e => p.setLibQuery(e.target.value)} />
       <div className="mp-lib">
         {p.library.map(m => (

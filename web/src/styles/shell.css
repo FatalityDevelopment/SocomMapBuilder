@@ -1,0 +1,26 @@
+/* The app shell: a VS Code style activity bar on the left switching between the editor pages. Pages stay mounted
+   (their sessions, cameras and selections survive switching); only the one in front is shown. */
+.mb-shell { display: flex; width: 100vw; height: 100vh; overflow: hidden; background: var(--vscode-editor-background, #1e1e1e); }
+
+.mb-activity {
+  flex: 0 0 48px; display: flex; flex-direction: column; align-items: stretch;
+  background: var(--vscode-activityBar-background, #181818); border-right: 1px solid var(--vscode-panel-border, #2b2b2b);
+}
+.mb-activity-logo { display: flex; justify-content: center; padding: 8px 0 6px; }
+.mb-activity-logo img { width: 24px; height: 24px; opacity: 0.9; }
+.mb-activity-btn {
+  position: relative; height: 48px; display: flex; align-items: center; justify-content: center;
+  background: none; border: none; cursor: pointer; color: var(--vscode-activityBar-inactiveForeground, #868686);
+}
+.mb-activity-btn:hover { color: var(--vscode-activityBar-foreground, #d7d7d7); }
+.mb-activity-btn.on { color: var(--vscode-activityBar-foreground, #d7d7d7); }
+.mb-activity-btn.on::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 2px;
+  background: var(--vscode-activityBar-activeBorder, #0078d4);
+}
+
+.mb-pages { position: relative; flex: 1; min-width: 0; height: 100%; }
+.mb-page { position: absolute; inset: 0; display: none; }
+.mb-page.on { display: block; }
+/* Page roots were sized for a whole webview; here they fill the area beside the activity bar. */
+.mb-page .me-app, .mb-page .zip-shell { width: 100%; height: 100%; }

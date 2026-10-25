@@ -7,7 +7,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
-import type { ModelTexturePixels } from '../types';
+import type { ModelTexturePixels } from '../zipper-workbench/zed-model-renderer';
 
 export type Shading = 'textured' | 'solid' | 'wireframe' | 'xray';
 export type ViewPreset = 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom' | 'iso';
