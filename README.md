@@ -21,6 +21,7 @@ Open a package and edit the map, the models on it (props, vehicles, characters, 
 - [How it fits together](#how-it-fits-together)
 - [Command reference](#command-reference)
 - [Format notes](#format-notes)
+- [Format documentation](docs/formats/README.md)
 - [Development](#development)
 - [Status and limits](#status-and-limits)
 
@@ -170,7 +171,7 @@ Edit ops include `moveClutter`, `addClutter`, `deleteClutter`, `moveInstance`, `
 
 ## Format notes
 
-Things the editors rely on, checked against retail packages:
+The full decoding documentation for every asset type (packages, ZED/ZAR containers, models, GEO scenes, characters, textures and palettes, clutter, AI maps, RDR tables, animations) is in **[docs/formats](docs/formats/README.md)**. In short, the things the editors rely on, checked against retail packages:
 
 - Model space is Y up as stored; GEO and clutter matrices are column-major with the translation in 12–14.
 - A model is a top-level record of `<ns>_MDL.ZED`; its definition is a node of the same name under `models` in `<ns>_GEO.ZED` (a character's skeleton is named without `MESH_`).
