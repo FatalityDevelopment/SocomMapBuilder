@@ -6,6 +6,10 @@
 
 <p align="center">Map, model, texture and animation editors for <em>SOCOM U.S. Navy SEALs II / 3/CA</em> packages (.ZDB / .CDB), from the CodeDesigner team.</p>
 
+<p align="center">Code Designer AI was used to research and develop this app. Code Designer will be released at a later date.</p>
+
+<p align="center">The Code Designer source code that is used to inject map items / run new maps is not in this repo but will be added in the future.</p>
+
 <p align="center">Only tested on SOCOM II currently / still being worked on.</p>
 
 ---
