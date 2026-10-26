@@ -1,28 +1,39 @@
 <p align="center">
-  <img src="docs/icon.svg" alt="SOCOM Map Builder" width="112">
+  <img src="docs/icon.svg" alt="SOCOM Map Builder screenshot" width="112">
 </p>
 
 <h1 align="center">SOCOM Map Builder</h1>
 
-<p align="center">Map, model, texture and animation editors for <em>SOCOM U.S. Navy SEALs II / 3/ CA</em> packages (.ZDB / .CDB), from the CodeDesigner team. FTB has not been tested but should work. Grand theft auto SA is partially working for exporting models. </p>
+<p align="center">
+  A work-in-progress toolkit for exploring and editing PlayStation 2 game assets.
+</p>
 
-<p align="center">Code Designer AI was used to research and develop this app. Code Designer will be released at a later date.</p>
+<p align="center">
+  Build maps and edit models, textures, palettes, and character animations in SOCOM U.S. Navy SEALs II packages, with additional support for SOCOM 3, Combined Assault, and experimental GTA: San Andreas model workflows.
+</p>
 
-<p align="center">The Code Designer source code that is used to inject map items / run new maps is not in this repo but will be added in the future.</p>
+<p align="center">
+  <strong>Status:</strong> SOCOM II is the primary tested target. SOCOM 3 and Combined Assault support varies by workflow; GTA: San Andreas support is partial, and FTB has not been tested.
+</p>
 
-<p align="center">Only tested on SOCOM II currently / still being worked on.</p>
+<p align="center">
+  Developed with research and assistance from CodeDesigner AI. Runtime injection and map-launching source code from CodeDesigner is not included in this repository yet.
+</p>
 
 ---
 
-Open a package and edit the map, the models on it (props, vehicles, characters, weapons), their textures and palettes, and the character animations. Every page works on the same in-memory session, so a prop moved on the map, a texture replaced in the Model Editor and a clip keyed in the Animation Editor all save together: as a copy of the .ZDB, or as a memory-card pack the game loads from `mc0:`.
+Open a game package and work across the map, its props and clutter, vehicles, characters, weapons, textures, palettes, and character animations. The editors share one in-memory package session, so changes made across different pages can be saved together as a copy of the `.ZDB` / `.CDB` package or exported as a memory-card pack for `mc0:`.
+
+**Keep your originals safe:** edits stay in the session until you save or export. Work on copies, and test modified packages in-game before relying on them.
 
 ## Contents
 
-- [Pages](#pages)
+- [Pages and editors](#pages)
+- [Examples](#examples)
 - [Getting started](#getting-started)
 - [Working with packages](#working-with-packages)
 - [Controls](#controls)
-- [How it fits together](#how-it-fits-together)
+- [Architecture](#how-it-fits-together)
 - [Command reference](#command-reference)
 - [Format notes](#format-notes)
 - [Format documentation](docs/formats/README.md)
@@ -31,13 +42,13 @@ Open a package and edit the map, the models on it (props, vehicles, characters, 
 
 ## Pages
 
-The activity bar on the left switches pages; each keeps its state while you switch, and pages hand work to each other (double-click a prop on the map to open it in the Model Editor, right-click a model in the Asset Viewer to edit it).
+Use the activity bar to switch between tools. Each page retains its state, and the editors are connected: double-click a prop on the map to open it in the Model Editor, or right-click a model in the Asset Viewer to send it to the appropriate editor.
 
 ### Map Builder
 
-<img src="docs/screenshots/map.png" alt="SOCOM Map Builder" width="600">
+<img src="docs/screenshots/map.png" alt="SOCOM Map Builder map editor showing a composed level with world geometry, props, clutter, sky, textures, and baked lighting" width="850">
 
-The composed map (world model, props, clutter, sky) with its textures and baked lighting.
+Inspect the assembled level with its world model, props, clutter, sky, textures, and baked lighting. Select and transform instances directly in the scene.
 
 - Move, rotate, scale, duplicate and delete props and clutter; drop them to the ground.
 - Place clutter on any surface with the Place tool; pick the model, yaw (or random yaw) and scale.
@@ -47,11 +58,11 @@ The composed map (world model, props, clutter, sky) with its textures and baked 
 
 ### Model Editor
 
-<img src="docs/screenshots/character.png" alt="SOCOM Map Builder" width="600">
+<img src="docs/screenshots/character.png" alt="SOCOM Map Builder character model editing view" width="850">
 
-<img src="docs/screenshots/weapon.png" alt="SOCOM Map Builder" width="600">
+<img src="docs/screenshots/weapon.png" alt="SOCOM Map Builder weapon model editing view" width="850">
 
-Props, vehicles, weapons and skinned characters.
+Edit props, vehicles, weapons, and skinned characters using object-level and geometry-level tools.
 
 - Select by object, visual, chunk, vertex or face; move / rotate / scale; mirror, flip normals, snap to grid.
 - Add planes, cubes or an OBJ; duplicate and delete faces; edit UVs.
@@ -62,18 +73,18 @@ Props, vehicles, weapons and skinned characters.
 
 ### Animation Editor
 
-<img src="docs/screenshots/anim.png" alt="SOCOM Map Builder" width="600">
+<img src="docs/screenshots/anim.png" alt="SOCOM Map Builder animation editor for character clips" width="850">
 
-The package's character clips (MOTION_S.ZAR, editable) and the shared MOTION_P.ZAR (read-only), played on any skinned character.
+Preview character clips on skinned models. Package-local `MOTION_S.ZAR` clips are editable; the shared `MOTION_P.ZAR` is read-only.
 
 - Create, duplicate, rename, delete and retime clips; key bones with the gizmo or exact fields.
 - With the game's RUN folder available, weapons mount on the clip and fire their muzzle effects.
 
 ### Asset Viewer
 
-<img src="docs/screenshots/asset.png" alt="SOCOM Map Builder" width="600">
+<img src="docs/screenshots/asset.png" alt="SOCOM Map Builder asset viewer for browsing package files and archives" width="850">
 
-A file manager for packages and archives.
+Browse package contents and archives, preview assets, and send items directly to the editor that supports them.
 
 - Browse .ZDB / .CDB / .ZAR / .ZED files and the archives inside them, in a list with icons and thumbnails, a path bar (Up / Backspace, breadcrumbs) and a filter.
 - Lists match the editors: model archives list models (characters, weapons), TXR archives textures (as a list or icons), PAL archives palettes (with a swatch preview), GEO archives definitions, CLUTTER.ZAR its clutter models with their placement counts. Records that hold records open like folders.
@@ -85,21 +96,37 @@ Edits in the editors are undoable. SOCOM 3 / Combined Assault archives and GTA: 
 
 ## Examples
 
-<img src="docs/screenshots/raygun.png" alt="SOCOM Map Builder" width="600">
+<img src="docs/screenshots/raygun.png" alt="Custom ray gun asset shown in the SOCOM Map Builder workflow" width="850">
 
-<img src="docs/screenshots/hummer.png" alt="SOCOM Map Builder" width="600">
+*Example: a custom weapon asset.*
 
-<img src="docs/screenshots/tank.png" alt="SOCOM Map Builder" width="600">
+<img src="docs/screenshots/hummer.png" alt="Hummer vehicle model preview in SOCOM Map Builder" width="850">
 
-<img src="docs/screenshots/ca_char.png" alt="SOCOM Map Builder" width="600">
+*Example: a vehicle model.*
 
-### GTA - characters and props work, some vehicles. Some small things that need to be done still
+<img src="docs/screenshots/tank.png" alt="Tank model preview in SOCOM Map Builder" width="850">
 
-<img src="docs/screenshots/gta_cj.png" alt="SOCOM Map Builder" width="600">
+*Example: a tank model.*
 
-<img src="docs/screenshots/gta_dildo.png" alt="SOCOM Map Builder" width="600">
+<img src="docs/screenshots/ca_char.png" alt="Combined Assault character asset preview" width="850">
 
-<img src="docs/screenshots/gta_flame_thrower.png" alt="SOCOM Map Builder" width="600">
+*Example: a character asset from Combined Assault.*
+
+### GTA: San Andreas compatibility (partial)
+
+Character and prop workflows are working, along with some vehicles. This support is still incomplete, so treat exports as experimental and verify the results in your target workflow.
+
+<img src="docs/screenshots/gta_cj.png" alt="Grand Theft Auto San Andreas character model preview" width="850">
+
+*GTA: San Andreas example: character model support.*
+
+<img src="docs/screenshots/gta_dildo.png" alt="Grand Theft Auto San Andreas prop model preview" width="850">
+
+*GTA: San Andreas example: prop model support.*
+
+<img src="docs/screenshots/gta_flame_thrower.png" alt="Grand Theft Auto San Andreas weapon model preview" width="850">
+
+*GTA: San Andreas example: weapon model export workflow.*
 
 ## Getting started
 
@@ -107,7 +134,8 @@ Edits in the editors are undoable. SOCOM 3 / Combined Assault archives and GTA: 
 
 - [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0)
 - [Node.js](https://nodejs.org/) 20 or later
-- Your own SOCOM II packages (Map Builder ships no game files)
+- Your own SOCOM II packages (this repository does not include game files)
+- A supported SOCOM II package to edit, such as a `.ZDB` / `.CDB` package or an unpacked package folder
 
 ### Build and run
 
@@ -122,7 +150,7 @@ cd server
 dotnet run
 ```
 
-Open http://127.0.0.1:8770 and choose **File › Open package…** (Ctrl+O). The file browser lists your drives and folders; pick a map package such as `RUN\MP\M51\M51.ZDB`, a .CDB pack, a loose .ZED, or an unpacked package folder.
+Open [http://127.0.0.1:8770](http://127.0.0.1:8770) and choose **File → Open package…** (`Ctrl+O`). The file browser lists your drives and folders. Select a map package such as `RUN\MP\M51\M51.ZDB`, a `.CDB` pack, a loose `.ZED`, or an unpacked package folder.
 
 In Visual Studio, open `MapBuilder.sln` and press F5 (after `npm run build` in `web/`); the launch profile uses the same address.
 
@@ -130,9 +158,9 @@ The server binds to `127.0.0.1:8770`, so only your own browser can reach it. Pas
 
 ## Working with packages
 
-- **Nothing is written until you save.** Editor edits live in the session; **Save copy** (Ctrl+S) writes a new .ZDB (or .CDB), and **Export memory-card pack** writes `<NAME>.CDB` for `mc0:/BASCUS-97275<NAME>/` (pack names start with `m`, at most 7 letters/digits).
+- **Changes are session-based until you save or export.** **Save copy** (`Ctrl+S`) writes a new `.ZDB` or `.CDB`; **Export memory-card pack** writes `<NAME>.CDB` for `mc0:/BASCUS-97275<NAME>/`. Pack names start with `m` and can contain up to 7 letters or digits.
 - **Asset Viewer edits** (Import / Replace / Remove) ask where to save. Saving over the open file keeps a `<name>.bak` the first time.
-- **Work on copies.** Keep your original packages untouched and edit copies.
+- **Work on copies.** Keep your original packages untouched and test modified packages in-game before using them.
 - **Importing a model** copies its MDL record, its GEO definition (a character's skeleton), every texture its sections name with their mip levels, their palettes, and any models its definition is built from. Undo removes the whole import.
 - **New textures** are 8-bit indexed, a power of two a side (8–512, default: the image rounded, at most 256), with a 256-colour palette made from the image (32-bit when the image has soft alpha, else 16-bit like most retail palettes).
 
@@ -232,8 +260,13 @@ Open http://localhost:5173. `npm run typecheck` checks the page without building
 
 ## Status and limits
 
-- Map, model and animation edits round-trip through save and reopen. Imported models and textures and textures made from images render in the editors but have not all been tested in game yet; test on copies.
-- Runtime VRAM for map props is limited: large or many new textures may not all fit in game.
-- An imported character appears in the editors; spawning it in a mission also needs its character records.
+This is an actively developed tool, and support differs by game and asset type.
+
+- **SOCOM II is the primary tested target.** The project is still being developed; not every editing workflow has been verified in-game.
+- Map, model, and animation edits can round-trip through save and reopen. Imported models, imported textures, and image-created textures render in the editors, but not every combination has been tested in-game. Test on copies.
+- **Runtime VRAM is limited.** Large textures or many newly added textures may exceed what a map can use in-game.
+- An imported character can appear correctly in the editors, but spawning it in a mission also requires the relevant character records.
+- SOCOM 3 and Combined Assault workflows vary by format and feature. GTA: San Andreas model export is partial, and FTB has not been tested.
+- This repository does not include game assets or the CodeDesigner runtime source used to inject map items and launch new maps.
 
 *SOCOM U.S. Navy SEALs is a trademark of Sony Interactive Entertainment. This project is not affiliated with or endorsed by Sony; it ships no game files.*
