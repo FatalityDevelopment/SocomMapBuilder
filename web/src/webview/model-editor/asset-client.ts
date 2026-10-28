@@ -215,7 +215,7 @@ export class AssetClient {
 
   redo(): Promise<EditResult> { return this.call('ASSET_REDO'); }
 
-  save(args: { mode: 'zdb' | 'pack'; outputPath?: string; packName?: string; folderCard?: string }): Promise<{ written: string[]; leaves: string[] }> {
+  save(args: { mode: 'zdb' | 'pack'; outputPath?: string; packName?: string; folderCard?: string }): Promise<{ written: string[]; leaves: string[]; revision?: number }> {
     return this.withJson('ASSET_SAVE', args);
   }
 

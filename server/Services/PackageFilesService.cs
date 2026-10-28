@@ -1,4 +1,5 @@
 using System.Text.Json;
+using CodeDesigner.Ps2.FileFormats;
 using CodeDesigner.Ps2.FileFormats.Zipper.ZDB;
 using CodeDesigner.Ps2.FileFormats.Zipper.ZED;
 
@@ -81,9 +82,7 @@ namespace MapBuilder.Server.Services
                 }
             }
 
-            if (File.Exists(target) && !File.Exists(target + ".bak")) File.Copy(target, target + ".bak");
-            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            File.WriteAllBytes(target, bytes);
+            SafeFile.Write(target, bytes);
             return new { written = target, added = report.Added, replaced = report.Replaced, removed = report.Removed };
         }
 

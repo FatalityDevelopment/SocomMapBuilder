@@ -56,6 +56,11 @@ function layerOf(inst: MapInstance): MapLayer {
   return 'reference';
 }
 
+// Identity of an instance across reloads (the matrix may change; what it is may not).
+function instanceKey(inst: MapInstance): string {
+  return `${inst.kind}|${inst.model}|${inst.path}|${inst.clutterIndex ?? ''}`;
+}
+
 interface Slot { mesh: THREE.InstancedMesh; slot: number }
 
 // A vertical flat card (a facade tree): which horizontal axis it is flat along, or null for real 3D geometry.
@@ -92,6 +97,7 @@ export class MapViewport extends ViewportCore {
   readonly selected = new Set<number>();
   selectedPoint: string | null = null;
   private toolValue: MapTool = 'select';
+  private editableValue = true;
   private dragStart: { x: number; y: number } | null = null;
   private readonly boxEl: HTMLDivElement;
   private gizmoDrag: { start: THREE.Matrix4; snapshot: Map<number, THREE.Matrix4>; point?: THREE.Vector3 } | null = null;
@@ -158,6 +164,9 @@ export class MapViewport extends ViewportCore {
     points: MapPointInfo[],
     keepCamera: boolean,
   ): void {
+    // Keep a selected index only if it still holds the same instance: an undo or outside edit can shift the list.
+    const before = this.instances;
+    this.selected.forEach(i => { if (!before[i] || !instances[i] || instanceKey(before[i]) !== instanceKey(instances[i])) { this.selected.delete(i); } });
     this.clearContent();
     this.setTexturePixels(textures);
     this.instances = instances;
@@ -221,7 +230,6 @@ export class MapViewport extends ViewportCore {
       this.worldBox.getCenter(this.center);
       this.flySpeed = this.extent / 12;
     }
-    this.selected.forEach(i => { if (i >= instances.length) { this.selected.delete(i); } });
     this.applyVisibility();
     this.buildPoints(points);
     this.clearHelpers();
@@ -331,6 +339,10 @@ export class MapViewport extends ViewportCore {
   set tool(value: MapTool) { this.toolValue = value; this.updateGizmo(); }
   get tool(): MapTool { return this.toolValue; }
 
+  // Off while the page waits on an edit or the session is read-only: no gizmo, no placing.
+  set editable(value: boolean) { if (this.editableValue !== value) { this.editableValue = value; this.updateGizmo(); } }
+  get editable(): boolean { return this.editableValue; }
+
   select(indices: number[], additive = false): void {
     if (!additive) { this.selected.clear(); this.selectedPoint = null; }
     for (const i of indices) { this.selected.add(i); }
@@ -426,7 +438,7 @@ export class MapViewport extends ViewportCore {
     const t = this.toolValue;
     const center = this.selectionCenter();
     const canMove = this.selectedPoint ? t === 'move' : this.movable().length > 0;
-    if ((t === 'move' || t === 'rotate' || t === 'scale') && center && canMove) {
+    if (this.editableValue && (t === 'move' || t === 'rotate' || t === 'scale') && center && canMove) {
       this.pivot.position.copy(center);
       this.pivot.rotation.set(0, 0, 0);
       this.pivot.scale.set(1, 1, 1);
@@ -469,6 +481,12 @@ export class MapViewport extends ViewportCore {
   protected override onGizmoChange(): void {
     const drag = this.gizmoDrag;
     if (!drag) { return; }
+    if (this.toolValue === 'scale') {
+      // Placements carry one scale (the props panel and the game's clutter): an axis handle scales all three.
+      const s = this.pivot.scale;
+      const u = [s.x, s.y, s.z].reduce((a, b) => Math.abs(b - 1) > Math.abs(a - 1) ? b : a, 1);
+      s.setScalar(u);
+    }
     this.pivot.updateMatrixWorld(true);
     const delta = this.pivot.matrixWorld.clone().multiply(drag.start.clone().invert());
     if (this.selectedPoint && drag.point) {
@@ -511,6 +529,7 @@ export class MapViewport extends ViewportCore {
     if (e.button !== 0 || this.orbitWithAlt) { return; }
     if (this.gizmo.dragging || (this.gizmo as unknown as { axis: string | null }).axis) { return; }
     if (this.toolValue === 'place') {
+      if (!this.editableValue) { return; }
       const h = this.hit(e.clientX, e.clientY);
       if (h && !this.pointOf(h)) { this.callbacks.onPlace?.([h.point.x, h.point.y, h.point.z]); }
       return;

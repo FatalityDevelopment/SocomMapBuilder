@@ -29,9 +29,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
                     int index = IndexOf(zdb, e.Path);
                     zdb.ReplaceEntryData(index, e.Data);
                 }
-                byte[] bytes = zdb.ToBytes();
-                Backup(output);
-                File.WriteAllBytes(output, bytes);
+                SafeFile.Write(output, zdb.ToBytes());
                 written.Add(output);
                 return written;
             }
@@ -41,8 +39,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             foreach (var e in targets)
             {
                 string file = Path.Combine(dir, e.Leaf);
-                Backup(file);
-                File.WriteAllBytes(file, e.Data);
+                SafeFile.Write(file, e.Data);
                 written.Add(file);
             }
             return written;
@@ -53,12 +50,6 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             for (int i = 0; i < zdb.Entries.Count; i++)
                 if (string.Equals(zdb.Entries[i].FullPath, fullPath, StringComparison.OrdinalIgnoreCase)) return i;
             throw new KeyNotFoundException($"{fullPath} is not in the ZDB");
-        }
-
-        private static void Backup(string file)
-        {
-            string bak = file + ".bak";
-            if (File.Exists(file) && !File.Exists(bak)) File.Copy(file, bak);
         }
 
         // ------------------------------------------------------------------ memory-card pack
@@ -125,7 +116,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             var written = new List<string>();
             Directory.CreateDirectory(outputDir);
             string path = Path.Combine(outputDir, upper + ".CDB");
-            File.WriteAllBytes(path, cdb);
+            SafeFile.Write(path, cdb, backup: false);
             written.Add(path);
             if (folderCard != null)
             {
@@ -133,7 +124,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
                 string dest = Path.Combine(folderCard, "BASCUS-97275" + upper);
                 Directory.CreateDirectory(dest);
                 string installed = Path.Combine(dest, upper + ".CDB");
-                File.WriteAllBytes(installed, cdb);
+                SafeFile.Write(installed, cdb, backup: false);
                 written.Add(installed);
             }
             return written;

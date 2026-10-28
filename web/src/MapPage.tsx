@@ -85,6 +85,13 @@ export function MapPage() {
   const setStatus = useCallback((s: SessionStatus | null) => { statusRef.current = s; setStatusState(s); }, []);
   const setBusyFlag = useCallback((on: boolean) => { busyRef.current = on; setBusy(on); }, []);
 
+  // The revision last opened or saved: status.dirty compares with the source file, so it stays set after a Save copy.
+  const savedRevisionRef = useRef<number | null>(null);
+  const unsaved = () => {
+    const s = statusRef.current;
+    return !!s && s.dirty.length > 0 && s.revision !== savedRevisionRef.current;
+  };
+
   const say = useCallback((text: string, error = false) => {
     setMessage(text);
     setMessageIsError(error);
@@ -158,11 +165,14 @@ export function MapPage() {
   }, [loadScene]);
 
   const openPackage = useCallback(async (path: string) => {
+    const current = statusRef.current;
+    if (current && current.path !== path && unsaved() && !window.confirm(`${current.path} has unsaved changes (${current.dirty.join(', ')}). They stay in the session until the server stops; open ${path} anyway?`)) { return; }
     setBusyFlag(true);
     say(`Opening ${path}…`);
     try {
       const s = await clientRef.current.open(path);
       setStatus(s);
+      savedRevisionRef.current = s.revision;
       texturesRef.current.invalidate(s.revision);
       meshCacheRef.current.clear();
       pixelCacheRef.current = {};
@@ -202,9 +212,26 @@ export function MapPage() {
     return () => clearInterval(timer);
   }, [reload, say, setStatus]);
 
+  // The gizmo and Place tool are off while an edit runs or the session is read-only.
+  useEffect(() => {
+    if (viewportRef.current) { viewportRef.current.editable = !busy && !status?.readOnly; }
+  }, [busy, status]);
+
+  // Closing the tab with edits made since the last save asks first.
+  useEffect(() => {
+    const onUnload = (e: BeforeUnloadEvent) => { if (unsaved()) { e.preventDefault(); e.returnValue = ''; } };
+    window.addEventListener('beforeunload', onUnload);
+    return () => window.removeEventListener('beforeunload', onUnload);
+  }, []);
+
   // ------------------------------------------------------------------ edits
 
   const edit = useCallback(async (label: string, op: Record<string, unknown>): Promise<Record<string, unknown> | null> => {
+    // One edit at a time, and none on a read-only session.
+    if (busyRef.current || statusRef.current?.readOnly) {
+      say(statusRef.current?.readOnly ? `${label}: this package is read-only.` : `${label}: wait for the previous change to finish.`, true);
+      return null;
+    }
     setBusyFlag(true);
     try {
       const raw = await clientRef.current.edit({ label, ...op }) as unknown as Record<string, unknown>;
@@ -347,6 +374,7 @@ export function MapPage() {
     setBusyFlag(true);
     try {
       const r = await clientRef.current.save(args);
+      savedRevisionRef.current = r.revision ?? statusRef.current?.revision ?? null;
       say(`Wrote ${r.written.join(', ')} (${r.leaves.join(', ')})`);
     } catch (err) {
       say(`Save failed: ${errText(err)}`, true);

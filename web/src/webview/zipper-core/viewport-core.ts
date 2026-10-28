@@ -108,7 +108,9 @@ export abstract class ViewportCore {
     canvas.addEventListener('keydown', e => {
       if (e.ctrlKey || e.metaKey || e.altKey) { return; }
       const k = e.key.toLowerCase();
-      if (['w', 'a', 's', 'd', 'q', 'e'].includes(k) && e.getModifierState('CapsLock') === false && this.flyEnabled()) {
+      // Shift+A / Shift+D are page shortcuts unless already flying (Shift is then "faster").
+      const shortcut = e.shiftKey && (k === 'a' || k === 'd') && this.flyKeys.size === 0;
+      if (['w', 'a', 's', 'd', 'q', 'e'].includes(k) && !shortcut && e.getModifierState('CapsLock') === false && this.flyEnabled()) {
         this.flyKeys.add(k);
         if (e.shiftKey) { this.flyKeys.add('shift'); }
         e.stopPropagation();

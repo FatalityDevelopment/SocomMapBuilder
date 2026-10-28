@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using CodeDesigner.Ps2.FileFormats;
 using CodeDesigner.Ps2.FileFormats.Imaging;
 using CodeDesigner.Ps2.FileFormats.Zipper.Model;
 using CodeDesigner.Ps2.FileFormats.Zipper.Texture;
@@ -514,7 +515,7 @@ namespace MapBuilder.Server.Services
                 }
 
                 string saveTo = string.IsNullOrWhiteSpace(outputPath) ? path : outputPath!;
-                zed.Save(saveTo);
+                SafeFile.Write(saveTo, zed.ToBytes());
 
                 return Responses.Json(new CommandResponse
                 {
