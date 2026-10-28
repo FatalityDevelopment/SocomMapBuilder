@@ -18,6 +18,7 @@ import { collectVisualPartNames, findSceneNode, GeoEntry, GeoInstance, GeoNode, 
 import { choosePositionUnit, placeModelByGeo, type PositionUnitChoice } from '../zipper-core/model-placement';
 import { chooseMapScene, collectSceneInstances, definitionNodeFor, mapSceneRoot, parseClutterPlacements, type SceneInstance } from './zed-scene-compose';
 import { groundHeight, MapPoint, parseMapPoints } from './zed-spawn-points';
+import { paletteMethods, type PaletteMethods } from './zipper-workbench-palettes';
 import { isPlaceholderTexture, namespaceFromArchiveName, parseModelTexture, textureBytesFor, textureMethods, type TextureMethods, textureOwnerNamespace, texturePixelsFor, textureToDataUrl } from './zipper-workbench-textures';
 import type { Bounds3, BrowserItem, ElementRef, MapCameraReference, ModelDecodeInfo, MpsMap, MpsResult, NodePayload, PreviewMode, RdrResult, RdrTreeNode, ZipperEntryInfo, ZipperInspectResult, ZipperOperationResult } from './zipper-workbench-types';
 import { bytesToBase64, describeMagic, describePayload, escapeRegExp, mixin, nodeBytes, rootEntryLeaf } from './zipper-workbench-util';
@@ -38,7 +39,7 @@ export class ViewerPageLogic {
   // Maps a fetched node index back to the selected entry index that triggered
   // the fetch (used when .tif markers redirect to the next texdat entry).
   private nodeAliasForFetch = new Map<number, number>();
-  private palettesRequested = false;
+  palettesRequested = false;
   private lastTextureDiagnostic = '';
 
   readonly result = signal<ZipperInspectResult | null>(null);
@@ -1206,12 +1207,6 @@ export class ViewerPageLogic {
     this.applyModelToRenderer();
   }
 
-  onPaletteOverrideChange(event: Event): void {
-    const value = (event.target as HTMLSelectElement).value;
-    this.paletteOverride.set(value && value.length > 0 ? value : null);
-    this.applyModelToRenderer();
-  }
-
   selectZanimAnimation(entryIndex: number): void {
     this.selectedIndex.set(entryIndex);
   }
@@ -1320,15 +1315,6 @@ export class ViewerPageLogic {
     const chunk = this.selectedChunk();
     if (chunk >= 0 && chunk < mdl.chunks.length) { return mdl.chunks[chunk].decodedTriangleCount; }
     return mdl.indices.length / 3;
-  }
-
-  paletteLabel(tex: ZedTexture): string {
-    if (!tex.header.isIndexed) { return 'n/a (direct colour)'; }
-    const id = tex.header.cbp ?? tex.header.paletteId;
-    const source = tex.header.cbp !== null ? 'TEX0' : 'header';
-    return tex.paletteResolved
-      ? `texpal_${id} (${source})`
-      : `missing: texpal_${id} (${source})`;
   }
 
   visualLabel(key: string): string {
@@ -1450,83 +1436,7 @@ export class ViewerPageLogic {
     return archive.entryData.get(entryIndex) ?? null;
   }
 
-  // When we enter a *_TXR.ZED sub-archive, the matching *_PAL.ZED usually
-  // lives next to it in the parent layer (sub-archive or the root ZDB). Find
-  // and parse it inline so indexed textures inside resolve to colour instead
-  // of grayscale.
-  private loadNestedPalettesForCurrentLayer(): void {
-    // When the full ZDB package was preloaded (applyZdbPackage), the
-    // cross-package merged palette map already contains every palette
-    // from every _PAL.ZED in the archive. Re-fetching a single-prefix
-    // PAL here would OVERWRITE the merged map with one prefix's
-    // palettes and break textures from the other prefixes — that was
-    // exactly the bug the user hit drilling into WORL_MDL.ZED inside
-    // M51.ZDB. Skip when package context is intact.
-    if (this.packageEntryBytes.size > 0) { return; }
-
-    const stack = this.archiveStack();
-    if (stack.length === 0) { return; }
-    const current = stack[stack.length - 1];
-    const currentLeafName = (current.name.split(/[\\/]/).pop() ?? current.name);
-    const txrMatch = /^(.+?)_TXR(?:\([^)]+\))?\.ZED$/i.exec(currentLeafName);
-    if (!txrMatch) { return; }
-    const targetPalLeaf = `${txrMatch[1]}_PAL.ZED`.toLowerCase();
-
-    const previousLayer = stack.length >= 2 ? stack[stack.length - 2].archive : null;
-
-    // Case A: parent is another sub-archive. PAL bytes are in memory.
-    if (previousLayer) {
-      const palEntry = previousLayer.entries.find(
-        e => (e.name.split(/[\\/]/).pop() ?? e.name).toLowerCase() === targetPalLeaf,
-      );
-      if (!palEntry) { return; }
-      const palBytes = previousLayer.entryData.get(palEntry.index);
-      if (!palBytes || palBytes.length === 0) { return; }
-      this.applyPaletteBytesForCurrentLayer(palBytes, palEntry.name, current.archive);
-      return;
-    }
-
-    // Case B: parent is the root file. We need to async-fetch the PAL entry
-    // bytes from the bridge, then parse and apply.
-    const filePath = this.result()?.path;
-    if (!filePath) { return; }
-    const rootEntries = this.result()?.entries ?? [];
-    const palEntry = rootEntries.find(
-      e => (e.name.split(/[\\/]/).pop() ?? e.name).toLowerCase() === targetPalLeaf,
-    );
-    if (!palEntry) { return; }
-
-    // Mark this fetch as for "palette purposes" so handleNodeData routes it
-    // to applyPaletteBytesForCurrentLayer instead of decodePayload.
-    this.pendingPaletteFetch = { rootEntryIndex: palEntry.index, palName: palEntry.name };
-    this.vscode.postMessage({ type: 'readNode', path: filePath, entryIndex: palEntry.index });
-  }
-
-  private pendingPaletteFetch: { rootEntryIndex: number; palName: string } | null = null;
-
-  private applyPaletteBytesForCurrentLayer(
-    palBytes: Uint8Array,
-    palName: string,
-    currentArchive: InspectedZedArchive,
-  ): void {
-
-    try {
-      const palArchive = parseZedArchive(palBytes);
-      let palettes = parsePaletteEntries(
-        palArchive.entries.map(e => ({ name: e.name })),
-        i => palArchive.entryData.get(palArchive.entries[i].index) ?? new Uint8Array(0),
-      );
-      palettes = aliasPalettesForTextureEntries(
-        palettes,
-        currentArchive.entries.map(e => ({ name: e.name })),
-        i => currentArchive.entryData.get(currentArchive.entries[i].index) ?? new Uint8Array(0),
-      );
-      if (palettes.size > 0) {
-        this.palettes.set(palettes);
-        this.paletteMessage.set(`Loaded ${palettes.size} palette(s) from ${palName}.`);
-      }
-    } catch { /* leave existing palettes in place */ }
-  }
+  pendingPaletteFetch: { rootEntryIndex: number; palName: string } | null = null;
 
   // When user enters a *_MDL.ZED sub-archive, pull the matching TXR / PAL /
   // GEO siblings from the parent layer (in-memory sub-archive or async fetch
@@ -1673,42 +1583,6 @@ export class ViewerPageLogic {
       // Re-apply textures to the model in view.
       this.applyModelToRenderer();
     } catch { /* skip */ }
-  }
-
-  private rebuildAliasedPalettes(sourceName: string): void {
-    if (this.rootCompanionPalArchives.size === 0) { return; }
-    // Merge into what is loaded: palettes from the package (or an earlier
-    // companion) must survive an on-demand fetch of another archive.
-    const merged = new Map<string, ZedPalette>(this.palettes() ?? []);
-    for (const [namespace, pal] of this.rootCompanionPalArchives) {
-      let palettes = parsePaletteEntries(
-        pal.entries.map(e => ({ name: e.name })),
-        i => pal.entryData.get(pal.entries[i].index) ?? new Uint8Array(0),
-      );
-      const txr = this.rootCompanionTxrArchives.get(namespace);
-      if (txr) {
-        palettes = aliasPalettesForTextureEntries(
-          palettes,
-          txr.entries.map(e => ({ name: e.name })),
-          i => txr.entryData.get(txr.entries[i].index) ?? new Uint8Array(0),
-        );
-      }
-      for (const [key, value] of palettes) {
-        merged.set(key, value);
-        merged.set(`${namespace}:${key}`, value);
-      }
-    }
-    if (merged.size > 0) {
-      this.palettes.set(merged);
-      this.paletteMessage.set(`Loaded ${merged.size} palette alias(es) from ${sourceName}.`);
-      this.setStatus(
-        `Palettes ready (${merged.size}). TXR loaded: ${this.rootCompanionTxrArchives.size}.`,
-        false,
-        false,
-      );
-    } else {
-      this.setStatus(`Palette PAL parsed but yielded 0 palettes (${sourceName}).`, true, false);
-    }
   }
 
   private handleNodeData(fetchedIndex: number, payload: NodePayload): void {
@@ -2868,7 +2742,7 @@ export class ViewerPageLogic {
     this.animationRenderer.setPlaying(this.animationPlaying());
   }
 
-  private applyModelToRenderer(): void {
+  applyModelToRenderer(): void {
     try {
       this.applyModelToRendererUnsafe();
     } catch (err) {
@@ -3182,18 +3056,6 @@ export class ViewerPageLogic {
     entryIndex: number;
     paletteResolved: boolean;
   }>>(() => this.computeTextureThumbnails());
-
-  private requestPalettesIfNeeded(): void {
-    const filePath = this.result()?.path;
-    if (!filePath || this.palettesRequested) { return; }
-    const name = filePath.split(/[\\/]/).pop() ?? '';
-    // Fire for both .ZED siblings and for reader .ZAR archives (READERC/READERX).
-    // The provider's _findCompanionFiles handles both cases and returns the
-    // appropriate UI_TXR / UI_PAL companions so RDR screens show thumbnails.
-    if (!/\.(ZED|ZAR)$/i.test(name)) { return; }
-    this.palettesRequested = true;
-    this.vscode.postMessage({ type: 'readCompanionFiles', path: filePath });
-  }
 
   // Kick off a full ZDB package fetch. Mirrors the HTML map viewer's
   // RUN.zip preload: we get every top-level entry's bytes in one round
@@ -4447,8 +4309,8 @@ export class ViewerPageLogic {
 }
 
 // The methods live in one module per archive kind; each runs with `this` as the page, like the class's own.
-export interface ViewerPageLogic extends TextureMethods {}
-mixin(ViewerPageLogic, textureMethods);
+export interface ViewerPageLogic extends TextureMethods, PaletteMethods {}
+mixin(ViewerPageLogic, textureMethods, paletteMethods);
 
 function effectWireOverlayColor(modelName: string): number {
   const lower = modelName.toLowerCase();
