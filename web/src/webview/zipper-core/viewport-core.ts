@@ -127,6 +127,8 @@ export abstract class ViewportCore {
     this.resize();
     const loop = () => {
       this.frameId = requestAnimationFrame(loop);
+      // Every page stays mounted: draw only the one on screen (a hidden page's canvas has no layout box).
+      if (document.hidden || this.canvas.offsetParent === null) { this.lastFrame = performance.now(); return; }
       const now = performance.now();
       const dt = Math.min(0.1, (now - this.lastFrame) / 1000);
       this.stepFly(dt);

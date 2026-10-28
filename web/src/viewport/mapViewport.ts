@@ -90,6 +90,11 @@ export class MapViewport extends ViewportCore {
   private billboardsDirty = true;
   private targets: Array<{ mesh: THREE.Mesh; spec: MaterialSpec }> = [];
   private localBounds = new Map<string, THREE.Box3>();
+  // The decoded meshes the current scene was built from (a reload with the same ones only moves instances).
+  private builtModels = new Map<string, MapModel>();
+  private readonly overlayMaterial = new THREE.LineBasicMaterial({ color: SELECT_COLOR, depthTest: false, transparent: true });
+  // Meshes whose culling is off while a gizmo drag moves their instances (bounds are recomputed when it ends).
+  private readonly dragMeshes = new Map<THREE.InstancedMesh, boolean>();
   private points: Array<MapPointInfo & { y: number; obj: THREE.Object3D }> = [];
   // The sky dome encloses the map; hidden until asked for.
   private readonly hiddenLayers = new Set<MapLayer>(['sky']);
@@ -120,6 +125,8 @@ export class MapViewport extends ViewportCore {
   dispose(): void {
     window.removeEventListener('pointerup', this.onPointerUp);
     this.clearContent();
+    this.overlay.traverse(o => { (o as THREE.Mesh).geometry?.dispose(); });
+    this.overlayMaterial.dispose();
     this.disposeCore();
   }
 
@@ -167,7 +174,13 @@ export class MapViewport extends ViewportCore {
     // Keep a selected index only if it still holds the same instance: an undo or outside edit can shift the list.
     const before = this.instances;
     this.selected.forEach(i => { if (!before[i] || !instances[i] || instanceKey(before[i]) !== instanceKey(instances[i])) { this.selected.delete(i); } });
+    // Only placements changed (a move, rotate, scale or drop): update the instance matrices in place.
+    if (this.sameLayout(instances, models, textures)) {
+      this.updatePlacements(instances, points);
+      return;
+    }
     this.clearContent();
+    this.builtModels = new Map([...models]);
     this.setTexturePixels(textures);
     this.instances = instances;
     this.display = instances.map(i => toDisplay(i.matrix));
@@ -239,6 +252,34 @@ export class MapViewport extends ViewportCore {
     this.updateGizmo();
   }
 
+  // The same instances (in order) drawn from the same decoded meshes and textures as the built scene.
+  private sameLayout(instances: MapInstance[], models: Map<string, MapModel>, textures: Record<string, unknown>): boolean {
+    if (!this.content.children.length || instances.length !== this.instances.length || textures !== this.texturePixels) { return false; }
+    for (let i = 0; i < instances.length; i++) {
+      const a = instances[i], b = this.instances[i];
+      if (instanceKey(a) !== instanceKey(b) || a.source !== b.source) { return false; }
+    }
+    if (models.size !== this.builtModels.size) { return false; }
+    for (const [source, model] of models) { if (this.builtModels.get(source) !== model) { return false; } }
+    return true;
+  }
+
+  private updatePlacements(instances: MapInstance[], points: MapPointInfo[]): void {
+    this.instances = instances;
+    this.display = instances.map(i => toDisplay(i.matrix));
+    this.live = this.display.map(m => m.clone());
+    const touched = new Set<THREE.InstancedMesh>();
+    instances.forEach((_, i) => {
+      if (this.billboards.has(i)) { return; }
+      for (const s of this.slots[i]) { s.mesh.setMatrixAt(s.slot, this.display[i]); touched.add(s.mesh); }
+    });
+    touched.forEach(m => { m.instanceMatrix.needsUpdate = true; m.computeBoundingSphere(); });
+    this.billboardsDirty = true;
+    this.buildPoints(points);
+    this.refreshOverlay();
+    this.updateGizmo();
+  }
+
   private clearContent(): void {
     const geos = new Set<THREE.BufferGeometry>();
     this.content.traverse(o => { const g = (o as THREE.Mesh).geometry; if (g) { geos.add(g); } });
@@ -246,7 +287,19 @@ export class MapViewport extends ViewportCore {
     this.content.clear();
     this.targets = [];
     this.localBounds.clear();
+    this.builtModels.clear();
     this.clearMaterials();
+    this.clearPoints();
+  }
+
+  // Pillars and labels own their geometry, material and label texture.
+  private clearPoints(): void {
+    this.pointGroup.traverse(o => {
+      const mesh = o as THREE.Mesh;
+      mesh.geometry?.dispose();
+      const mat = mesh.material as THREE.Material | undefined;
+      if (mat) { (mat as THREE.SpriteMaterial).map?.dispose(); mat.dispose(); }
+    });
     this.pointGroup.clear();
     this.points = [];
   }
@@ -273,7 +326,7 @@ export class MapViewport extends ViewportCore {
   // ------------------------------------------------------------------ points
 
   private buildPoints(points: MapPointInfo[]): void {
-    this.pointGroup.clear();
+    this.clearPoints();
     const height = Math.max(4, this.extent * 0.012);
     const ground = this.content.children.filter(c => c.userData['layer'] === 'world');
     const ray = new THREE.Raycaster();
@@ -404,12 +457,14 @@ export class MapViewport extends ViewportCore {
     this.overlay.traverse(o => { const g = (o as THREE.Mesh).geometry; if (g) { g.dispose(); } });
     this.overlay.clear();
     this.overlayHolders.clear();
-    const mat = new THREE.LineBasicMaterial({ color: SELECT_COLOR, depthTest: false, transparent: true });
+    const mat = this.overlayMaterial;
     for (const i of this.selected) {
       const inst = this.instances[i];
       const b = inst.source ? this.localBounds.get(inst.source) : null;
       if (!b || b.isEmpty()) { continue; }
-      const box = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(...b.getSize(new THREE.Vector3()).toArray())), mat);
+      const cube = new THREE.BoxGeometry(...b.getSize(new THREE.Vector3()).toArray());
+      const box = new THREE.LineSegments(new THREE.EdgesGeometry(cube), mat);
+      cube.dispose();
       box.position.copy(b.getCenter(new THREE.Vector3()));
       const holder = new THREE.Group();
       holder.matrixAutoUpdate = false;
@@ -464,6 +519,7 @@ export class MapViewport extends ViewportCore {
     }
     const drag = this.gizmoDrag;
     this.gizmoDrag = null;
+    this.endDragCulling();
     if (!drag) { return; }
     this.pivot.updateMatrixWorld(true);
     const delta = this.pivot.matrixWorld.clone().multiply(drag.start.clone().invert());
@@ -501,9 +557,18 @@ export class MapViewport extends ViewportCore {
       // Billboards are drawn from their live placement on the next frame.
       if (this.billboards.has(i)) { this.billboardsDirty = true; continue; }
       for (const s of this.slots[i]) { s.mesh.setMatrixAt(s.slot, next); touched.add(s.mesh); }
+      this.overlayHolders.get(i)?.matrix.copy(next);
     }
-    touched.forEach(m => { m.instanceMatrix.needsUpdate = true; m.computeBoundingSphere(); });
-    this.refreshOverlay();
+    touched.forEach(m => {
+      m.instanceMatrix.needsUpdate = true;
+      // Culling would use stale bounds mid-drag; turn it off until the drag ends rather than recompute every frame.
+      if (!this.dragMeshes.has(m)) { this.dragMeshes.set(m, m.frustumCulled); m.frustumCulled = false; }
+    });
+  }
+
+  private endDragCulling(): void {
+    for (const [mesh, culled] of this.dragMeshes) { mesh.computeBoundingSphere(); mesh.frustumCulled = culled; }
+    this.dragMeshes.clear();
   }
 
   // ------------------------------------------------------------------ pointer

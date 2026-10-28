@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import type { MapInstanceWire, MapPointWire } from '../webview/model-editor/asset-client';
 import type { MapLayer } from '../viewport/mapViewport';
 import type { ModelGroup } from '../mapModel';
@@ -25,6 +25,8 @@ interface OutlinerProps {
   pickPoint: (name: string) => void;
 }
 
+const PAGE_ROWS = 300;
+
 function groupsOf(groups: OutlinerProps['groups'], layer: MapLayer): ModelGroup[] {
   return [...(groups.get(layer)?.values() ?? [])].sort((a, b) => a.model.localeCompare(b.model));
 }
@@ -40,6 +42,9 @@ export function Outliner(props: OutlinerProps) {
   const isOpen = (key: string) => openNodes.has(key);
   // Clutter groups run to thousands of rows; look selection up in a set.
   const selected = useMemo(() => new Set(selection), [selection]);
+  // Rows shown per open model group, a page at a time.
+  const [limits, setLimits] = useState<Map<string, number>>(() => new Map());
+  const limitOf = (key: string) => limits.get(key) ?? PAGE_ROWS;
   return (
     <div className="me-outliner">
       <div className="me-panel-title">Outliner</div>
@@ -78,11 +83,18 @@ export function Outliner(props: OutlinerProps) {
                       <span onClick={e => props.pickGroup(g, e.shiftKey)} title={g.source}>{g.model}</span>
                       <span className="lm-muted">{g.indices.length}</span>
                     </div>
-                    {g.indices.length > 1 && isOpen(key) && g.indices.slice(0, 300).map(i => (
+                    {g.indices.length > 1 && isOpen(key) && g.indices.slice(0, limitOf(key)).map(i => (
                       <div key={i} className={`me-tree-row mp-inst${selected.has(i) ? ' sel' : ''}`}>
                         <span onClick={e => props.pickInstance(i, e.shiftKey)}>{instanceLabel(instances[i])}</span>
                       </div>
                     ))}
+                    {g.indices.length > 1 && isOpen(key) && g.indices.length > limitOf(key) && (
+                      <div className="me-tree-row mp-inst">
+                        <span className="lm-muted" onClick={() => setLimits(l => new Map(l).set(key, limitOf(key) + PAGE_ROWS))}>
+                          Show {Math.min(PAGE_ROWS, g.indices.length - limitOf(key))} more of {g.indices.length - limitOf(key)}…
+                        </span>
+                      </div>
+                    )}
                   </div>
                 );
               })

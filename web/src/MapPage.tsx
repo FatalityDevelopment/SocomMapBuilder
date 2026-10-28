@@ -547,7 +547,12 @@ export function MapPage() {
     return models.filter(m => (m.kind === 'prop' || m.kind === 'library') && (!q || m.name.toLowerCase().includes(q))).slice(0, 400);
   }, [models, libQuery]);
 
-  const layerCount = (layer: MapLayer) => instances.filter(i => layerOf(i) === layer).length;
+  const layerCounts = useMemo(() => {
+    const out = new Map<MapLayer, number>();
+    for (const inst of instances) { const l = layerOf(inst); out.set(l, (out.get(l) ?? 0) + 1); }
+    return out;
+  }, [instances]);
+  const layerCount = (layer: MapLayer) => layerCounts.get(layer) ?? 0;
   const selectionSummary = useMemo(() => {
     const by = new Map<string, number>();
     for (const i of selection) { const m = instances[i]?.model ?? '?'; by.set(m, (by.get(m) ?? 0) + 1); }
