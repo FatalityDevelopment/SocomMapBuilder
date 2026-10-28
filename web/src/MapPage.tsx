@@ -9,8 +9,9 @@ import { Outliner } from './components/Outliner';
 import { PropsPanel, type PropTab } from './components/PropsPanel';
 import { ViewportView } from './components/ViewportView';
 import { NumField } from './components/NumField';
-import { activePage, host, modalOpen } from './shared';
-import { SHORTCUTS, TOOLS, matchShortcut, type ShortcutId } from './mapShortcuts';
+import { host } from './shared';
+import { SHORTCUTS, TOOLS } from './mapShortcuts';
+import { useMapKeys } from './useMapKeys';
 import { useMapSession } from './useMapSession';
 
 const SHADINGS: Array<{ id: Shading; label: string }> = [
@@ -443,8 +444,8 @@ export function MapPage() {
     },
   ];
 
-  // What each shortcut does; false leaves the key to the browser. Read through a ref so the window listener is installed once.
-  const keyActions: Record<ShortcutId, () => boolean | void> = {
+  // What each shortcut does (SHORTCUTS has the keys).
+  useMapKeys({
     undo: () => void history(true),
     redo: () => void history(false),
     save: () => void saveCopy(),
@@ -469,22 +470,7 @@ export function MapPage() {
     toolPlace: () => setTool('place'),
     shading: cycleShading,
     escape: () => { setOpenMenu(null); if (tool !== 'select') { setTool('select'); } else { clearSelection(); } },
-  };
-  const keyHandlerRef = useRef<(e: KeyboardEvent) => void>(() => undefined);
-  keyHandlerRef.current = (e: KeyboardEvent) => {
-    // Only the page in front takes keys, and none while a prompt or the file browser is open.
-    if (activePage() !== 'map' || modalOpen()) { return; }
-    const target = e.target as HTMLElement;
-    if (target && ['INPUT', 'SELECT', 'TEXTAREA'].includes(target.tagName)) { return; }
-    const id = matchShortcut(e);
-    if (id && keyActions[id]() !== false) { e.preventDefault(); }
-  };
-
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => keyHandlerRef.current(e);
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  });
 
   // ------------------------------------------------------------------ viewport wiring
 
