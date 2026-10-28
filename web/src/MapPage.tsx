@@ -61,6 +61,11 @@ export function MapPage() {
   const [snap, setSnap] = useState(false);
   const [snapMove, setSnapMove] = useState(10);
   const [snapRotate, setSnapRotate] = useState(15);
+  const [snapScale, setSnapScale] = useState(0.1);
+  const [gizmoLocal, setGizmoLocal] = useState(false);
+  const [locked, setLocked] = useState<Set<MapLayer>>(() => new Set());
+  // Copied clutter placements (model + matrix); they paste into this package or another one that has the model.
+  const clipboardRef = useRef<Array<{ model: string; matrix: number[] }>>([]);
   const [ortho, setOrtho] = useState(false);
   const [backfaces, setBackfaces] = useState(true);
   const [flySpeed, setFlySpeedState] = useState(100);
@@ -315,6 +320,46 @@ export function MapPage() {
     setTool('move');
   };
 
+  // Copy keeps clutter placements; GEO props are nodes of this scene, so they Duplicate instead.
+  const copySelection = () => {
+    const sel = selectedInstances();
+    const clutter = sel.filter(i => i.clutterIndex !== null).map(i => ({ model: i.model, matrix: [...i.matrix] }));
+    if (!clutter.length) { say(sel.length ? 'Only clutter copies; use Duplicate (Shift+D) for props.' : 'Nothing selected to copy.', !!sel.length); return; }
+    clipboardRef.current = clutter;
+    const skipped = sel.length - clutter.length;
+    say(`Copied ${clutter.length} clutter placement(s)${skipped ? ` (${skipped} prop(s) skipped: use Duplicate)` : ''}.`);
+  };
+
+  // Pastes where they were copied from, selected with the Move tool so they can be placed.
+  const paste = async () => {
+    const items = clipboardRef.current;
+    if (!items.length) { say('The clipboard is empty: select clutter and press Ctrl+C.'); return; }
+    const ops = items.map(it => ({ op: 'addClutter', model: it.model, matrix: it.matrix }));
+    const raw = await edit(`paste ${ops.length === 1 ? items[0].model : ops.length + ' placements'}`, ops.length === 1 ? ops[0] : { op: 'batch', ops }) as
+      { newClutterIndex?: number; results?: Array<{ newClutterIndex?: number }> } | null;
+    if (!raw) { return; }
+    const added = new Set([raw.newClutterIndex, ...(raw.results ?? []).map(r => r?.newClutterIndex)].filter((v): v is number => typeof v === 'number' && v >= 0));
+    viewportRef.current?.select(instancesRef.current.map((inst, i) => inst.clutterIndex !== null && added.has(inst.clutterIndex) ? i : -1).filter(i => i >= 0));
+    setTool('move');
+  };
+
+  // The Item tab's fields for a multi-selection: move by an offset, turn by an angle, or set one scale.
+  const editSelection = async (field: 'offset' | 'turn' | 'scale', value: string, axis = 0) => {
+    const v = parseFloat(value);
+    const sel = selectedInstances();
+    if (!sel.length || !Number.isFinite(v) || (field !== 'scale' && v === 0)) { return; }
+    const ops = sel.map(inst => {
+      const m = inst.matrix;
+      const position = [m[12], m[13], m[14]];
+      if (field === 'offset') { position[axis] += v; return placementOp(inst, { position }); }
+      const yaw = yawOf(m) + (field === 'turn' ? v : 0);
+      const scale = field === 'scale' ? Math.max(0.01, v) : scaleOf(m);
+      return placementOp(inst, { position, yaw, scale });
+    }).filter((o): o is Record<string, unknown> => !!o);
+    const what = field === 'offset' ? `move ${'XYZ'[axis]} by ${v}` : field === 'turn' ? `turn by ${v}°` : `scale to ${v}`;
+    await edit(`${what}: ${ops.length} instances`, ops.length === 1 ? ops[0] : { op: 'batch', ops });
+  };
+
   // Moves the selection down onto the surface under it (world model and other props).
   const dropToGround = async () => {
     const vp = viewportRef.current;
@@ -445,13 +490,27 @@ export function MapPage() {
     }
   };
 
-  const applySnap = (on: boolean, move: number, rotate: number) => {
-    viewportRef.current?.setSnap(on ? move : null, on ? rotate : null, on ? 0.1 : null);
+  const applySnap = (on: boolean, move: number, rotate: number, scale: number) => {
+    viewportRef.current?.setSnap(on ? move : null, on ? rotate : null, on ? scale : null);
   };
 
-  const toggleSnap = (on: boolean) => { setSnap(on); applySnap(on, snapMove, snapRotate); };
-  const changeSnapMove = (v: number) => { setSnapMove(v); applySnap(snap, v, snapRotate); };
-  const changeSnapRotate = (v: number) => { setSnapRotate(v); applySnap(snap, snapMove, v); };
+  const toggleSnap = (on: boolean) => { setSnap(on); applySnap(on, snapMove, snapRotate, snapScale); };
+  const changeSnapMove = (v: number) => { setSnapMove(v); applySnap(snap, v, snapRotate, snapScale); };
+  const changeSnapRotate = (v: number) => { setSnapRotate(v); applySnap(snap, snapMove, v, snapScale); };
+  const changeSnapScale = (v: number) => { setSnapScale(v); applySnap(snap, snapMove, snapRotate, v); };
+
+  const toggleLocal = () => {
+    const next = !gizmoLocal;
+    setGizmoLocal(next);
+    if (viewportRef.current) { viewportRef.current.gizmoLocal = next; }
+  };
+
+  const toggleLock = (layer: MapLayer) => {
+    const vp = viewportRef.current;
+    if (!vp) { return; }
+    vp.setLayerLocked(layer, !vp.isLayerLocked(layer));
+    setLocked(l => toggled(l, layer));
+  };
 
   const setFlySpeed = (v: number) => {
     if (v > 0) {
@@ -577,8 +636,11 @@ export function MapPage() {
     },
     {
       id: 'edit', label: 'Edit', items: [
-        { label: 'Undo', shortcut: 'Ctrl+Z', action: () => void history(true), disabled: () => !status?.canUndo },
-        { label: 'Redo', shortcut: 'Ctrl+Y', action: () => void history(false), disabled: () => !status?.canRedo },
+        { label: status?.canUndo ? `Undo ${status.canUndo}` : 'Undo', shortcut: 'Ctrl+Z', action: () => void history(true), disabled: () => !status?.canUndo },
+        { label: status?.canRedo ? `Redo ${status.canRedo}` : 'Redo', shortcut: 'Ctrl+Y', action: () => void history(false), disabled: () => !status?.canRedo },
+        { separator: true, label: '' },
+        { label: 'Copy clutter', shortcut: 'Ctrl+C', action: copySelection, disabled: () => !movableCount },
+        { label: 'Paste clutter', shortcut: 'Ctrl+V', action: () => void paste(), disabled: () => !status || !!status.readOnly || busy },
         { separator: true, label: '' },
         { label: 'Duplicate', shortcut: 'Shift+D', action: () => void duplicateSelection(), disabled: () => !movableCount },
         { label: 'Delete', shortcut: 'X / Delete', action: () => void deleteSelection(), disabled: () => !movableCount },
@@ -613,6 +675,7 @@ export function MapPage() {
         { label: 'Fly: W A S D, Q / E down / up, Shift faster (viewport focused)' },
         { label: 'Orbit: middle drag or Alt+left drag · Pan: right drag · Zoom: wheel' },
         { label: 'Select: click, Shift adds, Ctrl removes, drag for box' },
+        { label: 'Copy / paste clutter: Ctrl+C / Ctrl+V (also into another package with the model)' },
         { label: 'Tools: V select · G move · R rotate · T scale · P place' },
         { label: 'Double-click a prop to open its model in the Model Editor' },
       ],
@@ -633,6 +696,9 @@ export function MapPage() {
     else if (ctrl && (k === 'y' || (e.shiftKey && k === 'z'))) { void history(false); }
     else if (ctrl && k === 's') { void saveCopy(); }
     else if (ctrl && k === 'o') { void openDialog(); }
+    // Without a selection / clipboard the browser keeps Ctrl+C / Ctrl+V (copying the status text, say).
+    else if (ctrl && k === 'c' && selection.length) { copySelection(); }
+    else if (ctrl && k === 'v' && clipboardRef.current.length) { void paste(); }
     else if (e.code === 'Numpad1') { view('front'); }
     else if (e.code === 'Numpad3') { view('right'); }
     else if (e.code === 'Numpad7') { view('top'); }
@@ -717,8 +783,10 @@ export function MapPage() {
           <>
             <NumField small min="0.001" step={1} value={String(snapMove)} title="Move snap (units)" onCommit={v => changeSnapMove(+v || 1)} />
             <NumField small min={1} step={5} value={String(snapRotate)} title="Rotate snap (degrees)" onCommit={v => changeSnapRotate(+v || 15)} />
+            <NumField small min="0.01" step={0.05} value={String(snapScale)} title="Scale snap (factor)" onCommit={v => changeSnapScale(+v || 0.1)} />
           </>
         )}
+        <label className="me-toggle" title="Move a single prop along its own axes (its yaw) instead of the world's"><input type="checkbox" checked={gizmoLocal} onChange={toggleLocal} /> Local</label>
         <label className="me-toggle" title="WASD fly speed (Shift x4)">Fly <NumField small min={1} step={10} value={String(flySpeed)} onCommit={v => setFlySpeed(+v)} /></label>
         <span className="me-spacer" />
         <div className="me-seg" title="View">
@@ -769,6 +837,8 @@ export function MapPage() {
             toggleOpen={toggleOpen}
             isLayerHidden={layer => hidden.layers.has(layer)}
             toggleLayer={toggleLayer}
+            isLayerLocked={layer => locked.has(layer)}
+            toggleLock={toggleLock}
             isModelHidden={source => hidden.models.has(source)}
             toggleModel={toggleModel}
             layerCount={layerCount}
@@ -792,6 +862,7 @@ export function MapPage() {
             busy={busy}
             onMovePoint={movePointField}
             onSetField={setField}
+            onEditSelection={editSelection}
             onDuplicate={() => void duplicateSelection()}
             onDelete={() => void deleteSelection()}
             onDrop={() => void dropToGround()}

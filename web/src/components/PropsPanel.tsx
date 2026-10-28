@@ -27,6 +27,8 @@ interface PropsPanelProps {
   busy: boolean;
   onMovePoint: (name: string, axis: 'x' | 'z', value: string) => void;
   onSetField: (field: 'position' | 'yaw' | 'scale', value: string, axis?: number) => void;
+  // A multi-selection: move by an offset, turn by an angle, or set one scale for all.
+  onEditSelection: (field: 'offset' | 'turn' | 'scale', value: string, axis?: number) => void;
   onDuplicate: () => void;
   onDelete: () => void;
   onDrop: () => void;
@@ -153,6 +155,22 @@ function ItemTab(p: PropsPanelProps) {
           <div className="me-card-title">{selection.length} instances</div>
           <div className="me-note">{p.selectionSummary}</div>
         </div>
+        {p.movableCount > 0 && (
+          <div className="me-card">
+            <div className="me-card-title">Transform all ({p.movableCount} movable)</div>
+            <div className="me-xform">
+              {/* Each commit applies once, then the field resets. */}
+              <span>Move by</span>
+              {[0, 1, 2].map(k => (
+                <NumField key={k} reset value="0" step={1} disabled={p.busy} title={`Offset along ${'XYZ'[k]}`} onCommit={v => p.onEditSelection('offset', v, k)} />
+              ))}
+              <span>Turn by °</span>
+              <NumField reset value="0" step={15} disabled={p.busy} onCommit={v => p.onEditSelection('turn', v)} />
+              <span>Scale</span>
+              <NumField reset value="" step={0.1} min={0.01} disabled={p.busy} title="Set every selected instance to this scale" onCommit={v => p.onEditSelection('scale', v)} />
+            </div>
+          </div>
+        )}
         <Actions {...p} />
       </>
     );

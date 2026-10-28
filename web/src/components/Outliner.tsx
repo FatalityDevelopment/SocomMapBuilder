@@ -17,6 +17,8 @@ interface OutlinerProps {
   toggleOpen: (key: string) => void;
   isLayerHidden: (layer: MapLayer) => boolean;
   toggleLayer: (layer: MapLayer) => void;
+  isLayerLocked: (layer: MapLayer) => boolean;
+  toggleLock: (layer: MapLayer) => void;
   isModelHidden: (source: string) => boolean;
   toggleModel: (source: string) => void;
   layerCount: (layer: MapLayer) => number;
@@ -57,6 +59,12 @@ export function Outliner(props: OutlinerProps) {
               <button className="me-eye" onClick={() => props.toggleLayer(layer.id)} title={props.isLayerHidden(layer.id) ? 'Show' : 'Hide'}>
                 {props.isLayerHidden(layer.id) ? '◌' : '●'}
               </button>
+              {layer.id !== 'world' && layer.id !== 'sky' && (
+                <button className={`me-eye${props.isLayerLocked(layer.id) ? ' on' : ''}`} onClick={() => props.toggleLock(layer.id)}
+                  title={props.isLayerLocked(layer.id) ? 'Unlock (clicks and box drags select it again)' : 'Lock (clicks and box drags skip it)'}>
+                  {props.isLayerLocked(layer.id) ? '🔒' : '🔓'}
+                </button>
+              )}
               <span>{layer.label}</span>
               <span className="lm-muted">{layer.id === 'points' ? points.length : props.layerCount(layer.id)}</span>
             </div>

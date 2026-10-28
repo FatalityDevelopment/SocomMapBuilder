@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import { SELECT_COLOR, ViewportCore, chunkGeometry, isIdentity, labelSprite, type MaterialSpec } from '../webview/zipper-core/viewport-core';
 import type { EditorMesh } from '../webview/model-editor/mesh-data';
+import { layerOf, movable as isMovable, pointColor } from '../mapModel';
 
 export type MapTool = 'select' | 'move' | 'rotate' | 'scale' | 'place';
 export type MapLayer = 'world' | 'reference' | 'clutter' | 'sky' | 'points';
@@ -47,13 +48,6 @@ function toDisplay(m: ArrayLike<number>): THREE.Matrix4 {
 
 export function toModelArray(d: THREE.Matrix4): number[] {
   return d.toArray();
-}
-
-function layerOf(inst: MapInstance): MapLayer {
-  if (inst.kind === 'clutter') { return 'clutter'; }
-  if (inst.kind === 'model') { return 'world'; }
-  if (/^(sky|thesun|flare|mist)/i.test(inst.model)) { return 'sky'; }
-  return 'reference';
 }
 
 // Identity of an instance across reloads (the matrix may change; what it is may not).
@@ -99,6 +93,9 @@ export class MapViewport extends ViewportCore {
   // The sky dome encloses the map; hidden until asked for.
   private readonly hiddenLayers = new Set<MapLayer>(['sky']);
   private readonly hiddenModels = new Set<string>();
+  private readonly lockedLayers = new Set<MapLayer>();
+  // Move along a single prop's own axes (its yaw) rather than the world's.
+  private localSpace = false;
   readonly selected = new Set<number>();
   selectedPoint: string | null = null;
   private toolValue: MapTool = 'select';
@@ -335,7 +332,7 @@ export class MapViewport extends ViewportCore {
       ray.set(new THREE.Vector3(p.x, this.worldBox.isEmpty() ? 1000 : this.worldBox.max.y + 10, p.z), new THREE.Vector3(0, -1, 0));
       const hit = ray.intersectObjects(ground, false)[0];
       const y = hit ? hit.point.y : this.center.y;
-      const color = p.kind === 'start' ? 0x46a758 : p.kind === 'waypoint' ? 0x3e8bff : 0xb4b4b4;
+      const color = pointColor(p.kind);
       const pillar = new THREE.Mesh(
         new THREE.CylinderGeometry(height * 0.08, height * 0.08, height, 10),
         new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85, depthTest: false }),
@@ -387,10 +384,48 @@ export class MapViewport extends ViewportCore {
     return !this.hiddenLayers.has(layerOf(inst)) && !(inst.source && this.hiddenModels.has(inst.source));
   }
 
+  // A locked layer stays visible (and something to drop onto or place on) but can't be picked.
+  setLayerLocked(layer: MapLayer, locked: boolean): void {
+    if (locked) { this.lockedLayers.add(layer); } else { this.lockedLayers.delete(layer); }
+    let changed = false;
+    for (const i of [...this.selected]) { if (!this.selectable(i)) { this.selected.delete(i); changed = true; } }
+    if (layer === 'points' && locked && this.selectedPoint) { this.selectedPoint = null; changed = true; }
+    if (changed) { this.selectionChanged(); }
+  }
+
+  isLayerLocked(layer: MapLayer): boolean { return this.lockedLayers.has(layer); }
+
+  private selectable(i: number): boolean { return !this.lockedLayers.has(layerOf(this.instances[i])); }
+
+  // Instance i's bounds on screen (canvas pixels), from the corners in front of the camera; null if none are.
+  private screenRect(i: number, rect: DOMRect): { minX: number; maxX: number; minY: number; maxY: number } | null {
+    const inst = this.instances[i];
+    const local = inst.source ? this.localBounds.get(inst.source) : null;
+    const corners: THREE.Vector3[] = [];
+    if (local && !local.isEmpty()) {
+      for (let k = 0; k < 8; k++) {
+        corners.push(new THREE.Vector3(k & 1 ? local.max.x : local.min.x, k & 2 ? local.max.y : local.min.y, k & 4 ? local.max.z : local.min.z).applyMatrix4(this.display[i]));
+      }
+    } else {
+      corners.push(new THREE.Vector3().setFromMatrixPosition(this.display[i]));
+    }
+    let out: { minX: number; maxX: number; minY: number; maxY: number } | null = null;
+    for (const c of corners) {
+      c.project(this.camera);
+      if (c.z < -1 || c.z > 1) { continue; }
+      const sx = (c.x + 1) / 2 * rect.width, sy = (1 - c.y) / 2 * rect.height;
+      out = out ? { minX: Math.min(out.minX, sx), maxX: Math.max(out.maxX, sx), minY: Math.min(out.minY, sy), maxY: Math.max(out.maxY, sy) } : { minX: sx, maxX: sx, minY: sy, maxY: sy };
+    }
+    return out;
+  }
+
   // ------------------------------------------------------------------ selection
 
   set tool(value: MapTool) { this.toolValue = value; this.updateGizmo(); }
   get tool(): MapTool { return this.toolValue; }
+
+  set gizmoLocal(value: boolean) { this.localSpace = value; this.updateGizmo(); }
+  get gizmoLocal(): boolean { return this.localSpace; }
 
   // Off while the page waits on an edit or the session is read-only: no gizmo, no placing.
   set editable(value: boolean) { if (this.editableValue !== value) { this.editableValue = value; this.updateGizmo(); } }
@@ -422,7 +457,7 @@ export class MapViewport extends ViewportCore {
 
   // Selected instances that may move (the world model and sky stay put).
   private movable(): number[] {
-    return [...this.selected].filter(i => { const l = layerOf(this.instances[i]); return l === 'reference' || l === 'clutter'; });
+    return [...this.selected].filter(i => isMovable(this.instances[i]));
   }
 
   selectionCenter(): THREE.Vector3 | null {
@@ -477,7 +512,7 @@ export class MapViewport extends ViewportCore {
     }
     for (const p of this.points) {
       const pillar = p.obj.children[0] as THREE.Mesh;
-      (pillar.material as THREE.MeshBasicMaterial).color.setHex(p.name === this.selectedPoint ? SELECT_COLOR : p.kind === 'start' ? 0x46a758 : p.kind === 'waypoint' ? 0x3e8bff : 0xb4b4b4);
+      (pillar.material as THREE.MeshBasicMaterial).color.setHex(p.name === this.selectedPoint ? SELECT_COLOR : pointColor(p.kind));
     }
   }
 
@@ -496,6 +531,14 @@ export class MapViewport extends ViewportCore {
     if (this.editableValue && (t === 'move' || t === 'rotate' || t === 'scale') && center && canMove) {
       this.pivot.position.copy(center);
       this.pivot.rotation.set(0, 0, 0);
+      const ids = this.movable();
+      const local = this.localSpace && !this.selectedPoint && ids.length === 1;
+      if (local) {
+        const q = new THREE.Quaternion();
+        this.currentMatrix(ids[0]).decompose(new THREE.Vector3(), q, new THREE.Vector3());
+        this.pivot.quaternion.copy(q);
+      }
+      this.gizmo.setSpace(local ? 'local' : 'world');
       this.pivot.scale.set(1, 1, 1);
       this.pivot.updateMatrixWorld(true);
       this.gizmo.setMode(t === 'move' ? 'translate' : t);
@@ -646,20 +689,17 @@ export class MapViewport extends ViewportCore {
       const rect = this.canvas.getBoundingClientRect();
       const minX = Math.min(start.x, e.clientX) - rect.left, maxX = Math.max(start.x, e.clientX) - rect.left;
       const minY = Math.min(start.y, e.clientY) - rect.top, maxY = Math.max(start.y, e.clientY) - rect.top;
-      const v = new THREE.Vector3();
       this.instances.forEach((inst, i) => {
-        if (!this.instanceVisible(i) || layerOf(inst) === 'world' || layerOf(inst) === 'sky') { return; }
-        v.setFromMatrixPosition(this.display[i]).project(this.camera);
-        if (v.z < -1 || v.z > 1) { return; }
-        const sx = (v.x + 1) / 2 * rect.width, sy = (1 - v.y) / 2 * rect.height;
-        if (sx >= minX && sx <= maxX && sy >= minY && sy <= maxY) { if (subtract) { this.selected.delete(i); } else { this.selected.add(i); } }
+        if (!this.instanceVisible(i) || !this.selectable(i) || layerOf(inst) === 'world' || layerOf(inst) === 'sky') { return; }
+        const r = this.screenRect(i, rect);
+        if (r && r.maxX >= minX && r.minX <= maxX && r.maxY >= minY && r.minY <= maxY) { if (subtract) { this.selected.delete(i); } else { this.selected.add(i); } }
       });
     } else {
       const h = this.hit(e.clientX, e.clientY);
       const point = h ? this.pointOf(h) : null;
       const i = h && !point ? this.instanceOf(h) : null;
-      if (point) { this.selected.clear(); this.selectedPoint = point; }
-      else if (i !== null && layerOf(this.instances[i]) !== 'world') {
+      if (point) { if (!this.lockedLayers.has('points')) { this.selected.clear(); this.selectedPoint = point; } }
+      else if (i !== null && layerOf(this.instances[i]) !== 'world' && this.selectable(i)) {
         if (subtract) { this.selected.delete(i); } else { this.selected.add(i); }
       }
     }
