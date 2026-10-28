@@ -13,9 +13,9 @@ import { TextureCache } from '../model-editor/model-loader';
 import { animationFrameRate, cleanBoneName as cleanAnimationBoneName, hex as formatAnimationHex, parseRdrAnimation, RdrAnimationClip, RdrAnimationTrack, trackTypeKey } from './rdr-animation-parser';
 import { RdrAnimationCanvasRenderer } from './rdr-animation-renderer';
 import { findZanimAnimationForEntry, parseZanimArchive, ZanimAnimationSummary, ZanimArchiveSummary } from './zanim-parser';
-import { findSceneNode, GeoEntry, GeoInstance, GeoNode, GeoScene, parseGeoScene, positionUnitForNode, transformPoint } from './zed-geo-parser';
-import { parseClutterPlacements, type SceneInstance } from './zed-scene-compose';
+import { GeoEntry, GeoInstance, GeoScene, parseGeoScene, transformPoint } from './zed-geo-parser';
 import { groundHeight, MapPoint, parseMapPoints } from './zed-spawn-points';
+import { clutterMethods, type ClutterMethods } from './zipper-workbench-clutter';
 import { geoMethods, type GeoMethods } from './zipper-workbench-geo';
 import { modelComposeMethods, type ModelComposeMethods } from './zipper-workbench-model-compose';
 import { isSkyChunk, modelRenderMethods, type ModelRenderMethods } from './zipper-workbench-model-render';
@@ -391,7 +391,7 @@ export class ViewerPageLogic {
   }
 
   // Pre-order records with child counts → each record's parent (-1 at the top), or null when the layer has no tree.
-  private readonly entryParents = computed<Map<number, number> | null>(() => {
+  readonly entryParents = computed<Map<number, number> | null>(() => {
     const raw = this.rawEntries();
     if (raw.length === 0 || raw.some(e => e.type === undefined)) { return null; }
     const parents = new Map<number, number>();
@@ -437,16 +437,6 @@ export class ViewerPageLogic {
   folderNames(): string[] {
     const byIndex = new Map(this.rawEntries().map(e => [e.index, e.name]));
     return this.recordFolders().map(i => byIndex.get(i) ?? '?');
-  }
-
-  // CLUTTER.ZAR › Clutter › <model>: the model group of a clutter placement list.
-  clutterGroupName(entry: ZipperEntryInfo): string | null {
-    if (!/CLUTTER\.ZAR$/i.test(this.currentFileName())) { return null; }
-    const parents = this.entryParents();
-    const parent = parents?.get(entry.index);
-    if (parent === undefined || parent < 0) { return null; }
-    const p = this.rawEntries().find(e => e.index === parent);
-    return p?.name === 'Clutter' && parents?.get(parent) === -1 ? entry.name : null;
   }
 
   readonly browserItems = computed<BrowserItem[]>(() => {
@@ -2312,39 +2302,6 @@ export class ViewerPageLogic {
     this.vscode.postMessage({ type: 'readCompanionFiles', path: filePath });
   }
 
-  // CLUTTER.ZAR placements as scene instances. Each is drawn with its
-  // prototype's GEO definition (the node in the scene's `models` list).
-  clutterInstances(scene: GeoScene, root: GeoNode, resolve: (name: string) => unknown): SceneInstance[] {
-    const bytes = this.packageEntryBytes.get('clutter.zar');
-    if (!bytes || bytes.length === 0) { return []; }
-    let placements;
-    try { placements = parseClutterPlacements(parseZedArchive(bytes)); }
-    catch (err) {
-      this.log(`[clutter] CLUTTER.ZAR could not be read: ${err instanceof Error ? err.message : String(err)}`);
-      return [];
-    }
-    const out: SceneInstance[] = [];
-    const counts = new Map<string, number>();
-    const unresolved = new Set<string>();
-    for (const p of placements) {
-      if (!resolve(p.modelName)) { unresolved.add(p.modelName); continue; }
-      const node = findSceneNode(scene, p.modelName) ?? root;
-      out.push({
-        modelName: p.modelName,
-        instanceName: p.modelName,
-        path: `/clutter/${p.modelName}`,
-        matrix: p.matrix,
-        node,
-        positionUnit: positionUnitForNode(node),
-        kind: 'clutter',
-      });
-      counts.set(p.modelName, (counts.get(p.modelName) ?? 0) + 1);
-    }
-    this.log(`[clutter] ${out.length}/${placements.length} placement(s): ${[...counts].map(([n, c]) => `${n}×${c}`).join(', ') || 'none'}` +
-      (unresolved.size ? `; no model for ${[...unresolved].join(', ')}` : ''));
-    return out;
-  }
-
   dumpRdrReport(): void {
     const r = this.rdr();
     if (!r) { this.log('[DUMP rdr] no RDR loaded', true); return; }
@@ -2367,8 +2324,8 @@ export class ViewerPageLogic {
 }
 
 // The methods live in one module per archive kind; each runs with `this` as the page, like the class's own.
-export interface ViewerPageLogic extends TextureMethods, PaletteMethods, ModelMethods, ModelRenderMethods, ModelComposeMethods, GeoMethods {}
-mixin(ViewerPageLogic, textureMethods, paletteMethods, modelMethods, modelRenderMethods, modelComposeMethods, geoMethods);
+export interface ViewerPageLogic extends TextureMethods, PaletteMethods, ModelMethods, ModelRenderMethods, ModelComposeMethods, GeoMethods, ClutterMethods {}
+mixin(ViewerPageLogic, textureMethods, paletteMethods, modelMethods, modelRenderMethods, modelComposeMethods, geoMethods, clutterMethods);
 
 // The map prefix among root-level archive names: a <prefix>_TXR.ZED with a
 // matching _PAL.ZED that is not a shared support library. Prefers the opened
