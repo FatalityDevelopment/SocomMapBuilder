@@ -235,6 +235,17 @@ npm run dev
 
 Open http://localhost:5173. `npm run typecheck` checks the page without building it.
 
+Tests use synthetic data, never game files. CI (`.github/workflows/ci.yml`) runs both on every push and pull request.
+
+```bash
+dotnet test tests/MapBuilder.Tests
+```
+
+```bash
+cd web
+npm test
+```
+
 ## Status and limits
 
 - Map, model and animation edits round-trip through save and reopen. Imported models and textures and textures made from images render in the editors but have not all been tested in game yet; test on copies.
