@@ -2,193 +2,25 @@
 // .ZED packages and preview their textures, models, GEO scenes, RDR screens, AI maps and animations. The page decodes
 // archives itself; ViewerHost fetches them from the Map Builder server. The React view (ViewerPage.tsx) renders it.
 
-import { computed, effect, host, signal, untracked, type EffectRef } from '../../shared';
+import { computed, effect, type EffectRef, host, signal, untracked } from '../../shared';
 import { ViewerHost } from './viewer-host';
-import {
-  aliasPalettesForTextureEntries,
-  base64ToBytes,
-  parsePaletteEntries,
-  parsePaletteNodes,
-  parseTexture,
-  parseTextureHeader,
-  ZedPalette,
-  ZedTexture,
-} from './zed-texture-parser';
-import { ChainOffset, PositionUnit, ZedModel, applyMarkerBinding, applyWeaponDescriptorBinding, chainsAreLineOnly, convertPositionUnit, decodeCharacterFallbackPayload, decodeFallbackPayload, looksLikeZedContainer, modelExtent, parseModel } from './zed-model-parser';
+import { aliasPalettesForTextureEntries, base64ToBytes, parsePaletteEntries, parsePaletteNodes, parseTexture, parseTextureHeader, ZedPalette, ZedTexture } from './zed-texture-parser';
+import { applyMarkerBinding, applyWeaponDescriptorBinding, ChainOffset, chainsAreLineOnly, convertPositionUnit, decodeCharacterFallbackPayload, decodeFallbackPayload, looksLikeZedContainer, parseModel, PositionUnit, ZedModel } from './zed-model-parser';
 import { InspectedZedArchive, parseZedArchive } from './zed-archive-parser';
 import { type ModelBounds3, type ModelCameraView, type ModelTextureMap, type SceneMarker, ZedModelRenderer } from './zed-model-renderer';
 import { AssetClient } from '../model-editor/asset-client';
 import { decodeMesh, type MeshWire } from '../model-editor/mesh-data';
 import { TextureCache } from '../model-editor/model-loader';
-import {
-  RdrAnimationClip,
-  RdrAnimationTrack,
-  animationFrameRate,
-  cleanBoneName as cleanAnimationBoneName,
-  hex as formatAnimationHex,
-  parseRdrAnimation,
-  trackTypeKey,
-} from './rdr-animation-parser';
+import { animationFrameRate, cleanBoneName as cleanAnimationBoneName, hex as formatAnimationHex, parseRdrAnimation, RdrAnimationClip, RdrAnimationTrack, trackTypeKey } from './rdr-animation-parser';
 import { RdrAnimationCanvasRenderer } from './rdr-animation-renderer';
-import {
-  ZanimAnimationSummary,
-  ZanimArchiveSummary,
-  findZanimAnimationForEntry,
-  parseZanimArchive,
-} from './zanim-parser';
-import {
-  GeoEntry,
-  GeoInstance,
-  GeoNode,
-  GeoScene,
-  collectGeoInstances,
-  collectVisualPartNames,
-  compactName,
-  findSceneNode,
-  instanceNameVariants,
-  buildVisualPlacementMap,
-  parseGeoScene,
-  positionUnitForNode,
-  readGeoTransform,
-  readNodeBounds,
-  readVisualFlags,
-  transformPoint,
-} from './zed-geo-parser';
+import { findZanimAnimationForEntry, parseZanimArchive, ZanimAnimationSummary, ZanimArchiveSummary } from './zanim-parser';
+import { collectVisualPartNames, findSceneNode, GeoEntry, GeoInstance, GeoNode, GeoScene, instanceNameVariants, parseGeoScene, positionUnitForNode, readGeoTransform, transformPoint } from './zed-geo-parser';
 import { choosePositionUnit, placeModelByGeo, type PositionUnitChoice } from '../zipper-core/model-placement';
 import { chooseMapScene, collectSceneInstances, definitionNodeFor, mapSceneRoot, parseClutterPlacements, type SceneInstance } from './zed-scene-compose';
-import { MapPoint, groundHeight, parseMapPoints } from './zed-spawn-points';
-
-interface ElementRef<T> { nativeElement: T }
-
-export interface ZipperEntryInfo {
-  index: number;
-  name: string;
-  path: string;
-  size: number;
-  kind: string;
-  extension?: string;
-  type?: number;
-}
-
-export interface ZipperSaveRecordInfo {
-  fieldName: string;
-  type: number;
-  flags: number;
-  count: number;
-  valOffset: number;
-  tableOffset: number;
-  strOffset: number;
-}
-
-export interface ZipperInspectResult {
-  format: string;
-  role: string;
-  path: string;
-  fileName: string;
-  size: number;
-  summary: string;
-  canExtract: boolean;
-  entries: ZipperEntryInfo[];
-  apache?: { hasFtScore: boolean; hasZSealEtc: boolean } | null;
-  zed?: {
-    rootValue: number;
-    stringBasePointer: number;
-    headerWord5C: number;
-    dataAlignment: number;
-  } | null;
-  save?: {
-    title: string;
-    decryptedSize: number;
-    header: {
-      saveType: number;
-      slotIndex: number;
-      dataSize: number;
-      moduleCount: number;
-      field5C: number;
-      field60: number;
-    };
-    modules: string[];
-    records: ZipperSaveRecordInfo[];
-  } | null;
-}
-
-export interface ZipperOperationResult {
-  outputDirectory?: string;
-  outputPath?: string;
-  writtenFiles?: string[];
-  count?: number;
-  section?: string;
-  buildVersion?: string;
-  publicModulusHex?: string;
-  generatedNewKey?: boolean;
-}
-
-export type PreviewMode = 'none' | 'texture' | 'model' | 'rdr' | 'mps' | 'animation' | 'zanim' | 'palette';
-
-// One row of the file-manager list: what the editors call an asset (a model, a texture, a palette, a GEO
-// definition, a file of the package), not every record of the archive.
-export type BrowserItemKind = 'archive' | 'folder' | 'clutter' | 'model' | 'character' | 'weapon' | 'texture' | 'palette' | 'definition' | 'file' | 'record';
-export interface BrowserItem {
-  entry: ZipperEntryInfo;
-  name: string;
-  kind: BrowserItemKind;
-  // Folder of a package file, visual count, texture size, palette depth …
-  detail: string;
-  size: number;
-}
-
-export interface RdrResult {
-  sourcePath: string;
-  entry?: string;
-  version: number;
-  stringPoolSize: number;
-  atomCount: number;
-  root: unknown;
-  fallback?: boolean;
-  parseError?: string;
-}
-
-export interface MpsMap {
-  offset: number;
-  name: string;
-  width: number;
-  height: number;
-  minX: number; minY: number; minZ: number;
-  maxX: number; maxY: number; maxZ: number;
-  scaleX: number; scaleZ: number;
-}
-
-export interface Bounds3 {
-  minX: number; minY: number; minZ: number;
-  maxX: number; maxY: number; maxZ: number;
-}
-
-export interface MpsResult {
-  sourcePath: string;
-  declaredCount: number;
-  foundCount: number;
-  fileSize: number;
-  maps: MpsMap[];
-}
-
-export interface MapCameraReference {
-  source: string;
-  map: MpsMap;
-  bounds: Bounds3;
-  label: string;
-  distance: number;
-}
-
-// One node in the collapsible RDR tree. `path` is a unique key (uses dotted
-// breadcrumb + index) so expand/collapse state can be tracked across re-renders.
-export interface RdrTreeNode {
-  path: string;
-  name: string;
-  kind: 'string' | 'int' | 'float' | 'array' | 'object' | 'leaf';
-  value?: string | number;
-  children?: RdrTreeNode[];
-  depth: number;
-}
+import { groundHeight, MapPoint, parseMapPoints } from './zed-spawn-points';
+import type { Bounds3, BrowserItem, ElementRef, MapCameraReference, ModelDecodeInfo, MpsMap, MpsResult, NodePayload, PreviewMode, RdrResult, RdrTreeNode, ZipperEntryInfo, ZipperInspectResult, ZipperOperationResult } from './zipper-workbench-types';
+import { bytesToBase64, describeMagic, describePayload, escapeRegExp, nodeBytes, rootEntryLeaf } from './zipper-workbench-util';
+export type { ZipperEntryInfo, ZipperSaveRecordInfo, ZipperInspectResult, ZipperOperationResult, PreviewMode, BrowserItemKind, BrowserItem, RdrResult, MpsMap, Bounds3, MpsResult, MapCameraReference, RdrTreeNode } from './zipper-workbench-types';
 
 export class ViewerPageLogic {
   // Set by the view when the canvases mount (Angular's @ViewChild).
@@ -534,7 +366,6 @@ export class ViewerPageLogic {
   });
 
   readonly canPreviewModel = computed(() => this.model() !== null);
-
 
   // Full unfiltered entry list for the current layer. Used internally for
   // texdat / texture lookups (we need to see the Nxxx_xxx stubs to know what
@@ -1515,7 +1346,6 @@ export class ViewerPageLogic {
     if (track.quatSamples?.length) { return `[${track.quatSamples[0].join(', ')}] -> animated`; }
     return 'n/a';
   }
-
 
   activeVertexCount(): number {
     const mdl = this.model();
@@ -4344,7 +4174,6 @@ export class ViewerPageLogic {
       /_MDL(?:\([^)]+\))?\.zed$/i.test(this.currentArchiveLeaf() ?? '');
   }
 
-
   composeGeoScene(options: { fromSceneRoot?: boolean } = {}): boolean {
     const scene = this.mapScene();
     if (!scene) {
@@ -5485,11 +5314,6 @@ function textureVisibilityScore(tex: ZedTexture): number {
   return (visible / sampled) * 10 + (lit / visible) * 20 + (colorEnergy / visible) / 16;
 }
 
-// Node payloads arrive from the extension host either as base64 (older
-// bridge responses, companion files) or as binary (ArrayBuffer / typed
-// array, the package and node reads). Normalise at the boundary.
-type NodePayload = string | ArrayBuffer | Uint8Array | null | undefined;
-
 // `null_xmas.bmp` and similar: a placeholder no texture archive holds, on
 // small flat helper polygons (turret bases, world markers). The game shows
 // nothing there; drawn, they were grey tiles listed as missing textures.
@@ -5503,37 +5327,6 @@ function isSkyChunk(c: { sourceArchiveName?: string | null; sourceModelName?: st
   if (/^sp\d+$/.test(namespaceFromArchiveName(c.sourceArchiveName) ?? '')) { return true; }
   if (/^(?:sky|thesun|sun|flare|mist\d*)$/i.test(c.sourceModelName ?? '')) { return true; }
   return /^(?:sky|sunglow|sun_|flare|lensflare|cloud)/i.test(c.textureName ?? '');
-}
-
-// A ZDB root entry's file name, lower-cased (its path may carry RUN\\...).
-function rootEntryLeaf(e: { name: string; path?: string }): string {
-  const full = e.path || e.name;
-  return (full.split(/[\\/]/).pop() ?? full).toLowerCase();
-}
-
-function nodeBytes(payload: NodePayload): Uint8Array {
-  if (!payload) { return new Uint8Array(0); }
-  if (typeof payload === 'string') { return base64ToBytes(payload); }
-  // Tag checks instead of instanceof: buffers can be created in another
-  // frame's realm on their way into the webview.
-  const tag = Object.prototype.toString.call(payload);
-  if (tag === '[object ArrayBuffer]') { return new Uint8Array(payload as ArrayBuffer); }
-  if (ArrayBuffer.isView(payload)) {
-    const view = payload as ArrayBufferView;
-    return new Uint8Array(view.buffer, view.byteOffset, view.byteLength);
-  }
-  // A Node Buffer that went through JSON arrives as { type: 'Buffer', data: [...] }.
-  const anyPayload = payload as { data?: unknown; type?: string };
-  if (anyPayload && Array.isArray(anyPayload.data)) { return Uint8Array.from(anyPayload.data as number[]); }
-  throw new Error(`Unsupported node payload (${tag})`);
-}
-
-function describePayload(payload: NodePayload): string {
-  if (payload === null || payload === undefined) { return String(payload); }
-  if (typeof payload === 'string') { return `string(${payload.length})`; }
-  const tag = Object.prototype.toString.call(payload);
-  const keys = typeof payload === 'object' ? Object.keys(payload as object).slice(0, 4).join(',') : '';
-  return keys ? `${tag} {${keys}}` : tag;
 }
 
 // The map prefix among root-level archive names: a <prefix>_TXR.ZED with a
@@ -5554,33 +5347,6 @@ function mapPrefixFromLeaves(leaves: string[], preferred: string, supportPrefixe
     if (hasPair(p)) { return p; }
   }
   return null;
-}
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
-
-interface ModelDecodeInfo {
-  binding: string;
-  visuals: number;
-  chunks: number;
-  chainBound: number;
-  coloured: number;
-  unit: PositionUnit;
-  unitReason: string;
-  renderedChunks: number | null;
-  droppedChunks: number;
-  missingTextures: string[];
-}
-
-function bytesToBase64(bytes: Uint8Array): string {
-  let s = '';
-  const CHUNK = 0x8000;
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    s += String.fromCharCode.apply(null, Array.from(bytes.subarray(i, i + CHUNK)));
-  }
-  return btoa(s);
 }
 
 // Matrix helpers used by composeHierarchicalModel + GEO scene composition.
@@ -5668,13 +5434,6 @@ function transformVertices(vertices: ZedModel['vertices'], matrix: number[]): Ze
   });
 }
 
-function describeMagic(bytes: Uint8Array): string {
-  if (bytes.length < 4) { return '(empty)'; }
-  return Array.from(bytes.subarray(0, 4))
-    .map(b => b.toString(16).padStart(2, '0').toUpperCase())
-    .join(' ');
-}
-
 // Reused canvas so we don't allocate a new <canvas> + 2D context for every
 // texture decode. Hundreds of decodes happen during a single sidebar /
 // gallery refresh; per-call element allocation was a measurable chunk of
@@ -5695,18 +5454,6 @@ function textureToDataUrl(tex: ZedTexture): string {
   image.data.set(tex.rgba);
   ctx.putImageData(image, 0, 0);
   return canvas.toDataURL('image/png');
-}
-
-function uniqueLower(values: string[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const v of values) {
-    const key = v.toLowerCase();
-    if (seen.has(key)) { continue; }
-    seen.add(key);
-    out.push(v);
-  }
-  return out;
 }
 
 // Cap on the sidebar texture quick-grid. The existing weapon/map TXR
