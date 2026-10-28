@@ -4,7 +4,7 @@
 
 import { computed, effect, type EffectRef, host, signal, untracked } from '../../shared';
 import { ViewerHost } from './viewer-host';
-import { aliasPalettesForTextureEntries, base64ToBytes, parsePaletteEntries, parsePaletteNodes, parseTexture, ZedPalette, ZedTexture } from './zed-texture-parser';
+import { aliasPalettesForTextureEntries, base64ToBytes, parsePaletteEntries, parsePaletteNodes, ZedPalette, ZedTexture } from './zed-texture-parser';
 import { ChainOffset, PositionUnit, ZedModel } from './zed-model-parser';
 import { InspectedZedArchive, parseZedArchive } from './zed-archive-parser';
 import { type ModelCameraView, type ModelTextureMap, type SceneMarker, ZedModelRenderer } from './zed-model-renderer';
@@ -21,7 +21,8 @@ import { modelComposeMethods, type ModelComposeMethods } from './zipper-workbenc
 import { isSkyChunk, modelRenderMethods, type ModelRenderMethods } from './zipper-workbench-model-render';
 import { modelMethods, type ModelMethods } from './zipper-workbench-models';
 import { paletteMethods, type PaletteMethods } from './zipper-workbench-palettes';
-import { namespaceFromArchiveName, textureMethods, type TextureMethods, textureToDataUrl } from './zipper-workbench-textures';
+import { rdrMethods, type RdrMethods } from './zipper-workbench-rdr';
+import { namespaceFromArchiveName, textureMethods, type TextureMethods } from './zipper-workbench-textures';
 import type { Bounds3, BrowserItem, ElementRef, MapCameraReference, ModelDecodeInfo, MpsMap, MpsResult, NodePayload, PreviewMode, RdrResult, RdrTreeNode, ZipperEntryInfo, ZipperInspectResult, ZipperOperationResult } from './zipper-workbench-types';
 import { describePayload, escapeRegExp, mixin, nodeBytes, rootEntryLeaf } from './zipper-workbench-util';
 export type { ZipperEntryInfo, ZipperSaveRecordInfo, ZipperInspectResult, ZipperOperationResult, PreviewMode, BrowserItemKind, BrowserItem, RdrResult, MpsMap, Bounds3, MpsResult, MapCameraReference, RdrTreeNode } from './zipper-workbench-types';
@@ -89,24 +90,8 @@ export class ViewerPageLogic {
   readonly rdrExpanded = signal<Set<string>>(new Set());
   // Tree shape derived from the RDR result. Flattened to a depth-first list
   // of nodes that pass the expand filter, ready to render as a row list.
-  readonly rdrTreeRoots = computed<RdrTreeNode[]>(() => {
-    const r = this.rdr();
-    if (!r || r.fallback) { return []; }
-    return this.buildRdrTreeRoots(r.root);
-  });
-  readonly rdrVisibleRows = computed<RdrTreeNode[]>(() => {
-    const roots = this.rdrTreeRoots();
-    const expanded = this.rdrExpanded();
-    const out: RdrTreeNode[] = [];
-    const walk = (nodes: RdrTreeNode[]) => {
-      for (const n of nodes) {
-        out.push(n);
-        if (n.children && expanded.has(n.path)) { walk(n.children); }
-      }
-    };
-    walk(roots);
-    return out;
-  });
+  readonly rdrTreeRoots = computed<RdrTreeNode[]>(() => this.computeRdrTreeRoots());
+  readonly rdrVisibleRows = computed<RdrTreeNode[]>(() => this.computeRdrVisibleRows());
 
   // AIMAPS.MPS preview state.
   readonly mps = signal<MpsResult | null>(null);
@@ -117,24 +102,7 @@ export class ViewerPageLogic {
   // companion textures. Only populates when companion textures are available
   // (open the sibling _TXR.ZED first, or use "Load Textures" in the RDR pane).
   // Capped at 24 items so decoding never blocks the UI thread.
-  readonly rdrTextureThumbnails = computed<Array<{ name: string; dataUrl: string; width: number; height: number }>>(() => {
-    const lists = this.rdrFallbackLists();
-    if (!lists || lists.textureRefs.length === 0) { return []; }
-    const sources = this.companionTextures();
-    if (!sources || sources.size === 0) { return []; }
-    const palettes = this.palettes();
-    const out: Array<{ name: string; dataUrl: string; width: number; height: number }> = [];
-    for (const ref of lists.textureRefs.slice(0, 24)) {
-      const key = ref.toLowerCase();
-      const bytes = sources.get(key);
-      if (!bytes) { continue; }
-      try {
-        const tex = parseTexture(bytes, palettes, key);
-        out.push({ name: ref, dataUrl: textureToDataUrl(tex), width: tex.header.width, height: tex.header.height });
-      } catch { /* skip undecodable */ }
-    }
-    return out;
-  });
+  readonly rdrTextureThumbnails = computed<Array<{ name: string; dataUrl: string; width: number; height: number }>>(() => this.computeRdrTextureThumbnails());
   readonly animationClip = signal<RdrAnimationClip | null>(null);
   readonly animationPlaying = signal(true);
   readonly animationFrame = signal(0);
@@ -2230,102 +2198,11 @@ export class ViewerPageLogic {
     const fileTag = this.result()?.fileName ? `[${this.result()?.fileName}] ` : '';
     this.vscode.postMessage({ type: 'zipperLog', text: fileTag + text, reveal });
   }
-
-  // ------------------------------------------------------------------
-  // RDR tree — turns the shaped JSON-like root into a flat list of nodes
-  // with stable paths so we can collapse/expand by path. We render only
-  // the visible-under-expand subset via rdrVisibleRows().
-  // ------------------------------------------------------------------
-  private buildRdrTreeRoots(root: unknown): RdrTreeNode[] {
-    return this.shapeToTree(root, '$', 0, null);
-  }
-  private shapeToTree(value: unknown, path: string, depth: number, name: string | null): RdrTreeNode[] {
-    const nameLabel = name ?? (depth === 0 ? 'root' : '');
-    if (value === null || value === undefined) {
-      return [{ path, name: nameLabel, kind: 'leaf', value: 'null', depth }];
-    }
-    if (typeof value === 'string') {
-      return [{ path, name: nameLabel, kind: 'string', value, depth }];
-    }
-    if (typeof value === 'number') {
-      const kind: RdrTreeNode['kind'] = Number.isInteger(value) ? 'int' : 'float';
-      return [{ path, name: nameLabel, kind, value, depth }];
-    }
-    if (Array.isArray(value)) {
-      const children: RdrTreeNode[] = [];
-      for (let i = 0; i < value.length; i++) {
-        children.push(...this.shapeToTree(value[i], `${path}.${i}`, depth + 1, `[${i}]`));
-      }
-      return [{ path, name: nameLabel, kind: 'array', value: `${value.length}`, children, depth }];
-    }
-    if (typeof value === 'object') {
-      const obj = value as Record<string, unknown>;
-      const children: RdrTreeNode[] = [];
-      for (const [k, v] of Object.entries(obj)) {
-        children.push(...this.shapeToTree(v, `${path}.${k}`, depth + 1, k));
-      }
-      return [{ path, name: nameLabel, kind: 'object', value: `${children.length}`, children, depth }];
-    }
-    return [{ path, name: nameLabel, kind: 'leaf', value: String(value), depth }];
-  }
-  toggleRdrNode(path: string): void {
-    const next = new Set(this.rdrExpanded());
-    if (next.has(path)) { next.delete(path); } else { next.add(path); }
-    this.rdrExpanded.set(next);
-  }
-  isRdrExpanded(path: string): boolean { return this.rdrExpanded().has(path); }
-  rdrIsExpandable(node: RdrTreeNode): boolean { return !!(node.children && node.children.length > 0); }
-
-  // Lists rendered when RDR fell back to printable-string scan. The backend
-  // shapes `root` as { strings, textureRefs, fileRefs, modelRefs }.
-  rdrFallbackLists(): { strings: string[]; textureRefs: string[]; fileRefs: string[]; modelRefs: string[] } | null {
-    const r = this.rdr();
-    if (!r || !r.fallback) { return null; }
-    const root = r.root as Record<string, unknown> | null;
-    if (!root) { return null; }
-    const grab = (k: string): string[] => Array.isArray(root[k]) ? (root[k] as string[]) : [];
-    return {
-      strings: grab('strings'),
-      textureRefs: grab('textureRefs'),
-      fileRefs: grab('fileRefs'),
-      modelRefs: grab('modelRefs'),
-    };
-  }
-
-  // Loads companion textures for the currently open .rdr entry. When the user
-  // opens READERC.ZAR or READERX.ZAR, this finds the sibling _TXR / _PAL files
-  // and sends them to the provider, which responds via the existing
-  // `companionFiles` message. The RDR texture thumbnail grid then populates.
-  loadRdrCompanionTextures(): void {
-    const filePath = this.result()?.path;
-    if (!filePath) { return; }
-    this.vscode.postMessage({ type: 'readCompanionFiles', path: filePath });
-  }
-
-  dumpRdrReport(): void {
-    const r = this.rdr();
-    if (!r) { this.log('[DUMP rdr] no RDR loaded', true); return; }
-    this.log('--- RDR report ---', true);
-    this.log(`Source: ${r.sourcePath}${r.entry ? ` / ${r.entry}` : ''}`);
-    if (r.fallback) {
-      this.log(`(fallback) ${r.parseError ?? ''}`);
-      const lists = this.rdrFallbackLists();
-      if (lists) {
-        this.log(`Strings: ${lists.strings.length}, textureRefs: ${lists.textureRefs.length}, fileRefs: ${lists.fileRefs.length}, modelRefs: ${lists.modelRefs.length}`);
-        if (lists.textureRefs.length) { this.log('Texture refs:'); for (const s of lists.textureRefs) { this.log('  ' + s); } }
-        if (lists.fileRefs.length) { this.log('File refs:'); for (const s of lists.fileRefs) { this.log('  ' + s); } }
-        if (lists.modelRefs.length) { this.log('Model refs:'); for (const s of lists.modelRefs.slice(0, 80)) { this.log('  ' + s); } }
-      }
-    } else {
-      this.log(`Version ${r.version}, atoms ${r.atomCount}, pool ${r.stringPoolSize}B`);
-      try { this.log(JSON.stringify(r.root, null, 2)); } catch { this.log('(unable to stringify root)'); }
-    }
-  }
 }
 
 // The methods live in one module per archive kind; each runs with `this` as the page, like the class's own.
-export interface ViewerPageLogic extends TextureMethods, PaletteMethods, ModelMethods, ModelRenderMethods, ModelComposeMethods, GeoMethods, ClutterMethods {}
-mixin(ViewerPageLogic, textureMethods, paletteMethods, modelMethods, modelRenderMethods, modelComposeMethods, geoMethods, clutterMethods);
+export interface ViewerPageLogic extends TextureMethods, PaletteMethods, ModelMethods, ModelRenderMethods, ModelComposeMethods, GeoMethods, ClutterMethods, RdrMethods {}
+mixin(ViewerPageLogic, textureMethods, paletteMethods, modelMethods, modelRenderMethods, modelComposeMethods, geoMethods, clutterMethods, rdrMethods);
 
 // The map prefix among root-level archive names: a <prefix>_TXR.ZED with a
 // matching _PAL.ZED that is not a shared support library. Prefers the opened
