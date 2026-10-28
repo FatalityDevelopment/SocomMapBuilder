@@ -10,12 +10,13 @@ import { InspectedZedArchive, parseZedArchive } from './zed-archive-parser';
 import { type ModelCameraView, type ModelTextureMap, ZedModelRenderer } from './zed-model-renderer';
 import { AssetClient } from '../model-editor/asset-client';
 import { TextureCache } from '../model-editor/model-loader';
-import { animationFrameRate, cleanBoneName as cleanAnimationBoneName, hex as formatAnimationHex, parseRdrAnimation, RdrAnimationClip, RdrAnimationTrack, trackTypeKey } from './rdr-animation-parser';
+import { RdrAnimationClip, RdrAnimationTrack } from './rdr-animation-parser';
 import { RdrAnimationCanvasRenderer } from './rdr-animation-renderer';
-import { findZanimAnimationForEntry, parseZanimArchive, ZanimAnimationSummary, ZanimArchiveSummary } from './zanim-parser';
+import { ZanimAnimationSummary, ZanimArchiveSummary } from './zanim-parser';
 import { GeoEntry, GeoScene, parseGeoScene } from './zed-geo-parser';
 import { MapPoint } from './zed-spawn-points';
 import { aiMapMethods, type AiMapMethods } from './zipper-workbench-aimaps';
+import { animationMethods, type AnimationMethods } from './zipper-workbench-animations';
 import { clutterMethods, type ClutterMethods } from './zipper-workbench-clutter';
 import { geoMethods, type GeoMethods } from './zipper-workbench-geo';
 import { modelComposeMethods, type ModelComposeMethods } from './zipper-workbench-model-compose';
@@ -36,7 +37,7 @@ export class ViewerPageLogic {
   // What the VS Code extension did for this page, against the Map Builder server; replies arrive at onMessage.
   readonly vscode = new ViewerHost(msg => this.onMessage({ data: msg } as MessageEvent));
   modelRenderer: ZedModelRenderer | null = null;
-  private animationRenderer: RdrAnimationCanvasRenderer | null = null;
+  animationRenderer: RdrAnimationCanvasRenderer | null = null;
   nodeCache = new Map<number, Uint8Array>();
   private inflightNode: number | null = null;
   // Maps a fetched node index back to the selected entry index that triggered
@@ -107,44 +108,12 @@ export class ViewerPageLogic {
   readonly animationClip = signal<RdrAnimationClip | null>(null);
   readonly animationPlaying = signal(true);
   readonly animationFrame = signal(0);
-  private archiveNodesRequestedFor = '';
+  archiveNodesRequestedFor = '';
   readonly archiveNodesVersion = signal(0);
-  readonly zanimSummary = computed<ZanimArchiveSummary | null>(() => {
-    this.archiveNodesVersion();
-    const summary = parseZanimArchive(this.rawEntries(), index => this.nodeCache.get(index));
-    return summary.isZanim ? summary : null;
-  });
-  readonly selectedZanimAnimation = computed<ZanimAnimationSummary | null>(() => {
-    const entry = this.selectedEntry();
-    return findZanimAnimationForEntry(this.zanimSummary(), entry?.index ?? null, entry?.name ?? null);
-  });
-  readonly visibleZanimAnimations = computed<ZanimAnimationSummary[]>(() => {
-    const summary = this.zanimSummary();
-    if (!summary) { return []; }
-    const q = this.search().trim().toLowerCase();
-    const animations = summary.sets.flatMap(set => set.animations);
-    if (!q) { return animations; }
-    return animations.filter(anim =>
-      [anim.name, ...anim.nameRefs].join(' ').toLowerCase().includes(q));
-  });
-  readonly animationBoneRows = computed<Array<{ index: number; name: string; clean: string; parent: number; trackType: string; attachment: boolean; depth: number }>>(() => {
-    const clip = this.animationClip();
-    if (!clip) { return []; }
-    return clip.bones.map((name, index) => {
-      const clean = cleanAnimationBoneName(name);
-      const track = clip.tracks[index];
-      const depth = ((name || '').match(/^-*/) || [''])[0].length;
-      return {
-        index,
-        name,
-        clean,
-        parent: clip.parents[index] ?? -1,
-        trackType: track ? trackTypeKey(track.type) : '-',
-        attachment: /weapon|rifle|gun|pistol|cig|cigar|smoke|prop|attach/i.test(clean),
-        depth,
-      };
-    });
-  });
+  readonly zanimSummary = computed<ZanimArchiveSummary | null>(() => this.computeZanimSummary());
+  readonly selectedZanimAnimation = computed<ZanimAnimationSummary | null>(() => this.computeSelectedZanimAnimation());
+  readonly visibleZanimAnimations = computed<ZanimAnimationSummary[]>(() => this.computeVisibleZanimAnimations());
+  readonly animationBoneRows = computed<Array<{ index: number; name: string; clean: string; parent: number; trackType: string; attachment: boolean; depth: number }>>(() => this.computeAnimationBoneRows());
   readonly animationTrackRows = computed<RdrAnimationTrack[]>(() => this.animationClip()?.tracks ?? []);
 
   // Full ZDB-package state. After the user opens a .zdb, we fetch every
@@ -967,12 +936,6 @@ export class ViewerPageLogic {
 
   openInMap(): void { host.open('map', this.rootPath()); }
 
-  openInAnimationEditor(): void { host.open('animations', this.rootPath()); }
-
-  isAnimationArchive(item: BrowserItem): boolean {
-    return item.kind === 'archive' && /(MOTION[^\\/]*|ZANIM)\.ZAR$/i.test(item.name);
-  }
-
   openFile(): void {
     this.vscode.postMessage({ type: 'openFile' });
   }
@@ -1120,80 +1083,6 @@ export class ViewerPageLogic {
     this.previewMode.set(mode);
     if (mode === 'model') { this.ensureModelRenderer(); }
     if (mode === 'animation') { this.ensureAnimationRenderer(); }
-  }
-
-  selectZanimAnimation(entryIndex: number): void {
-    this.selectedIndex.set(entryIndex);
-  }
-
-  zanimWordsLabel(words: number[] | undefined): string {
-    if (!words || words.length === 0) { return '-'; }
-    return words.map(w => '0x' + (w >>> 0).toString(16).toUpperCase()).join(' ');
-  }
-
-  zanimParamsLabel(params: { words: number[]; floats: number[] } | null): string {
-    if (!params) { return 'loading...'; }
-    const words = params.words.map(w => '0x' + (w >>> 0).toString(16).toUpperCase()).join(' ');
-    const floats = params.floats.map(f => Number.isFinite(f) ? f.toFixed(3) : 'nan').join(', ');
-    return `${words}  | f32 ${floats}`;
-  }
-
-  zanimNodeRefLabel(words: [number, number, number, number]): string {
-    return `[${words.map(w => '0x' + w.toString(16).toUpperCase()).join(', ')}]`;
-  }
-
-  toggleAnimationPlayback(): void {
-    const next = !this.animationPlaying();
-    this.animationPlaying.set(next);
-    this.animationRenderer?.setPlaying(next);
-  }
-
-  resetAnimationView(): void {
-    this.animationRenderer?.resetView();
-  }
-
-  onAnimationFrameInput(event: Event): void {
-    const value = Number((event.target as HTMLInputElement).value);
-    if (!Number.isFinite(value)) { return; }
-    this.animationPlaying.set(false);
-    this.animationRenderer?.setPlaying(false);
-    this.animationRenderer?.setFrame(value);
-    this.animationFrame.set(Math.floor(value));
-  }
-
-  animationFrameMax(clip: RdrAnimationClip): number {
-    return Math.max(0, clip.sampleCount - 1);
-  }
-
-  animationFpsLabel(clip: RdrAnimationClip): string {
-    return `${animationFrameRate(clip).toFixed(2)} fps`;
-  }
-
-  cleanAnimationBoneLabel(name: string): string {
-    return cleanAnimationBoneName(name);
-  }
-
-  isAnimationAttachment(name: string): boolean {
-    return /weapon|rifle|gun|pistol|cig|cigar|smoke|prop|attach/i.test(cleanAnimationBoneName(name));
-  }
-
-  animationHex(value: number): string {
-    return formatAnimationHex(value);
-  }
-
-  animationTrackBase(track: RdrAnimationTrack): string {
-    if (track.baseVec4) { return `[${track.baseVec4.join(', ')}]`; }
-    if (track.posSamples?.length) {
-      const p = track.posSamples[0];
-      return `[${p.map(v => Math.round(v)).join(', ')}] -> animated`;
-    }
-    return 'n/a';
-  }
-
-  animationTrackQuat(track: RdrAnimationTrack): string {
-    if (track.staticQuat) { return `[${track.staticQuat.join(', ')}] static`; }
-    if (track.quatSamples?.length) { return `[${track.quatSamples[0].join(', ')}] -> animated`; }
-    return 'n/a';
   }
 
   private resetPreview(): void {
@@ -1511,26 +1400,6 @@ export class ViewerPageLogic {
     return this.primaryMapTextureNamespace();
   }
 
-  tryApplyAnimationPreview(bytes: Uint8Array, name: string): boolean {
-    const leaf = name.split(/[\\/]/).pop() ?? name;
-    const animation = parseRdrAnimation(bytes, leaf);
-    if (!animation.animationLike) { return false; }
-
-    this.previewMode.set('animation');
-    this.animationClip.set(animation);
-    this.animationPlaying.set(true);
-    this.animationFrame.set(0);
-    this.previewMessage.set(animation.parseOk
-      ? ''
-      : `Animation parsed partially (${animation.tracks.length}/${animation.boneCount} tracks).`);
-    this.log(
-      `[ANIM] ${leaf}: ${animation.boneCount} bones, ${animation.sampleCount} samples, ` +
-      `${animation.tracks.length} tracks, ${animation.parseOk ? 'clean' : 'partial'}`,
-    );
-    setTimeout(() => this.applyAnimationToRenderer(), 0);
-    return true;
-  }
-
   packageHasArchive(namespace: string, kind: 'txr' | 'pal' | 'mdl' | 'geo'): boolean {
     const escaped = namespace.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const rx = new RegExp(`^${escaped}_${kind}(?:\\([^)]+\\))?\\.zed$`, 'i');
@@ -1545,26 +1414,6 @@ export class ViewerPageLogic {
     if (!entry) { return; }
     const bytes = this.nodeCache.get(entry.index);
     if (bytes) { this.decodePayload(entry.index, bytes); }
-  }
-
-  private ensureAnimationRenderer(): void {
-    const canvas = this.animationCanvas?.nativeElement;
-    if (!canvas) { return; }
-    if (this.animationRenderer && this.animationRenderer.attachedCanvas !== canvas) {
-      this.animationRenderer.dispose();
-      this.animationRenderer = null;
-    }
-    if (!this.animationRenderer) {
-      this.animationRenderer = new RdrAnimationCanvasRenderer(canvas);
-      this.animationRenderer.onFrameChange = frame => this.animationFrame.set(frame);
-    }
-  }
-
-  private applyAnimationToRenderer(): void {
-    this.ensureAnimationRenderer();
-    if (!this.animationRenderer) { return; }
-    this.animationRenderer.setClip(this.animationClip());
-    this.animationRenderer.setPlaying(this.animationPlaying());
   }
 
   // Decoded thumbnail grid for the current texture archive. Re-runs when
@@ -1600,24 +1449,6 @@ export class ViewerPageLogic {
     this.packageMessage.set(`Loading ${filePath.split(/[\\/]/).pop()} package…`);
     this.log(`[package] requesting full package contents for ${filePath.split(/[\\/]/).pop()}`);
     this.vscode.postMessage({ type: 'loadZdbPackage', path: filePath });
-  }
-
-  private requestArchiveNodesIfNeeded(): void {
-    const filePath = this.result()?.path;
-    if (!filePath || this.archiveNodesRequestedFor === filePath) { return; }
-    if (!this.zanimSummary()) { return; }
-    this.archiveNodesRequestedFor = filePath;
-    this.setStatus(`Loading ${filePath.split(/[\\/]/).pop()} animation payloads...`, false, true);
-    this.vscode.postMessage({ type: 'loadArchiveNodes', path: filePath });
-  }
-
-  private selectInitialZanimEntryIfNeeded(): void {
-    if (this.selectedIndex() !== null) { return; }
-    const summary = this.zanimSummary();
-    if (!summary) { return; }
-    const firstAnimation = summary.sets[0]?.animations[0];
-    const animSets = summary.entries.find(e => e.parent < 0 && e.name.toLowerCase() === 'anim_sets');
-    this.selectedIndex.set(firstAnimation?.entryIndex ?? animSets?.index ?? null);
   }
 
   // Decode every top-level node of the just-loaded ZDB. _TXR / _PAL / _GEO
@@ -1905,8 +1736,8 @@ export class ViewerPageLogic {
 }
 
 // The methods live in one module per archive kind; each runs with `this` as the page, like the class's own.
-export interface ViewerPageLogic extends TextureMethods, PaletteMethods, ModelMethods, ModelRenderMethods, ModelComposeMethods, GeoMethods, ClutterMethods, RdrMethods, AiMapMethods {}
-mixin(ViewerPageLogic, textureMethods, paletteMethods, modelMethods, modelRenderMethods, modelComposeMethods, geoMethods, clutterMethods, rdrMethods, aiMapMethods);
+export interface ViewerPageLogic extends TextureMethods, PaletteMethods, ModelMethods, ModelRenderMethods, ModelComposeMethods, GeoMethods, ClutterMethods, RdrMethods, AiMapMethods, AnimationMethods {}
+mixin(ViewerPageLogic, textureMethods, paletteMethods, modelMethods, modelRenderMethods, modelComposeMethods, geoMethods, clutterMethods, rdrMethods, aiMapMethods, animationMethods);
 
 // The map prefix among root-level archive names: a <prefix>_TXR.ZED with a
 // matching _PAL.ZED that is not a shared support library. Prefers the opened
