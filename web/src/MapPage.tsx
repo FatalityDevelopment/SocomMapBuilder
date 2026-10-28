@@ -13,21 +13,13 @@ import { PropsPanel, type PropTab } from './components/PropsPanel';
 import { ViewportView } from './components/ViewportView';
 import { NumField } from './components/NumField';
 import { activePage, host, modalOpen, openRequest, useSignals } from './shared';
+import { SHORTCUTS, TOOLS, matchShortcut, type ShortcutId } from './mapShortcuts';
 
 const SHADINGS: Array<{ id: Shading; label: string }> = [
   { id: 'textured', label: 'Textured' },
   { id: 'solid', label: 'Solid' },
   { id: 'wireframe', label: 'Wire' },
   { id: 'xray', label: 'X-ray' },
-];
-
-// W A S D Q E fly, so tools use other keys.
-export const TOOLS: Array<{ id: MapTool; label: string; key: string; glyph: string }> = [
-  { id: 'select', label: 'Select (click / box drag)', key: 'V', glyph: '⬚' },
-  { id: 'move', label: 'Move', key: 'G', glyph: '✥' },
-  { id: 'rotate', label: 'Rotate (yaw)', key: 'R', glyph: '⟳' },
-  { id: 'scale', label: 'Scale', key: 'T', glyph: '⤢' },
-  { id: 'place', label: 'Place clutter', key: 'P', glyph: '✚' },
 ];
 
 const SHADING_ORDER: Shading[] = ['textured', 'solid', 'wireframe', 'xray'];
@@ -330,7 +322,7 @@ export function MapPage() {
   const copySelection = () => {
     const sel = selectedInstances();
     const clutter = sel.filter(i => i.clutterIndex !== null).map(i => ({ model: i.model, matrix: [...i.matrix] }));
-    if (!clutter.length) { say(sel.length ? 'Only clutter copies; use Duplicate (Shift+D) for props.' : 'Nothing selected to copy.', !!sel.length); return; }
+    if (!clutter.length) { say(sel.length ? `Only clutter copies; use Duplicate (${SHORTCUTS.duplicate.label}) for props.` : 'Nothing selected to copy.', !!sel.length); return; }
     clipboardRef.current = clutter;
     const skipped = sel.length - clutter.length;
     say(`Copied ${clutter.length} clutter placement(s)${skipped ? ` (${skipped} prop(s) skipped: use Duplicate)` : ''}.`);
@@ -339,7 +331,7 @@ export function MapPage() {
   // Pastes where they were copied from, selected with the Move tool so they can be placed.
   const paste = async () => {
     const items = clipboardRef.current;
-    if (!items.length) { say('The clipboard is empty: select clutter and press Ctrl+C.'); return; }
+    if (!items.length) { say(`The clipboard is empty: select clutter and press ${SHORTCUTS.copy.label}.`); return; }
     const ops = items.map(it => ({ op: 'addClutter', model: it.model, matrix: it.matrix }));
     const raw = await edit(`paste ${ops.length === 1 ? items[0].model : ops.length + ' placements'}`, ops.length === 1 ? ops[0] : { op: 'batch', ops }) as
       { newClutterIndex?: number; results?: Array<{ newClutterIndex?: number }> } | null;
@@ -632,44 +624,44 @@ export function MapPage() {
   const menus: Menu[] = [
     {
       id: 'file', label: 'File', items: [
-        { label: 'Open package…', shortcut: 'Ctrl+O', action: () => void openDialog() },
+        { label: 'Open package…', shortcut: SHORTCUTS.open.label, action: () => void openDialog() },
         { label: 'Reload', action: () => void reload(true, true), disabled: () => !status },
         { label: 'Import from package…', action: () => void importFromPackage(), disabled: () => !status || !!status.readOnly || busy },
         { separator: true, label: '' },
-        { label: 'Save copy…', shortcut: 'Ctrl+S', action: () => void saveCopy(), disabled: () => !dirtyCount },
+        { label: 'Save copy…', shortcut: SHORTCUTS.save.label, action: () => void saveCopy(), disabled: () => !dirtyCount },
         { label: 'Export memory-card pack…', action: () => void exportPack(), disabled: () => !dirtyCount },
       ],
     },
     {
       id: 'edit', label: 'Edit', items: [
-        { label: status?.canUndo ? `Undo ${status.canUndo}` : 'Undo', shortcut: 'Ctrl+Z', action: () => void history(true), disabled: () => !status?.canUndo },
-        { label: status?.canRedo ? `Redo ${status.canRedo}` : 'Redo', shortcut: 'Ctrl+Y', action: () => void history(false), disabled: () => !status?.canRedo },
+        { label: status?.canUndo ? `Undo ${status.canUndo}` : 'Undo', shortcut: SHORTCUTS.undo.label, action: () => void history(true), disabled: () => !status?.canUndo },
+        { label: status?.canRedo ? `Redo ${status.canRedo}` : 'Redo', shortcut: SHORTCUTS.redo.label, action: () => void history(false), disabled: () => !status?.canRedo },
         { separator: true, label: '' },
-        { label: 'Copy clutter', shortcut: 'Ctrl+C', action: copySelection, disabled: () => !movableCount },
-        { label: 'Paste clutter', shortcut: 'Ctrl+V', action: () => void paste(), disabled: () => !status || !!status.readOnly || busy },
+        { label: 'Copy clutter', shortcut: SHORTCUTS.copy.label, action: copySelection, disabled: () => !movableCount },
+        { label: 'Paste clutter', shortcut: SHORTCUTS.paste.label, action: () => void paste(), disabled: () => !status || !!status.readOnly || busy },
         { separator: true, label: '' },
-        { label: 'Duplicate', shortcut: 'Shift+D', action: () => void duplicateSelection(), disabled: () => !movableCount },
-        { label: 'Delete', shortcut: 'X / Delete', action: () => void deleteSelection(), disabled: () => !movableCount },
-        { label: 'Drop to ground', shortcut: 'End', action: () => void dropToGround(), disabled: () => !movableCount },
+        { label: 'Duplicate', shortcut: SHORTCUTS.duplicate.label, action: () => void duplicateSelection(), disabled: () => !movableCount },
+        { label: 'Delete', shortcut: SHORTCUTS.delete.label, action: () => void deleteSelection(), disabled: () => !movableCount },
+        { label: 'Drop to ground', shortcut: SHORTCUTS.drop.label, action: () => void dropToGround(), disabled: () => !movableCount },
         { separator: true, label: '' },
         { label: 'Open model…', action: () => openModel(selection[0]), disabled: () => selection.length !== 1 || !single?.source },
       ],
     },
     {
       id: 'select', label: 'Select', items: [
-        { label: 'None', shortcut: 'Esc', action: clearSelection },
-        { label: 'All of this model', shortcut: 'Shift+A', action: selectSameModel, disabled: () => selection.length === 0 },
+        { label: 'None', shortcut: SHORTCUTS.escape.label, action: clearSelection },
+        { label: 'All of this model', shortcut: SHORTCUTS.selectSame.label, action: selectSameModel, disabled: () => selection.length === 0 },
       ],
     },
     {
       id: 'view', label: 'View', items: [
-        { label: 'Frame selected', shortcut: 'F', action: frameSelected },
-        { label: 'Frame map', shortcut: 'Home', action: frameAll },
+        { label: 'Frame selected', shortcut: SHORTCUTS.frame.label, action: frameSelected },
+        { label: 'Frame map', shortcut: SHORTCUTS.frameAll.label, action: frameAll },
         { separator: true, label: '' },
-        { label: 'Top', shortcut: 'Numpad 7', action: () => view('top') },
-        { label: 'Front', shortcut: 'Numpad 1', action: () => view('front') },
-        { label: 'Right', shortcut: 'Numpad 3', action: () => view('right') },
-        { label: 'Orthographic', shortcut: 'Numpad 5', action: toggleOrtho, checked: () => ortho },
+        { label: 'Top', shortcut: SHORTCUTS.top.label, action: () => view('top') },
+        { label: 'Front', shortcut: SHORTCUTS.front.label, action: () => view('front') },
+        { label: 'Right', shortcut: SHORTCUTS.right.label, action: () => view('right') },
+        { label: 'Orthographic', shortcut: SHORTCUTS.ortho.label, action: toggleOrtho, checked: () => ortho },
         { separator: true, label: '' },
         ...LAYERS.map(l => ({ label: l.label, action: () => toggleLayer(l.id), checked: () => !hidden.layers.has(l.id) })),
         { separator: true, label: '' },
@@ -681,50 +673,48 @@ export function MapPage() {
         { label: 'Fly: W A S D, Q / E down / up, Shift faster (viewport focused)' },
         { label: 'Orbit: middle drag or Alt+left drag · Pan: right drag · Zoom: wheel' },
         { label: 'Select: click, Shift adds, Ctrl removes, drag for box' },
-        { label: 'Copy / paste clutter: Ctrl+C / Ctrl+V (also into another package with the model)' },
-        { label: 'Tools: V select · G move · R rotate · T scale · P place' },
+        { label: `Copy / paste clutter: ${SHORTCUTS.copy.label} / ${SHORTCUTS.paste.label} (also into another package with the model)` },
+        { label: `Tools: ${TOOLS.map(t => `${t.key} ${t.id}`).join(' · ')}` },
         { label: 'Double-click a prop to open its model in the Model Editor' },
       ],
     },
   ];
 
-  // The keyboard handler is read through a ref so the window listener is installed once.
+  // What each shortcut does; false leaves the key to the browser. Read through a ref so the window listener is installed once.
+  const keyActions: Record<ShortcutId, () => boolean | void> = {
+    undo: () => void history(true),
+    redo: () => void history(false),
+    save: () => void saveCopy(),
+    open: () => void openDialog(),
+    // Without a selection / clipboard the browser keeps Ctrl+C / Ctrl+V (copying the status text, say).
+    copy: () => { if (!selection.length) { return false; } copySelection(); },
+    paste: () => { if (!clipboardRef.current.length) { return false; } void paste(); },
+    front: () => void view('front'),
+    right: () => void view('right'),
+    top: () => void view('top'),
+    ortho: toggleOrtho,
+    duplicate: () => void duplicateSelection(),
+    selectSame: selectSameModel,
+    delete: () => void deleteSelection(),
+    drop: () => void dropToGround(),
+    frame: () => void frameSelected(),
+    frameAll: () => void frameAll(),
+    toolSelect: () => setTool('select'),
+    toolMove: () => setTool('move'),
+    toolRotate: () => setTool('rotate'),
+    toolScale: () => setTool('scale'),
+    toolPlace: () => setTool('place'),
+    shading: cycleShading,
+    escape: () => { setOpenMenu(null); if (tool !== 'select') { setTool('select'); } else { clearSelection(); } },
+  };
   const keyHandlerRef = useRef<(e: KeyboardEvent) => void>(() => undefined);
   keyHandlerRef.current = (e: KeyboardEvent) => {
     // Only the page in front takes keys, and none while a prompt or the file browser is open.
     if (activePage() !== 'map' || modalOpen()) { return; }
     const target = e.target as HTMLElement;
     if (target && ['INPUT', 'SELECT', 'TEXTAREA'].includes(target.tagName)) { return; }
-    const ctrl = e.ctrlKey || e.metaKey;
-    const k = e.key.toLowerCase();
-    let handled = true;
-    if (ctrl && k === 'z') { void history(true); }
-    else if (ctrl && (k === 'y' || (e.shiftKey && k === 'z'))) { void history(false); }
-    else if (ctrl && k === 's') { void saveCopy(); }
-    else if (ctrl && k === 'o') { void openDialog(); }
-    // Without a selection / clipboard the browser keeps Ctrl+C / Ctrl+V (copying the status text, say).
-    else if (ctrl && k === 'c' && selection.length) { copySelection(); }
-    else if (ctrl && k === 'v' && clipboardRef.current.length) { void paste(); }
-    else if (e.code === 'Numpad1') { view('front'); }
-    else if (e.code === 'Numpad3') { view('right'); }
-    else if (e.code === 'Numpad7') { view('top'); }
-    else if (e.code === 'Numpad5') { toggleOrtho(); }
-    else if (ctrl) { handled = false; }
-    else if (k === 'd' && e.shiftKey) { void duplicateSelection(); }
-    else if (k === 'a' && e.shiftKey) { selectSameModel(); }
-    else if (k === 'x' || e.key === 'Delete') { void deleteSelection(); }
-    else if (e.key === 'End') { void dropToGround(); }
-    else if (k === 'f') { frameSelected(); }
-    else if (e.key === 'Home') { frameAll(); }
-    else if (k === 'v') { setTool('select'); }
-    else if (k === 'g') { setTool('move'); }
-    else if (k === 'r') { setTool('rotate'); }
-    else if (k === 't') { setTool('scale'); }
-    else if (k === 'p') { setTool('place'); }
-    else if (k === 'z') { cycleShading(); }
-    else if (e.key === 'Escape') { setOpenMenu(null); if (tool !== 'select') { setTool('select'); } else { clearSelection(); } }
-    else { handled = false; }
-    if (handled) { e.preventDefault(); }
+    const id = matchShortcut(e);
+    if (id && keyActions[id]() !== false) { e.preventDefault(); }
   };
 
   useEffect(() => {
@@ -777,7 +767,7 @@ export function MapPage() {
       <MenuBar {...menuBarProps} />
 
       <div className="me-header">
-        <div className="me-seg" title="Shading (Z cycles)">
+        <div className="me-seg" title={`Shading (${SHORTCUTS.shading.label} cycles)`}>
           {SHADINGS.map(s => (
             <button key={s.id} className={shading === s.id ? 'on' : ''} onClick={() => setShading(s.id)}>{s.label}</button>
           ))}
@@ -796,12 +786,12 @@ export function MapPage() {
         <label className="me-toggle" title="WASD fly speed (Shift x4)">Fly <NumField small min={1} step={10} value={String(flySpeed)} onCommit={v => setFlySpeed(+v)} /></label>
         <span className="me-spacer" />
         <div className="me-seg" title="View">
-          <button onClick={() => view('top')} title="Top (Numpad 7)">Top</button>
-          <button onClick={() => view('front')} title="Front (Numpad 1)">Front</button>
+          <button onClick={() => view('top')} title={`Top (${SHORTCUTS.top.label})`}>Top</button>
+          <button onClick={() => view('front')} title={`Front (${SHORTCUTS.front.label})`}>Front</button>
           <button onClick={() => view('iso')} title="Iso">Iso</button>
-          <button className={ortho ? 'on' : ''} onClick={toggleOrtho} title="Orthographic (Numpad 5)">Ortho</button>
-          <button onClick={frameSelected} title="Frame selected (F)">Frame</button>
-          <button onClick={frameAll} title="Frame map (Home)">All</button>
+          <button className={ortho ? 'on' : ''} onClick={toggleOrtho} title={`Orthographic (${SHORTCUTS.ortho.label})`}>Ortho</button>
+          <button onClick={frameSelected} title={`Frame selected (${SHORTCUTS.frame.label})`}>Frame</button>
+          <button onClick={frameAll} title={`Frame map (${SHORTCUTS.frameAll.label})`}>All</button>
         </div>
       </div>
 
