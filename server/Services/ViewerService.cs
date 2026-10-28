@@ -9,8 +9,6 @@ namespace MapBuilder.Server.Services
     /// </summary>
     internal sealed class ViewerService : ICommandService
     {
-        private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-
         // Prefixes of shared support archives that never name a map's own texture family.
         private static readonly HashSet<string> SupportPrefixes = new(StringComparer.OrdinalIgnoreCase)
         {
@@ -27,12 +25,7 @@ namespace MapBuilder.Server.Services
         private static string Run(string command, string? inputPath, Func<string, object> body)
         {
             if (string.IsNullOrWhiteSpace(inputPath)) return Responses.Error("InputPath is required");
-            try
-            {
-                string full = Path.GetFullPath(inputPath);
-                return Responses.Json(new CommandResponse { Success = true, Command = command, Data = JsonSerializer.Serialize(body(full), JsonOptions) });
-            }
-            catch (Exception ex) { return Responses.Error($"{command}: {ex.Message}"); }
+            return Responses.Run(command, () => body(Path.GetFullPath(inputPath)));
         }
 
         // ------------------------------------------------------------------ companions

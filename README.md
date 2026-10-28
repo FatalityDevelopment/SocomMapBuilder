@@ -42,6 +42,7 @@ The composed map (world model, props, clutter, sky) with its textures and baked 
 - Move, rotate, scale, duplicate and delete props and clutter; drop them to the ground.
 - Place clutter on any surface with the Place tool; pick the model, yaw (or random yaw) and scale.
 - Move the AIMAPS spawn and waypoint points.
+- Edit a multi-selection at once (move by, turn by, set scale); lock layers so clicks and box drags skip them; move a single prop along its own axes (Local).
 - **Import from package…** (File menu or the Place tab): bring a prop, vehicle, weapon or character from another package, then place it.
 - Facade trees face the camera, as they do in game.
 
@@ -128,10 +129,13 @@ In Visual Studio, open `MapBuilder.sln` and press F5 (after `npm run build` in `
 
 The server binds to `127.0.0.1:8770`, so only your own browser can reach it. Pass `--urls http://127.0.0.1:9000` for another port. If the page has not been built, the server still starts and says so in its console.
 
+The API can read and write any file your account can, so the server also only answers requests addressed to `localhost`, `127.0.0.1` or `[::1]`; this stops a web page from reaching it by pointing its own domain at your machine (DNS rebinding). To serve it under another name, pass both, e.g. `--urls http://0.0.0.0:8770 --AllowedHosts "mypc;localhost"`; the console then warns that the API is reachable from the network.
+
 ## Working with packages
 
 - **Nothing is written until you save.** Editor edits live in the session; **Save copy** (Ctrl+S) writes a new .ZDB (or .CDB), and **Export memory-card pack** writes `<NAME>.CDB` for `mc0:/BASCUS-97275<NAME>/` (pack names start with `m`, at most 7 letters/digits).
 - **Asset Viewer edits** (Import / Replace / Remove) ask where to save. Saving over the open file keeps a `<name>.bak` the first time.
+- **Saves are written whole or not at all**: the new file goes to `<name>.tmp` and then replaces the target, so a crash mid-save leaves the old file. Writing over an existing file keeps `<name>.bak` once (the original); delete it yourself when you no longer need it.
 - **Work on copies.** Keep your original packages untouched and edit copies.
 - **Importing a model** copies its MDL record, its GEO definition (a character's skeleton), every texture its sections name with their mip levels, their palettes, and any models its definition is built from. Undo removes the whole import.
 - **New textures** are 8-bit indexed, a power of two a side (8–512, default: the image rounded, at most 256), with a 256-colour palette made from the image (32-bit when the image has soft alpha, else 16-bit like most retail palettes).
@@ -144,6 +148,7 @@ The server binds to `127.0.0.1:8770`, so only your own browser can reach it. Pas
 | Orbit / pan / zoom | Middle drag or Alt + left drag / right drag / wheel |
 | Tools | V select · G move · R rotate · T scale · P place |
 | Duplicate / delete / drop | Shift+D / X or Delete / End |
+| Copy / paste clutter | Ctrl+C / Ctrl+V (also into another package that has the model) |
 | Frame selected / frame map | F / Home |
 | Views | Numpad 1 front · 3 right · 7 top · 5 orthographic |
 | Shading | Z cycles textured, solid, wire, X-ray |

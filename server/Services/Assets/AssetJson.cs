@@ -14,8 +14,7 @@ namespace MapBuilder.Server.Services.Assets
 
         internal sealed record AnimationFilter(string? Query, string? Source);
 
-        internal static string Ok(string command, object data) =>
-            Responses.Json(new CommandResponse { Success = true, Command = command, Data = JsonSerializer.Serialize(data, Options) });
+        internal static string Ok(string command, object data) => Responses.Ok(command, data);
 
         internal static T? Parse<T>(string? json) where T : class =>
             string.IsNullOrWhiteSpace(json) ? null : JsonSerializer.Deserialize<T>(json, Options);

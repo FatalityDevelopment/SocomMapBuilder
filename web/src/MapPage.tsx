@@ -122,6 +122,7 @@ export function MapPage() {
     setCounts(scene.counts);
     const sources = [...new Set(scene.instances.map(i => i.source).filter((s): s is string => !!s))].filter(s => !meshCacheRef.current.has(s));
     let done = 0;
+    const failed: string[] = [];
     const loadOne = async (source: string): Promise<void> => {
       const cut = source.indexOf(':');
       try {
@@ -137,7 +138,7 @@ export function MapPage() {
         }));
         meshCacheRef.current.set(source, { mesh, textureNamespace: ns });
       } catch (err) {
-        say(`${source}: ${errText(err)}`, true);
+        failed.push(`${source} (${errText(err)})`);
       }
       done++;
       setProgress(`Loading models ${done}/${sources.length}…`);
@@ -158,6 +159,11 @@ export function MapPage() {
     if (!keepCamera) {
       const kinds = Object.entries(scene.counts).map(([kind, count]) => `${count} ${kind}`).join(', ');
       say(`${scene.sceneNamespace}: ${scene.instances.length} instances (${kinds}), ${pts.points.length} points.`);
+    }
+    // All failures at once (they used to overwrite each other); the console has the full list.
+    if (failed.length) {
+      console.warn('Map Builder: models that did not load', failed);
+      say(`${failed.length} model(s) did not load and are not drawn: ${failed.slice(0, 3).join('; ')}${failed.length > 3 ? '; …' : ''}`, true);
     }
     // syncSelection is stable: it reads the viewport only.
     // eslint-disable-next-line react-hooks/exhaustive-deps

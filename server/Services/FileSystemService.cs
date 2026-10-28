@@ -8,16 +8,13 @@ namespace MapBuilder.Server.Services
     /// </summary>
     internal sealed class FileSystemService : ICommandService
     {
-        private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-
         public void Register(CommandRegistry reg)
         {
             reg.Add(_ => Ok("FS_PLACES", Places()), "FS_PLACES");
             reg.Add(c => List(c.InputPath), "FS_LIST");
         }
 
-        private static string Ok(string command, object data) =>
-            Responses.Json(new CommandResponse { Success = true, Command = command, Data = JsonSerializer.Serialize(data, JsonOptions) });
+        private static string Ok(string command, object data) => Responses.Ok(command, data);
 
         // Drives plus the user's common folders, for the browser's sidebar.
         private static object Places()

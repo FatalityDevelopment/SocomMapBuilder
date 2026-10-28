@@ -13,8 +13,6 @@ namespace MapBuilder.Server.Services
     /// </summary>
     internal sealed class PackageFilesService : ICommandService
     {
-        private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-
         // What a package holds at its root (retail ZDBs: ZED, ZAR, AIMAPS.MPS).
         private static readonly string[] RootTypes = { ".zed", ".zar", ".mps" };
 
@@ -23,11 +21,7 @@ namespace MapBuilder.Server.Services
             reg.Add(c => Run("PACKAGE_EDIT", () => Edit(c.InputPath, c.OutputPath, c.Data)), "PACKAGE_EDIT");
         }
 
-        private static string Run(string command, Func<object> body)
-        {
-            try { return Responses.Json(new CommandResponse { Success = true, Command = command, Data = JsonSerializer.Serialize(body(), JsonOptions) }); }
-            catch (Exception ex) { return Responses.Error($"{command}: {ex.Message}"); }
-        }
+        private static string Run(string command, Func<object> body) => Responses.Run(command, body);
 
         private sealed class Report
         {

@@ -851,8 +851,7 @@ namespace MapBuilder.Server.Services
         private static DateTime SourceStampOf(string path) =>
             File.Exists(path) ? File.GetLastWriteTimeUtc(path) : Directory.GetLastWriteTimeUtc(path);
 
-        private static string NewId(string path) =>
-            $"{Path.GetFileNameWithoutExtension(path).ToLowerInvariant()}-{Guid.NewGuid().ToString("N")[..6]}";
+        private static string NewId(string path) => Assets.AssetJson.SessionId(path);
 
         private static string HandleClose(string? id)
         {
@@ -880,8 +879,7 @@ namespace MapBuilder.Server.Services
             }
         }
 
-        private static string Ok(string command, object data) =>
-            Responses.Json(new CommandResponse { Success = true, Command = command, Data = JsonSerializer.Serialize(data, JsonOptions) });
+        private static string Ok(string command, object data) => Responses.Ok(command, data);
 
         private static object Status(AssetSession s) => StatusObject(s);
 
