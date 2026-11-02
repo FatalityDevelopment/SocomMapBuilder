@@ -3,11 +3,11 @@ import { ShortcutReference } from './components/ShortcutReference';
 import { readRenderSettings, writeRenderSettings } from './viewport/renderSettings';
 import type { ViewportStats } from './webview/zipper-core/viewport-core';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { ModelSummary } from './webview/model-editor/asset-client';
+import type { MapProblem, MapValidation, ModelSummary } from './webview/model-editor/asset-client';
 import { decodeMesh, type MeshWire } from './webview/model-editor/mesh-data';
 import { MapViewport, type MapLayer, type MapTool } from './viewport/mapViewport';
 import { LIGHTINGS, type Lighting, type Shading, type ViewPreset } from './webview/zipper-core/viewport-core';
-import { LAYERS, errText, layerOf, movable, pointKindCounts, type ModelGroup } from './mapModel';
+import { LAYERS, errText, layerOf, movable, pointKindCounts, problemTarget, type ModelGroup } from './mapModel';
 
 import { MenuBar, type Menu } from './components/MenuBar';
 import { PageHeader } from './shared/PageHeader';
@@ -43,9 +43,23 @@ export function MapPage() {
     busy, progress, loading, loadWarnings, connectionIssue, message, messageIsError, say,
     retryScene, edit, history, saveCopy, exportPack, openDialog } = mapSession;
   const [openMenu, setOpenMenu] = useState<string | null>(null);
+  // The Map tab's check: rerun while the tab is open whenever the session changes.
+  const [check, setCheck] = useState<MapValidation | null>(null);
+  const [checking, setChecking] = useState(false);
+  const runCheck = async () => {
+    if (!client.session) { return; }
+    setChecking(true);
+    try { setCheck(await client.validate()); }
+    catch (err) { say(`Map check failed: ${errText(err)}`, true); }
+    finally { setChecking(false); }
+  };
   const [query, setQuery] = useState('');
   const [libQuery, setLibQuery] = useState('');
   const [propTab, setPropTab] = useState<PropTab>('item');
+  // Each edit (and each package) gets a fresh check while the Map tab is open.
+  useEffect(() => {
+    if (propTab === 'map' && status) { void runCheck(); }
+  }, [propTab, status?.session, status?.revision]);
   const [tool, setToolState] = useState<MapTool>('select');
   const [shading, setShadingState] = useState<Shading>(initialPreferences.shading);
   const [lighting, setLightingState] = useState<Lighting>(initialPreferences.lighting);
@@ -216,6 +230,11 @@ export function MapPage() {
   const pickPoint = (name: string) => {
     viewportRef.current?.selectPoint(name);
     viewportRef.current?.frameSelected();
+  };
+  const pickProblem = (problem: MapProblem) => {
+    const target = problemTarget(problem, instancesRef.current);
+    if (!target) { say('That item is not in the loaded scene (reload the map).', true); return; }
+    if ('point' in target) { pickPoint(target.point); } else { pickInstance(target.instance, false); }
   };
   const selectSameModel = () => {
     const list = instancesRef.current;
@@ -441,7 +460,6 @@ export function MapPage() {
     if (aiViewRequest.frame === 'selected') { frameSelected(); } else if (aiViewRequest.frame === 'all') { frameAll(); }
     applyAiCamera(aiViewRequest);
     // Only a new request should run.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aiViewRequest]);
 
   // What ui_state reports for this page (read through a ref: always the latest render's values).
@@ -620,6 +638,10 @@ export function MapPage() {
             alignSurface={alignSurface}
             setAlignSurface={setAlignSurface}
             onImport={() => void importFromPackage()}
+            check={check}
+            checking={checking}
+            onCheck={() => void runCheck()}
+            onPickProblem={pickProblem}
           />
         </aside>
       </div>

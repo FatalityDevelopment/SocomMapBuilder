@@ -45,6 +45,22 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             return written;
         }
 
+        /// <summary>
+        /// The path a root file has in game. A ZDB entry has its own. A loose package's file is under
+        /// <paramref name="archiveDir"/> when given, else under the <c>RUN\</c> folder its disk path passes through
+        /// (an unpacked disc tree), else under <c>RUN\MP\&lt;FOLDER&gt;</c> (a map folder named like its package).
+        /// </summary>
+        public static string ArchivePath(ZipperPackage pkg, ZipperPackage.RootEntry entry, string? archiveDir = null)
+        {
+            if (pkg.IsZdb) return entry.Path.Contains('\\') ? entry.Path : entry.Leaf;
+            if (!string.IsNullOrWhiteSpace(archiveDir)) return archiveDir.Replace('/', '\\').Trim('\\') + "\\" + entry.Leaf;
+            string disk = entry.Path.Replace('/', '\\');
+            int run = disk.LastIndexOf("\\RUN\\", StringComparison.OrdinalIgnoreCase);
+            if (run >= 0) return disk[(run + 1)..];
+            string folder = Path.GetFileName(Path.GetDirectoryName(entry.Path) ?? string.Empty).ToUpperInvariant();
+            return $"RUN\\MP\\{folder}\\{entry.Leaf}";
+        }
+
         private static int IndexOf(ZdbArchive zdb, string fullPath)
         {
             for (int i = 0; i < zdb.Entries.Count; i++)
@@ -104,13 +120,14 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
         /// Writes <paramref name="leaves"/> of the package as <c>&lt;outputDir&gt;/&lt;NAME&gt;.CDB</c> under their
         /// archive paths (<c>RUN\MP\MP53\MP53_GEO.ZED</c>) and, when <paramref name="folderCard"/> is a PCSX2 folder
         /// memory card, installs it as <c>BASCUS-97275&lt;NAME&gt;/&lt;NAME&gt;.CDB</c>. Returns the paths written.
+        /// <paramref name="archiveDir"/> sets the in-game folder of a loose package's files (see <see cref="ArchivePath"/>).
         /// </summary>
-        public static List<string> WritePack(ZipperPackage pkg, IEnumerable<string> leaves, string name, string outputDir, string? folderCard)
+        public static List<string> WritePack(ZipperPackage pkg, IEnumerable<string> leaves, string name, string outputDir, string? folderCard, string? archiveDir = null)
         {
             CheckPackName(name);
             string upper = name.ToUpperInvariant();
             var files = leaves.Select(l => pkg.Entry(l) ?? throw new KeyNotFoundException($"No root entry {l}"))
-                .Select(e => (Name: e.Path.Contains('\\') ? e.Path : e.Leaf, e.Data)).ToList();
+                .Select(e => (Name: ArchivePath(pkg, e, archiveDir), e.Data)).ToList();
             if (files.Count == 0) throw new InvalidOperationException("Nothing to pack");
             byte[] cdb = BuildCdb(files);
             var written = new List<string>();

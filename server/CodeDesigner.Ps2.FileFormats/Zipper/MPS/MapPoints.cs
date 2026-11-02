@@ -71,6 +71,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.MPS
             int cx = (int)MathF.Floor((x - grid.MinX) / grid.ScaleX), cz = (int)MathF.Floor((z - grid.MinZ) / grid.ScaleZ);
             if (cx < 0 || cz < 0 || cx >= grid.Width || cz >= grid.Height)
                 throw new ArgumentOutOfRangeException(nameof(x), $"({x}, {z}) is outside the AI map ({grid.MinX}..{grid.MaxX}, {grid.MinZ}..{grid.MaxZ})");
+            // The packed word holds each cell in 13 bits (x in 6-18, z in 19-31).
+            if (cx > 0x1FFF || cz > 0x1FFF) throw new ArgumentOutOfRangeException(nameof(x), $"cell ({cx}, {cz}) does not fit the point record (at most 8191)");
             var copy = (byte[])mps.Clone();
             uint packed = BitConverter.ToUInt32(copy, point.RecordOffset + 0x14);
             packed = (packed & 0x3Fu) | ((uint)cx << 6) | ((uint)cz << 19);

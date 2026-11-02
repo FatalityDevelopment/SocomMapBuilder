@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MapInstanceWire } from './webview/model-editor/asset-client';
-import { groupInstancesByLayer, layerOf, movable, placementOp, pointKindCounts, scaleOf, yawOf } from './mapModel';
+import { addedClutter, deleteOps, duplicateOps, groupInstancesByLayer, layerOf, movable, pickDuplicates, placementOp, pointKindCounts, problemTarget, scaleOf, sortProblems, yawOf } from './mapModel';
 
 // Column-major, translation in 12..14 (as GEO and clutter store it): yaw about Y, uniform scale.
 function matrix(yawDeg: number, scale: number, x = 0, y = 0, z = 0): number[] {
@@ -75,5 +75,55 @@ describe('render batches', () => {
         { source: 'A_MDL.ZED:CRATE', layer: 'reference', indices: [0] },
         { source: 'B_MDL.ZED:CRATE', layer: 'reference', indices: [1] },
       ]);
+  });
+});
+
+describe('selection edits', () => {
+  const geo = (geoIndex: number, path: string) => inst({ geoIndex, path });
+  const clutter = (clutterIndex: number) => inst({ kind: 'clutter', model: 'TREE', clutterIndex, geoIndex: null, path: '' });
+
+  it('deletes from the highest index down, GEO before clutter', () => {
+    expect(deleteOps([geo(4, '/a'), clutter(1), geo(9, '/b'), clutter(5)])).toEqual([
+      { op: 'deleteInstance', geoIndex: 9 }, { op: 'deleteInstance', geoIndex: 4 },
+      { op: 'deleteClutter', clutterIndex: 5 }, { op: 'deleteClutter', clutterIndex: 1 },
+    ]);
+  });
+
+  it('duplicates GEO from the highest index down and copies clutter by model and matrix', () => {
+    const c = clutter(2);
+    expect(duplicateOps([geo(3, '/a'), c, geo(7, '/b')])).toEqual([
+      { op: 'duplicateInstance', geoIndex: 7 }, { op: 'duplicateInstance', geoIndex: 3 },
+      { op: 'addClutter', model: 'TREE', matrix: c.matrix },
+    ]);
+  });
+
+  it('reads the new clutter indices from one edit or a batch', () => {
+    expect([...addedClutter({ newClutterIndex: 4 })]).toEqual([4]);
+    expect([...addedClutter({ results: [{ newClutterIndex: 1 }, {}, null, { newClutterIndex: -1 }, { newClutterIndex: 6 }] })]).toEqual([1, 6]);
+  });
+
+  it('picks the copies after a duplicate', () => {
+    const before = [geo(1, '/a'), geo(2, '/b'), clutter(0)];
+    // The copy of /a lands right after it with the same path; clutter #1 is new.
+    const after = [geo(1, '/a'), geo(2, '/a'), geo(3, '/b'), clutter(0), clutter(1)];
+    expect(pickDuplicates(before, after, new Set([1]))).toEqual([1, 4]);
+  });
+});
+
+describe('map problems', () => {
+  const list = [inst({ geoIndex: 7 }), inst({ kind: 'clutter', clutterIndex: 7, geoIndex: null }), inst({ geoIndex: 9 })];
+
+  it('finds what a problem is about', () => {
+    expect(problemTarget({ severity: 'error', code: 'x', message: '', geoIndex: 9 }, list)).toEqual({ instance: 2 });
+    // A clutter index never matches a GEO node with the same number.
+    expect(problemTarget({ severity: 'error', code: 'x', message: '', clutterIndex: 7 }, list)).toEqual({ instance: 1 });
+    expect(problemTarget({ severity: 'error', code: 'x', message: '', point: 'Alpha1' }, list)).toEqual({ point: 'Alpha1' });
+    expect(problemTarget({ severity: 'warning', code: 'x', message: '', geoIndex: 42 }, list)).toBeNull();
+    expect(problemTarget({ severity: 'warning', code: 'x', message: '' }, list)).toBeNull();
+  });
+
+  it('lists errors first and keeps the order within a severity', () => {
+    const p = (severity: 'error' | 'warning' | 'info', message: string) => ({ severity, code: 'x', message });
+    expect(sortProblems([p('info', 'a'), p('error', 'b'), p('warning', 'c'), p('error', 'd')]).map(x => x.message)).toEqual(['b', 'd', 'c', 'a']);
   });
 });

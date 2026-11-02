@@ -26,7 +26,9 @@ namespace MapBuilder.Server.Services
         private const string Instructions =
             "Map Builder edits SOCOM II packages (.ZDB / .CDB). Start with assets_open (or assets_sessions to join the session the " +
             "user has open), read with assets_map_scene / assets_list_models / assets_describe_model, change with assets_edit " +
-            "(undoable, in memory) and write with assets_save only when the user asks. assets_edit placeInstance adds props and " +
+            "(undoable, in memory; dryRun previews an edit) and write with assets_save only when the user asks. assets_validate lints a map " +
+            "and assets_history lists what undo would take back. Prefabs (assets_save_prefab, assets_list_prefabs, assets_edit placePrefab) " +
+            "reuse groups of props across maps. assets_edit placeInstance adds props and " +
             "setPoint renames / retypes spawn points; fs_list finds packages; weapons_* builds weapons from a template archive; " +
             "package_* changes package files on disk. The user watches the app while you work: " +
             "every call's `reason` is shown in its AI activity panel, and edits make the page follow (Map Builder reloads and frames " +
@@ -45,9 +47,18 @@ namespace MapBuilder.Server.Services
             public static ToolResult Text(string text, string? summary = null)
             {
                 var r = new ToolResult { Summary = summary };
-                r.Content.Add(new { type = "text", text = text.Length > MaxText ? text[..MaxText] + $"\n… (cut at {MaxText} of {text.Length} characters; narrow the query)" : text });
+                r.Content.Add(new { type = "text", text = text.Length > MaxText ? Truncated(text) : text });
                 return r;
             }
+
+            // A reply past MaxText: still valid JSON, with the start of the reply as text and how to get less.
+            private static string Truncated(string text) => JsonSerializer.Serialize(new
+            {
+                truncated = true,
+                totalCharacters = text.Length,
+                hint = "The reply was too long. Narrow the query (kind, query, limit) or page with offset / nextOffset.",
+                start = text[..(MaxText - 400)],
+            }, Json);
 
             public static ToolResult Fail(string error)
             {
@@ -118,7 +129,7 @@ namespace MapBuilder.Server.Services
             return ctx.Response.WriteAsync(JsonSerializer.Serialize(reply, Json));
         }
 
-        private async Task<object?> Dispatch(JsonElement msg)
+        internal async Task<object?> Dispatch(JsonElement msg)
         {
             if (msg.ValueKind != JsonValueKind.Object) return Error(null, -32600, "Invalid request");
             // Notifications (no id) and replies to requests we never send get no answer.
@@ -150,7 +161,14 @@ namespace MapBuilder.Server.Services
                             title = t.Label,
                             description = t.Description,
                             inputSchema = t.InputSchema,
-                            annotations = new { title = t.Label, readOnlyHint = t.ReadOnly },
+                            annotations = new
+                            {
+                                title = t.Label,
+                                readOnlyHint = t.ReadOnly,
+                                destructiveHint = !t.ReadOnly && Destructive.Contains(t.Name),
+                                idempotentHint = t.ReadOnly,
+                                openWorldHint = false,
+                            },
                         }),
                     });
                 case "tools/call":
@@ -167,6 +185,13 @@ namespace MapBuilder.Server.Services
             }
         }
 
+        // Tools that write disk or throw work away (the rest change only the in-memory session or the view).
+        private static readonly HashSet<string> Destructive = new(StringComparer.Ordinal)
+        {
+            "assets_save", "assets_close", "assets_entry", "assets_export", "package_edit", "weapons_create", "mapbuilder_command",
+            "assets_delete_prefab",
+        };
+
         private static readonly JsonElement EmptyObject = JsonDocument.Parse("{}").RootElement.Clone();
 
         private static object Result(object id, object result) => new Dictionary<string, object?> { ["jsonrpc"] = "2.0", ["id"] = id, ["result"] = result };
@@ -182,8 +207,9 @@ namespace MapBuilder.Server.Services
             _ui.Publish(new { type = "activity", id = callId, phase = "start", tool = tool.Name, label = tool.Label, reason, readOnly = tool.ReadOnly });
             var sw = Stopwatch.StartNew();
             ToolResult result;
-            try { result = await tool.Run(args); }
-            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or KeyNotFoundException or TimeoutException or JsonException or FormatException)
+            try { result = CheckArguments(tool, args) is { } bad ? ToolResult.Fail(bad) : await tool.Run(args); }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or KeyNotFoundException or TimeoutException or JsonException
+                or FormatException or IOException or UnauthorizedAccessException or InvalidDataException or NotSupportedException or IndexOutOfRangeException)
             {
                 result = ToolResult.Fail(ex.Message);
             }
@@ -193,6 +219,66 @@ namespace MapBuilder.Server.Services
                 summary = result.Summary, ms = sw.ElapsedMilliseconds,
             });
             return result;
+        }
+
+        /// <summary>
+        /// The arguments against the tool's schema: no unknown names, required ones present (a non-empty reason
+        /// included), each of its declared type, enum, item type and range. Null when they fit, else the error.
+        /// </summary>
+        internal static string? CheckArguments(string toolName, Dictionary<string, object> schema, JsonElement args)
+        {
+            var props = (Dictionary<string, object>)schema["properties"];
+            var required = (string[])schema["required"];
+            foreach (var arg in args.EnumerateObject())
+                if (!props.ContainsKey(arg.Name))
+                    return $"{toolName}: unknown argument \"{arg.Name}\" (takes {string.Join(", ", props.Keys.OrderBy(k => k))})";
+            foreach (string name in required)
+                if (!args.TryGetProperty(name, out var v) || v.ValueKind == JsonValueKind.Null || (v.ValueKind == JsonValueKind.String && v.GetString()!.Trim().Length == 0))
+                    return $"{toolName}: \"{name}\" is required";
+            foreach (var arg in args.EnumerateObject())
+            {
+                if (arg.Value.ValueKind == JsonValueKind.Null) continue;
+                var p = (Dictionary<string, object>)props[arg.Name];
+                if (CheckValue(arg.Name, p, arg.Value) is { } error) return $"{toolName}: {error}";
+            }
+            return null;
+        }
+
+        private static string? CheckArguments(Tool tool, JsonElement args) => CheckArguments(tool.Name, tool.InputSchema, args);
+
+        internal static string? CheckValue(string name, Dictionary<string, object> p, JsonElement v)
+        {
+            string type = p.TryGetValue("type", out var t) && t is string ts ? ts : "any";
+            bool fits = type switch
+            {
+                "string" => v.ValueKind == JsonValueKind.String,
+                "boolean" => v.ValueKind is JsonValueKind.True or JsonValueKind.False,
+                "integer" => v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out _),
+                "number" => v.ValueKind == JsonValueKind.Number,
+                "object" => v.ValueKind == JsonValueKind.Object,
+                "array" => v.ValueKind == JsonValueKind.Array,
+                _ => true,
+            };
+            if (!fits) return $"\"{name}\" must be {(type is "integer" or "array" or "object" ? "an" : "a")} {type}, not {v.ValueKind.ToString().ToLowerInvariant()}";
+            if (p.TryGetValue("enum", out var e) && e is string[] values && !values.Contains(v.GetString()))
+                return $"\"{name}\" is one of {string.Join(", ", values)}, not \"{v.GetString()}\"";
+            if (v.ValueKind == JsonValueKind.Number)
+            {
+                double d = v.GetDouble();
+                if (p.TryGetValue("minimum", out var min) && d < Convert.ToDouble(min)) return $"\"{name}\" must be at least {min}";
+                if (p.TryGetValue("maximum", out var max) && d > Convert.ToDouble(max)) return $"\"{name}\" must be at most {max}";
+                if (p.TryGetValue("exclusiveMinimum", out var xmin) && d <= Convert.ToDouble(xmin)) return $"\"{name}\" must be more than {xmin}";
+            }
+            if (v.ValueKind == JsonValueKind.Array)
+            {
+                int n = v.GetArrayLength();
+                if (p.TryGetValue("minItems", out var lo) && n < Convert.ToInt32(lo)) return $"\"{name}\" needs at least {lo} items";
+                if (p.TryGetValue("maxItems", out var hi) && n > Convert.ToInt32(hi)) return $"\"{name}\" takes at most {hi} items";
+                if (p.TryGetValue("items", out var it) && it is Dictionary<string, object> item)
+                    foreach (var x in v.EnumerateArray())
+                        if (CheckValue(name + "[]", item, x) is { } error) return error;
+            }
+            return null;
         }
 
         // ------------------------------------------------------------------ commands
@@ -264,6 +350,13 @@ namespace MapBuilder.Server.Services
                 case "movePoint": return ("map", null, new { point = Str(op, "name") });
                 case "setPoint": return ("map", null, new { point = Str(op, "newName") ?? Str(op, "name") });
                 case "placeInstance": return ("map", null, new { geoIndex = R("newGeoIndex") });
+                case "placePrefab":
+                {
+                    JsonElement first = result.ValueKind == JsonValueKind.Object && result.TryGetProperty("results", out var pr) && pr.ValueKind == JsonValueKind.Array && pr.GetArrayLength() > 0 ? pr[0] : default;
+                    int? geo = first.ValueKind == JsonValueKind.Object && first.TryGetProperty("newGeoIndex", out var g) && g.ValueKind == JsonValueKind.Number ? g.GetInt32() : null;
+                    int? clutter = first.ValueKind == JsonValueKind.Object && first.TryGetProperty("newClutterIndex", out var c) && c.ValueKind == JsonValueKind.Number ? c.GetInt32() : null;
+                    return ("map", null, geo != null ? new { geoIndex = geo } : clutter != null ? new { clutterIndex = clutter } : null);
+                }
                 case "addAnimation":
                 case "deleteAnimation":
                 case "renameAnimation":
@@ -296,8 +389,9 @@ namespace MapBuilder.Server.Services
             AddSync("assets_open", "Open package",
                 "Open a SOCOM II package (a .ZDB / .CDB, a loose .ZED / .ZAR, or an unpacked package folder; SOCOM 3 / Combined Assault and " +
                 "GTA: San Andreas open read-only) as an asset session, or join the one already open on it (the pages share it). Returns the " +
-                "session id and a summary. The app opens it too: in the Map Builder when it is a map, else the Model Editor. Risk: read-only.",
-                true, Schema(new[] { "path" }, P("path", "string", "Path to the package or its unpacked folder.")), a =>
+                "session id and a summary. The app opens it too: in the Map Builder when it is a map, else the Model Editor. Risk: changes " +
+                "only what the app shows.",
+                false, Schema(new[] { "path" }, P("path", "string", "Path to the package or its unpacked folder.")), a =>
                 {
                     string path = Str(a, "path") ?? throw new ArgumentException("\"path\" is required");
                     var (ok, data, error) = Command(new CommandMessage { Command = "ASSET_OPEN", InputPath = path });
@@ -375,14 +469,64 @@ namespace MapBuilder.Server.Services
             AddSync("assets_map_scene", "Read map scene",
                 "What the map places: kind (model = worldmodel, reference = a placed prop / turret / vehicle / sky, clutter = trees, bushes, grass, " +
                 "rocks from CLUTTER.ZAR), model, position, scale, matrix, and the geoIndex / clutterIndex edit ops take. Filter by kind or a " +
-                "name / path substring; limit defaults to 500. Risk: read-only.",
-                true, Schema(new[] { "session" }, session, P("kind", "string", "Optional kind: model, reference, visuals, clutter."),
-                    P("query", "string", "Optional model name or scene path substring."), P("limit", "integer", "Maximum instances (default 500).")),
+                "name / path substring; limit defaults to 500. When more match, the answer's nextOffset pages on (pass it as offset). " +
+                "Risk: read-only.",
+                true, Schema(new[] { "session" }, session, E("kind", "Optional kind.", "model", "reference", "visuals", "clutter"),
+                    P("query", "string", "Optional model name or scene path substring."), N("limit", "integer", "Maximum instances (default 500).", minimum: 1, maximum: 5000),
+                    N("offset", "integer", "Skip this many matching instances (from a previous answer's nextOffset).", minimum: 0)),
                 a => FromCommand(new CommandMessage
                 {
                     Command = "ASSET_MAP_SCENE", AssetSession = Session(a),
-                    AssetJson = JsonSerializer.Serialize(new { kind = Str(a, "kind"), query = Str(a, "query"), limit = IntOpt(a, "limit") }, Json),
-                }, d => d.TryGetProperty("instances", out var i) ? $"{i.GetArrayLength()} instance(s)" : null!));
+                    AssetJson = JsonSerializer.Serialize(new { kind = Str(a, "kind"), query = Str(a, "query"), limit = IntOpt(a, "limit"), offset = IntOpt(a, "offset") }, Json),
+                }, d => d.TryGetProperty("instances", out var i) ? $"{i.GetArrayLength()} instance(s)" + (d.TryGetProperty("nextOffset", out var n) && n.ValueKind == JsonValueKind.Number ? $", more from {n.GetInt32()}" : "") : null!));
+
+            AddSync("assets_validate", "Check map",
+                "Lint a map before saving or testing it: placed props and clutter whose model the package lacks, broken or zero-scale " +
+                "transforms, duplicate AIMAPS point names, no start points, items outside the AI map, texture names retail models cannot hold " +
+                "(over 15 characters), and the textures' total size against an optional VRAM budget. ok is false when there are errors. " +
+                "Run it after a series of edits. Risk: read-only.",
+                true, Schema(new[] { "session" }, session, N("vramBudget", "integer", "Optional texture budget in bytes to warn above.", minimum: 0)),
+                a => FromCommand(new CommandMessage
+                {
+                    Command = "ASSET_VALIDATE", AssetSession = Session(a),
+                    AssetJson = JsonSerializer.Serialize(new { vramBudget = a.TryGetProperty("vramBudget", out var vb) ? vb.GetInt64() : (long?)null }, Json),
+                }, d => d.TryGetProperty("counts", out var c) ? (c.EnumerateObject().Any() ? string.Join(", ", c.EnumerateObject().Select(x => $"{x.Value.GetInt32()} {x.Name}")) : "no problems") : null!));
+
+            AddSync("assets_list_prefabs", "List prefabs",
+                "The saved prefabs (groups of props and clutter placed together, shared by every package): name, description, item count and " +
+                "the models they need, or one prefab's items in full with name. Place one with assets_edit {op: placePrefab}; a map needs " +
+                "the prefab's models (import them first). Risk: read-only.",
+                true, Schema(Array.Empty<string>(), P("name", "string", "Optional prefab to read in full.")),
+                a => FromCommand(new CommandMessage { Command = "ASSET_LIST_PREFABS", AssetName = Str(a, "name") },
+                    d => d.TryGetProperty("prefabs", out var l) ? $"{l.GetArrayLength()} prefab(s)" : $"{d.GetProperty("items").GetArrayLength()} item(s)"));
+
+            AddSync("assets_save_prefab", "Save prefab",
+                "Save placed props (geoIndices) and clutter (clutterIndices) from a map as a reusable prefab, relative to origin (default: the " +
+                "items' centre on the ground). Read the indices with assets_map_scene. replace overwrites a prefab of the same name. " +
+                "Risk: writes a prefab file (not the package).",
+                false, Schema(new[] { "session", "name" }, session, P("name", "string", "Prefab name: letters, digits, spaces, _ . -"),
+                    A("geoIndices", "integer", "Placed references to include."), A("clutterIndices", "integer", "Clutter placements to include."),
+                    A("origin", "number", "Optional [x, y, z] the items are saved around.", minItems: 3, maxItems: 3),
+                    P("description", "string", "Optional description."), P("replace", "boolean", "Overwrite an existing prefab.")),
+                a =>
+                {
+                    var fields = new Dictionary<string, object?>();
+                    foreach (string k in new[] { "name", "geoIndices", "clutterIndices", "origin", "description", "replace" })
+                        if (a.TryGetProperty(k, out var v)) fields[k] = v;
+                    return FromCommand(new CommandMessage { Command = "ASSET_SAVE_PREFAB", AssetSession = Session(a), AssetJson = JsonSerializer.Serialize(fields, Json) },
+                        d => $"saved {d.GetProperty("name").GetString()} ({d.GetProperty("items").GetInt32()} items)");
+                });
+
+            AddSync("assets_delete_prefab", "Delete prefab",
+                "Delete a saved prefab file. Only when the user asks. Risk: deletes a prefab file.",
+                false, Schema(new[] { "name" }, P("name", "string", "The prefab.")),
+                a => FromCommand(new CommandMessage { Command = "ASSET_DELETE_PREFAB", AssetName = Str(a, "name") }, _ => "deleted"));
+
+            AddSync("assets_history", "Edit history",
+                "A session's undo and redo steps (most recent first, with the archives each touched), its revision and unsaved archives: " +
+                "what assets_undo / assets_redo would take back. Risk: read-only.",
+                true, Schema(new[] { "session" }, session), a => FromCommand(new CommandMessage { Command = "ASSET_HISTORY", AssetSession = Session(a) },
+                    d => $"{d.GetProperty("undo").GetArrayLength()} undo, {d.GetProperty("redo").GetArrayLength()} redo"));
 
             AddSync("assets_map_points", "Read map points",
                 "The AIMAPS spawn and waypoint points (name, team, kind, x, z, grid cell) and the AI grid's bounds. Risk: read-only.",
@@ -433,14 +577,17 @@ namespace MapBuilder.Server.Services
                 "- importTexture {source | sourceSession, name, sourceNamespace?, namespace?, newName?}\n" +
                 "- addTexture {name, pngBase64 | imagePath, namespace?, maxSize?} / addPalette {pngBase64 | imagePath, namespace?, is16?}\n" +
                 "- addAnimation / deleteAnimation / renameAnimation / setAnimation / setAnimationKey (package clips)\n" +
+                "- placePrefab {prefab, position, yaw?} (every item of a saved prefab around position as one undo step; see assets_list_prefabs)\n" +
                 "- batch {label?, ops:[…]} (one undo step)\n" +
                 "Positions are map units [x, y, z] (y is height; read nearby instances with assets_map_scene first); yaw is degrees about Y; " +
                 "omitted parts keep their values. Indices shift after add / delete, so re-read before chaining. The app follows the edit " +
-                "(the Map Builder frames the item, the Model Editor opens the model). Risk: changes the in-memory session only.",
+                "(the Map Builder frames the item, the Model Editor opens the model). dryRun: true checks the edit and answers what it " +
+                "would do (archives changed, new indices) without changing anything. Risk: changes the in-memory session only.",
                 false, Schema(new[] { "session" }, session,
-                    P("op", "object", "The edit: an object with \"op\" (see the description)."),
+                    ("op", EditOps.Schema()),
                     P("opJson", "string", "The same edit as JSON text (instead of op)."),
-                    P("label", "string", "Optional undo label (defaults to a description of the op).")),
+                    P("label", "string", "Optional undo label (defaults to a description of the op)."),
+                    P("dryRun", "boolean", "Check the edit and report what it would do, changing nothing.")),
                 a =>
                 {
                     string id = Session(a);
@@ -449,14 +596,18 @@ namespace MapBuilder.Server.Services
                         : JsonDocument.Parse(Str(a, "opJson") ?? throw new ArgumentException("\"op\" (an object) or \"opJson\" is required"));
                     op = parsed?.RootElement ?? o;
                     string json = op.GetRawText();
-                    if (Str(a, "label") is { } label && !op.TryGetProperty("label", out _))
+                    if (EditOps.Check(op) is { } invalid) throw new ArgumentException(invalid);
+                    bool dryRun = Bool(a, "dryRun");
+                    if ((Str(a, "label") is { } label && !op.TryGetProperty("label", out _)) || dryRun)
                     {
                         var node = System.Text.Json.Nodes.JsonNode.Parse(json)!.AsObject();
-                        node["label"] = label;
+                        if (Str(a, "label") is { } l && !op.TryGetProperty("label", out _)) node["label"] = l;
+                        if (dryRun) node["dryRun"] = true;
                         json = node.ToJsonString();
                     }
                     var (ok, data, error) = Command(new CommandMessage { Command = "ASSET_EDIT", AssetSession = id, AssetJson = json });
                     if (!ok || data == null) return ToolResult.Fail(error ?? "ASSET_EDIT failed");
+                    if (dryRun) return ToolResult.Text(data, $"dry run: {Str(op, "op")}");
                     using var d = JsonDocument.Parse(data);
                     var root = d.RootElement;
                     var res = root.TryGetProperty("result", out var inner) && inner.ValueKind == JsonValueKind.Object ? inner : root;
@@ -478,12 +629,13 @@ namespace MapBuilder.Server.Services
                 ".bak); mode=pack writes a memory-card pack <NAME>.CDB (packName starts with 'm', at most 7 characters) to outputPath and, with " +
                 "folderCard (a PCSX2 folder memory card), installs it. Prefer a copy (outputPath) over the retail file, and save only when the " +
                 "user asks. Risk: writes disk.",
-                false, Schema(new[] { "session" }, session, P("mode", "string", "zdb (default) or pack."), P("outputPath", "string", "zdb: output .ZDB path. pack: output folder."),
-                    P("packName", "string", "pack: the name, e.g. mfrst."), P("folderCard", "string", "pack: optional PCSX2 folder memory card to install into.")),
+                false, Schema(new[] { "session" }, session, E("mode", "zdb (default) or pack.", "zdb", "pack"), P("outputPath", "string", "zdb: output .ZDB path. pack: output folder."),
+                    P("packName", "string", "pack: the name, e.g. mfrst."), P("folderCard", "string", "pack: optional PCSX2 folder memory card to install into."),
+                    P("archiveDir", "string", "pack from an unpacked folder: the files' folder in game, e.g. RUN\\MP\\M51 (default RUN\\MP\\<FOLDER>).")),
                 a => FromCommand(new CommandMessage
                 {
                     Command = "ASSET_SAVE", AssetSession = Session(a),
-                    AssetJson = JsonSerializer.Serialize(new { mode = Str(a, "mode") ?? "zdb", outputPath = Str(a, "outputPath"), packName = Str(a, "packName"), folderCard = Str(a, "folderCard") }, Json),
+                    AssetJson = JsonSerializer.Serialize(new { mode = Str(a, "mode") ?? "zdb", outputPath = Str(a, "outputPath"), packName = Str(a, "packName"), folderCard = Str(a, "folderCard"), archiveDir = Str(a, "archiveDir") }, Json),
                 }, d => d.TryGetProperty("written", out var w) ? "wrote " + string.Join(", ", w.EnumerateArray().Select(x => Path.GetFileName(x.GetString()))) : null!));
 
             AddSync("mapbuilder_command", "Run command",
@@ -532,7 +684,7 @@ namespace MapBuilder.Server.Services
                 "(a new file).",
                 false, Schema(new[] { "session", "archive", "model" }, session, P("archive", "string", "Archive leaf, e.g. M51_MDL.ZED."), P("model", "string", "Model name."),
                     P("outputDir", "string", "Optional output folder (default: the app's export folder)."), P("modelName", "string", "Optional name in the new package."),
-                    P("clips", "array", "Optional animation clip names to include (characters).")),
+                    A("clips", "string", "Optional animation clip names to include (characters).")),
                 a => FromCommand(new CommandMessage
                 {
                     Command = "ASSET_EXPORT", AssetSession = Session(a), AssetArchive = Str(a, "archive"), AssetName = Str(a, "model"),
@@ -587,11 +739,13 @@ namespace MapBuilder.Server.Services
                 "add {name?, file} or replace / remove {index, name}. Not for open sessions (use assets_edit). Prefer an outputPath copy. " +
                 "Risk: writes disk.",
                 false, Schema(new[] { "path", "ops" }, P("path", "string", "The .ZDB, .CDB, .ZAR or .ZED to change."),
-                    P("outputPath", "string", "Where to write (same extension); default over the source."), P("ops", "array", "The operations.")), a =>
+                    P("outputPath", "string", "Where to write (same extension); default over the source."), A("ops", "object", "The operations.", minItems: 1),
+                    P("dryRun", "boolean", "Check the operations and report what they would change, writing nothing.")), a =>
                 {
                     if (!a.TryGetProperty("ops", out var ops) || ops.ValueKind != JsonValueKind.Array) throw new ArgumentException("\"ops\" (an array) is required");
-                    return FromCommand(new CommandMessage { Command = "PACKAGE_EDIT", InputPath = Str(a, "path"), OutputPath = Str(a, "outputPath"), Data = ops.GetRawText() },
-                        d => d.TryGetProperty("written", out var w) ? "wrote " + Path.GetFileName(w.GetString()) : null!);
+                    return FromCommand(new CommandMessage { Command = "PACKAGE_EDIT", InputPath = Str(a, "path"), OutputPath = Str(a, "outputPath"), Data = ops.GetRawText(), DryRun = Bool(a, "dryRun") },
+                        d => d.TryGetProperty("written", out var w) ? "wrote " + Path.GetFileName(w.GetString())
+                            : d.TryGetProperty("wouldWrite", out var ww) ? "dry run: would write " + Path.GetFileName(ww.GetString()) : null!);
                 });
 
             // ── weapon archives on disk (a loose *_MDL.ZED / weapon .ZED)
@@ -627,13 +781,15 @@ namespace MapBuilder.Server.Services
                 "transform?: {scaleX, scaleY, scaleZ, translateX, translateY, translateZ}, newTextureName?}]}), optionally a new texture " +
                 "from an image (imagePath or imageBase64, resampled to the template texture's size and depth, with a new palette when " +
                 "indexed), and adds them as new entries named newName (originals untouched), written to outputPath (default over the " +
-                "archive). Prefer an outputPath copy. Risk: writes disk.",
+                "archive). Names already in the archive are refused. dryRun encodes everything and reports what it would add, writing " +
+                "nothing. Prefer an outputPath copy. Risk: writes disk.",
                 false, Schema(new[] { "path", "template", "newName" }, P("path", "string", "The weapon archive (.ZED)."),
                     P("template", "string", "The template weapon model."), P("newName", "string", "The new model entry's name."),
                     P("outputPath", "string", "Where to write the archive (default over the source)."),
                     P("imagePath", "string", "Optional PNG / JPG for the new texture."), P("imageBase64", "string", "Optional PNG as base64 (instead of imagePath)."),
                     P("meshEdits", "object", "Optional {perChunk: [...]} model edits."),
-                    P("textureEntryName", "string", "Optional name for the new .tif entry."), P("paletteEntryName", "string", "Optional name for the new palette entry.")), a =>
+                    P("textureEntryName", "string", "Optional name for the new .tif entry."), P("paletteEntryName", "string", "Optional name for the new palette entry."),
+                    P("dryRun", "boolean", "Encode and check, writing nothing.")), a =>
                 {
                     string path = Str(a, "path") ?? throw new ArgumentException("\"path\" is required");
                     string template = Str(a, "template") ?? throw new ArgumentException("\"template\" is required");
@@ -654,17 +810,18 @@ namespace MapBuilder.Server.Services
                     {
                         Command = "ZIPPER_WRITE_WEAPON", InputPath = path, OutputPath = Str(a, "outputPath"), WeaponNewName = Str(a, "newName"),
                         WeaponModelData = model.RootElement.GetProperty("mdl").GetString(), WeaponTextureData = tif, WeaponPaletteData = palette,
-                        WeaponTextureEntryName = Str(a, "textureEntryName"), WeaponPaletteEntryName = Str(a, "paletteEntryName"),
-                    }, d => d.TryGetProperty("outputPath", out var o) ? $"{Str(a, "newName")} → {Path.GetFileName(o.GetString())}" : null!);
+                        WeaponTextureEntryName = Str(a, "textureEntryName"), WeaponPaletteEntryName = Str(a, "paletteEntryName"), DryRun = Bool(a, "dryRun"),
+                    }, d => d.TryGetProperty("outputPath", out var o) ? $"{Str(a, "newName")} → {Path.GetFileName(o.GetString())}"
+                        : d.TryGetProperty("wouldWrite", out var w) ? $"dry run: {Str(a, "newName")} → {Path.GetFileName(w.GetString())}" : null!);
                 });
 
             // ── the app
             Add("ui_screenshot", "Screenshot",
                 "A screenshot of the 3D view on the page the user has in front (Map Builder, Model Editor, Animation Editor or Asset Viewer), to " +
                 "check your work as the user sees it. Needs the app open in a browser. Risk: read-only.",
-                true, Schema(Array.Empty<string>(), P("maxSize", "integer", "Longest side in pixels (default 1280).")), async a =>
+                true, Schema(Array.Empty<string>(), N("maxSize", "integer", "Longest side in pixels (default 1280).", minimum: 64, maximum: 2048)), async a =>
                 {
-                    var data = await _ui.Request("screenshot", new { maxSize = IntOpt(a, "maxSize") ?? 1280 }, TimeSpan.FromSeconds(15));
+                    var data = await _ui.Request("screenshot", new { maxSize = Math.Clamp(IntOpt(a, "maxSize") ?? 1280, 64, 2048) }, TimeSpan.FromSeconds(15));
                     string png = data.TryGetProperty("png", out var p) ? p.GetString() ?? "" : "";
                     if (png.Length == 0) return ToolResult.Fail("The page sent no image (no 3D view on screen?).");
                     var r = new ToolResult { Summary = data.TryGetProperty("page", out var pg) ? pg.GetString() : null };
@@ -687,7 +844,7 @@ namespace MapBuilder.Server.Services
             AddSync("ui_show", "Show page",
                 "Bring a page to the front, optionally opening a package (by session or path) and a model there: map (Map Builder), models " +
                 "(Model Editor, with archive + model), animations (Animation Editor), viewer (Asset Viewer). Risk: read-only.",
-                true, Schema(new[] { "page" }, P("page", "string", "map, models, animations or viewer."), P("session", "string", "Optional session to show."),
+                true, Schema(new[] { "page" }, E("page", "map, models, animations or viewer.", "map", "models", "animations", "viewer"), P("session", "string", "Optional session to show."),
                     P("path", "string", "Optional package path (instead of session)."), P("archive", "string", "Model Editor: the model's archive."),
                     P("model", "string", "Model Editor: the model.")), a =>
                 {
@@ -718,9 +875,10 @@ namespace MapBuilder.Server.Services
                 "studio, unlit), backdrop (dark, blueprint), a camera preset (front, back, left, right, top, bottom, iso), frame (selected, all), " +
                 "then orbit [yaw, pitch] degrees about the view's centre (yaw turns right, pitch looks more from above) and zoom (a distance " +
                 "factor: 0.5 twice as close, 2 twice as far). Risk: read-only.",
-                true, Schema(Array.Empty<string>(), P("shading", "string", "textured, solid, wireframe or xray."), P("lighting", "string", "baked, studio or unlit."),
-                    P("backdrop", "string", "dark or blueprint."), P("view", "string", "front, back, left, right, top, bottom or iso."), P("frame", "string", "selected or all."),
-                    P("orbit", "array", "[yaw, pitch] degrees."), P("zoom", "number", "Distance factor (< 1 closer).")), a =>
+                true, Schema(Array.Empty<string>(), E("shading", "Shading.", "textured", "solid", "wireframe", "xray"), E("lighting", "Lighting.", "baked", "studio", "unlit"),
+                    E("backdrop", "Backdrop.", "dark", "blueprint"), E("view", "Camera preset.", "front", "back", "left", "right", "top", "bottom", "iso"),
+                    E("frame", "Frame the selection or the whole scene.", "selected", "all"),
+                    A("orbit", "number", "[yaw, pitch] degrees.", minItems: 2, maxItems: 2), N("zoom", "number", "Distance factor (< 1 closer).", exclusiveMinimum: 0)), a =>
                 {
                     float[]? orbit = a.TryGetProperty("orbit", out var o) && o.ValueKind == JsonValueKind.Array ? o.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.Number).Select(x => x.GetSingle()).ToArray() : null;
                     if (orbit is { Length: not 2 }) throw new ArgumentException("\"orbit\" is [yaw, pitch]");
@@ -752,6 +910,29 @@ namespace MapBuilder.Server.Services
         private static (string Name, Dictionary<string, object> Schema) P(string name, string type, string description) =>
             (name, new Dictionary<string, object> { ["type"] = type, ["description"] = description });
 
+        /// <summary>A string that takes one of <paramref name="values"/>.</summary>
+        private static (string Name, Dictionary<string, object> Schema) E(string name, string description, params string[] values) =>
+            (name, new Dictionary<string, object> { ["type"] = "string", ["description"] = description, ["enum"] = values });
+
+        /// <summary>A number or integer with optional bounds.</summary>
+        private static (string Name, Dictionary<string, object> Schema) N(string name, string type, string description, double? minimum = null, double? maximum = null, double? exclusiveMinimum = null)
+        {
+            var d = new Dictionary<string, object> { ["type"] = type, ["description"] = description };
+            if (minimum is { } lo) d["minimum"] = lo;
+            if (maximum is { } hi) d["maximum"] = hi;
+            if (exclusiveMinimum is { } x) d["exclusiveMinimum"] = x;
+            return (name, d);
+        }
+
+        /// <summary>An array of <paramref name="itemType"/> items, optionally of a fixed size range.</summary>
+        private static (string Name, Dictionary<string, object> Schema) A(string name, string itemType, string description, int? minItems = null, int? maxItems = null)
+        {
+            var d = new Dictionary<string, object> { ["type"] = "array", ["description"] = description, ["items"] = new Dictionary<string, object> { ["type"] = itemType } };
+            if (minItems is { } lo) d["minItems"] = lo;
+            if (maxItems is { } hi) d["maxItems"] = hi;
+            return (name, d);
+        }
+
         // Every tool takes `reason`: one line on why, shown in the app's AI activity panel.
         private static Dictionary<string, object> Schema(string[] required, params (string Name, Dictionary<string, object> Schema)[] props)
         {
@@ -766,6 +947,7 @@ namespace MapBuilder.Server.Services
                 ["type"] = "object",
                 ["properties"] = properties,
                 ["required"] = required.Append("reason").ToArray(),
+                ["additionalProperties"] = false,
             };
         }
 

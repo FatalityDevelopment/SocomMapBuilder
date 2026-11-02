@@ -15,6 +15,8 @@ namespace MapBuilder.Server
         /// <summary>Inline payload (base64 bytes for ZIPPER_INSPECT_RDR_BYTES).</summary>
         public string? Data { get; set; }
         public string? Query { get; set; }
+        /// <summary>PACKAGE_EDIT: check the operations and report what they would change, writing nothing.</summary>
+        public bool DryRun { get; set; }
 
         // ── Asset sessions (ASSET_*) ──
         /// <summary>Session id returned by ASSET_OPEN.</summary>

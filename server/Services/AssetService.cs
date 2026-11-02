@@ -28,12 +28,16 @@ namespace MapBuilder.Server.Services
         {
             public required string Id { get; init; }
             public required ZipperPackage Package { get; init; }
+            /// <summary>The full path ASSET_OPEN was given (a loose package's folder differs from its SourcePath).</summary>
+            public string OpenPath { get; init; } = string.Empty;
             /// <summary>Last write time of the package on disk when the session read it.</summary>
-            public DateTime SourceStamp { get; init; }
+            public DateTime SourceStamp { get; set; }
             public DateTime OpenedAt { get; } = DateTime.UtcNow;
             public int Revision { get; set; }
             /// <summary>Root leaves changed since opening (what a save writes).</summary>
             public HashSet<string> Dirty { get; } = new(StringComparer.OrdinalIgnoreCase);
+            /// <summary>Each edited leaf's bytes as on disk (at open or the last save over the source): undoing back to them makes it clean.</summary>
+            public Dictionary<string, byte[]> Clean { get; } = new(StringComparer.OrdinalIgnoreCase);
             /// <summary>Undo log: root entry bytes before each edit, with a description.</summary>
             public Stack<(string Description, Dictionary<string, byte[]> Before)> Undo { get; } = new();
             public Stack<(string Description, Dictionary<string, byte[]> Before)> Redo { get; } = new();
@@ -65,6 +69,9 @@ namespace MapBuilder.Server.Services
             reg.Add(c => CaRoute(c, "ASSET_REDO") ?? WithSession(c.AssetSession, "ASSET_REDO", s => UndoRedo(s, undo: false)), "ASSET_REDO");
             reg.Add(c => CaRoute(c, "ASSET_EDIT") ?? WithSession(c.AssetSession, "ASSET_EDIT", s => Edit(s, c.AssetJson)), "ASSET_EDIT");
             reg.Add(c => CaRoute(c, "ASSET_SAVE") ?? WithSession(c.AssetSession, "ASSET_SAVE", s => Save(s, c.AssetJson)), "ASSET_SAVE");
+            reg.Add(c => WithSession(c.AssetSession, "ASSET_HISTORY", s => History(s)), "ASSET_HISTORY");
+            RegisterPrefabs(reg);
+            reg.Add(c => WithSession(c.AssetSession, "ASSET_VALIDATE", s => Validate(s, c.AssetJson)), "ASSET_VALIDATE");
             reg.Add(c => CaRoute(c, "ASSET_EXPORT") ?? WithSession(c.AssetSession, "ASSET_EXPORT", s => ExportToCa(s, c.AssetArchive, c.AssetName, c.AssetJson)), "ASSET_EXPORT");
         }
 
@@ -84,11 +91,14 @@ namespace MapBuilder.Server.Services
             JsonElement a = doc.RootElement;
             string op = Str(a, "op") ?? throw new ArgumentException("\"op\" is required");
             ZipperPackage pkg = s.Package;
+            if (a.TryGetProperty("dryRun", out var dry) && dry.ValueKind == JsonValueKind.True) return DryRun(s, a);
 
             switch (op)
             {
                 case "batch":
                     return Batch(s, a);
+                case "placePrefab":
+                    return PlacePrefab(s, a);
                 case "moveClutter":
                 {
                     int index = Int(a, "clutterIndex");
@@ -100,6 +110,7 @@ namespace MapBuilder.Server.Services
                 case "addClutter":
                 {
                     string model = Str(a, "model") ?? throw new ArgumentException("\"model\" is required");
+                    if (Floats(a, "position") == null && Floats(a, "matrix") == null) throw new ArgumentException("\"position\" [x, y, z] (or \"matrix\") is required");
                     float[] m = Placement(a, Matrix4.Identity());
                     int newIndex = -1;
                     var result = ApplyEdit(s, Str(a, "label") ?? $"add {model} clutter", p => PackageEdits.AddClutter(p, model, m, out newIndex));
@@ -108,7 +119,7 @@ namespace MapBuilder.Server.Services
                 case "movePoint":
                 {
                     string name = Str(a, "name") ?? throw new ArgumentException("\"name\" (a point from ASSET_MAP_POINTS) is required");
-                    float[] pos = Floats(a, "position") ?? throw new ArgumentException("\"position\" [x, y, z] is required");
+                    float[] pos = Vec(a, "position", 3) ?? throw new ArgumentException("\"position\" [x, y, z] is required");
                     string leaf = s.Package.Entries.FirstOrDefault(e => e.Leaf.EndsWith(".MPS", StringComparison.OrdinalIgnoreCase))?.Leaf
                         ?? throw new InvalidOperationException("The package has no AIMAPS.MPS");
                     return ApplyEdit(s, Str(a, "label") ?? $"move point {name}", p => new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase)
@@ -123,8 +134,7 @@ namespace MapBuilder.Server.Services
                     string leaf = s.Package.Entries.FirstOrDefault(e => e.Leaf.EndsWith(".MPS", StringComparison.OrdinalIgnoreCase))?.Leaf
                         ?? throw new InvalidOperationException("The package has no AIMAPS.MPS");
                     string? newName = Str(a, "newName");
-                    float[]? pos = Floats(a, "position");
-                    if (pos is { Length: not 3 }) throw new ArgumentException("\"position\" needs [x, y, z]");
+                    float[]? pos = Vec(a, "position", 3);
                     int? team = OptInt(a, "team");
                     string? kind = Str(a, "kind");
                     if (newName == null && team == null && kind == null && pos == null) throw new ArgumentException("Nothing to change: pass newName, team, kind or position");
@@ -179,8 +189,8 @@ namespace MapBuilder.Server.Services
                         if (!holder.TryGetProperty("vertices", out var vs) || vs.ValueKind != JsonValueKind.Array)
                             throw new ArgumentException("\"vertices\" [{i, position?, uv?, color?, normal?}] is required");
                         return vs.EnumerateArray().Select(v => new ZipperModelMesh.VertexEdit(
-                            Int(v, "i"), Floats(v, "position"), Floats(v, "uv"),
-                            Floats(v, "color")?.Select(x => (byte)Math.Clamp((int)MathF.Round(x), 0, 255)).ToArray(), Floats(v, "normal"))).ToList();
+                            Int(v, "i"), Vec(v, "position", 3), Vec(v, "uv", 2),
+                            Vec(v, "color", 3, 4)?.Select(x => (byte)Math.Clamp((int)MathF.Round(x), 0, 255)).ToArray(), Vec(v, "normal", 3))).ToList();
                     }
                     var byChunk = new Dictionary<int, IReadOnlyList<ZipperModelMesh.VertexEdit>>();
                     if (a.TryGetProperty("chunks", out var cl) && cl.ValueKind == JsonValueKind.Array)
@@ -199,8 +209,8 @@ namespace MapBuilder.Server.Services
                         ? cs.EnumerateArray().Select(x => x.GetInt32()).ToList() : null;
                     Dictionary<int, int[]>? verts = null;
                     if (a.TryGetProperty("vertices", out var vv) && vv.ValueKind == JsonValueKind.Object)
-                        verts = vv.EnumerateObject().ToDictionary(p => int.Parse(p.Name), p => p.Value.EnumerateArray().Select(x => x.GetInt32()).ToArray());
-                    float[] m = Floats(a, "matrix") ?? VertexTransform(s, archive, model, a, chunks, verts);
+                        verts = vv.EnumerateObject().ToDictionary(p => OffsetKey(p.Name, "vertices"), p => p.Value.EnumerateArray().Select(x => x.GetInt32()).ToArray());
+                    float[] m = Vec(a, "matrix", 16) ?? VertexTransform(s, archive, model, a, chunks, verts);
                     return ApplyEdit(s, Str(a, "label") ?? $"transform {model}", p => ZipperModelMesh.TransformVertices(p, archive, model, m, chunks, verts));
                 }
                 case "deleteFaces":
@@ -216,7 +226,7 @@ namespace MapBuilder.Server.Services
                     string archive = Str(a, "archive") ?? throw new ArgumentException("\"archive\" is required");
                     string model = Str(a, "model") ?? throw new ArgumentException("\"model\" is required");
                     var faces = FaceMap(a);
-                    float[] m = Floats(a, "matrix") ?? VertexTransform(s, archive, model, a, null, null);
+                    float[] m = Vec(a, "matrix", 16) ?? VertexTransform(s, archive, model, a, null, null);
                     return ApplyTopology(s, Str(a, "label") ?? $"duplicate {faces.Values.Sum(f => f.Length)} face(s) of {model}", p => MeshTopology.DuplicateFaces(p, archive, model, faces, m));
                 }
                 case "addMesh":
@@ -255,11 +265,11 @@ namespace MapBuilder.Server.Services
                     // {sourceSession | source (a package path), archive, name, targetArchive?, newName?}
                     string archive = Str(a, "archive") ?? throw new ArgumentException("\"archive\" (the source model's *_MDL.ZED) is required");
                     string name = Str(a, "name") ?? throw new ArgumentException("\"name\" (the source model) is required");
-                    ZipperPackage source = SourcePackage(Str(a, "sourceSession"), Str(a, "source"));
+                    var (source, sourceSession) = SourceOf(Str(a, "sourceSession"), Str(a, "source"));
                     if (ReferenceEquals(source, pkg)) throw new ArgumentException("The source is this package; duplicate the model instead");
                     PackageImport.Result? imported = null;
-                    var result = ApplyEdit(s, Str(a, "label") ?? $"import {name} from {Path.GetFileName(source.SourcePath)}",
-                        p => (imported = PackageImport.ImportModel(p, source, archive, name, Str(a, "targetArchive"), Str(a, "newName"))).Changed);
+                    var result = WithSource(sourceSession, s, () => ApplyEdit(s, Str(a, "label") ?? $"import {name} from {Path.GetFileName(source.SourcePath)}",
+                        p => (imported = PackageImport.ImportModel(p, source, archive, name, Str(a, "targetArchive"), Str(a, "newName"))).Changed));
                     return new
                     {
                         result,
@@ -297,11 +307,11 @@ namespace MapBuilder.Server.Services
                 {
                     // {sourceSession | source, name, sourceNamespace?, namespace?, newName?}
                     string tif = Str(a, "name") ?? throw new ArgumentException("\"name\" (the source .tif) is required");
-                    ZipperPackage source = SourcePackage(Str(a, "sourceSession"), Str(a, "source"));
+                    var (source, sourceSession) = SourceOf(Str(a, "sourceSession"), Str(a, "source"));
                     if (ReferenceEquals(source, pkg)) throw new ArgumentException("The source is this package");
                     PackageImport.Result? imported = null;
-                    var result = ApplyEdit(s, Str(a, "label") ?? $"import texture {tif} from {Path.GetFileName(source.SourcePath)}",
-                        p => (imported = PackageImport.ImportTexture(p, source, tif, Str(a, "sourceNamespace"), Str(a, "namespace"), Str(a, "newName"))).Changed);
+                    var result = WithSource(sourceSession, s, () => ApplyEdit(s, Str(a, "label") ?? $"import texture {tif} from {Path.GetFileName(source.SourcePath)}",
+                        p => (imported = PackageImport.ImportTexture(p, source, tif, Str(a, "sourceNamespace"), Str(a, "namespace"), Str(a, "newName"))).Changed));
                     return new
                     {
                         result,
@@ -326,7 +336,7 @@ namespace MapBuilder.Server.Services
                         : throw new ArgumentException("\"pngBase64\" or \"imagePath\" is required");
                     byte[] rgba = PngDecoder.DecodeRgba(png, out int w, out int h);
                     string? ns = Str(a, "namespace");
-                    return ApplyEdit(s, $"replace {tif}", p => PackageEdits.ReplaceTexture(p, tif, ns, rgba, w, h));
+                    return ApplyEdit(s, Str(a, "label") ?? $"replace {tif}", p => PackageEdits.ReplaceTexture(p, tif, ns, rgba, w, h));
                 }
                 case "addAnimation":
                 {
@@ -389,16 +399,16 @@ namespace MapBuilder.Server.Services
                     string from = Str(a, "from") ?? throw new ArgumentException("\"from\" is required");
                     string to = Str(a, "to") ?? throw new ArgumentException("\"to\" is required");
                     string? visual = Str(a, "visual");
-                    return ApplyEdit(s, $"retexture {model} {from} -> {to}", p => PackageEdits.RetextureModel(p, archive, model, from, to, visual));
+                    return ApplyEdit(s, Str(a, "label") ?? $"retexture {model} {from} -> {to}", p => PackageEdits.RetextureModel(p, archive, model, from, to, visual));
                 }
                 case "tintVertexColors":
                 {
                     string archive = Str(a, "archive") ?? throw new ArgumentException("\"archive\" is required");
                     string model = Str(a, "model") ?? throw new ArgumentException("\"model\" is required");
-                    float[] mul = Floats(a, "multiply") ?? new[] { 1f, 1f, 1f };
-                    float[]? add = Floats(a, "add");
+                    float[] mul = Vec(a, "multiply", 3) ?? new[] { 1f, 1f, 1f };
+                    float[]? add = Vec(a, "add", 3);
                     float? alpha = a.TryGetProperty("alpha", out var al) && al.ValueKind == JsonValueKind.Number ? al.GetSingle() : null;
-                    return ApplyEdit(s, $"tint {model}", p => PackageEdits.TintVertexColors(p, archive, model, mul, add, Str(a, "visual"), Str(a, "texture"), alpha));
+                    return ApplyEdit(s, Str(a, "label") ?? $"tint {model}", p => PackageEdits.TintVertexColors(p, archive, model, mul, add, Str(a, "visual"), Str(a, "texture"), alpha));
                 }
                 default:
                     throw new ArgumentException($"Unknown op '{op}'");
@@ -411,13 +421,13 @@ namespace MapBuilder.Server.Services
         /// </summary>
         private static float[] VertexTransform(AssetSession s, string archive, string model, JsonElement a, List<int>? chunks, Dictionary<int, int[]>? verts)
         {
-            float[] t = Floats(a, "translate") ?? new float[3];
-            float[] r = Floats(a, "rotate") ?? new float[3];
+            float[] t = Vec(a, "translate", 3) ?? new float[3];
+            float[] r = Vec(a, "rotate", 3) ?? new float[3];
             float[] sc = a.TryGetProperty("scale", out var sv) && sv.ValueKind == JsonValueKind.Number
-                ? new[] { sv.GetSingle(), sv.GetSingle(), sv.GetSingle() }
-                : Floats(a, "scale") ?? new[] { 1f, 1f, 1f };
-            if (t.Length != 3 || r.Length != 3 || sc.Length != 3) throw new ArgumentException("translate / rotate / scale need 3 values");
-            float[]? pivot = Floats(a, "pivot");
+                ? new[] { Number(sv, "scale"), Number(sv, "scale"), Number(sv, "scale") }
+                : Vec(a, "scale", 3) ?? new[] { 1f, 1f, 1f };
+            if (sc.Any(x => x == 0)) throw new ArgumentException("\"scale\" must not be 0");
+            float[]? pivot = Vec(a, "pivot", 3);
             if (pivot == null)
             {
                 var mesh = ZipperModelMesh.Build(s.Package, s.Package.FindModel(archive, model) ?? throw new KeyNotFoundException($"Model {archive}:{model} not found"));
@@ -461,8 +471,12 @@ namespace MapBuilder.Server.Services
         {
             if (!a.TryGetProperty("faces", out var f) || f.ValueKind != JsonValueKind.Object)
                 throw new ArgumentException("\"faces\" {geometryOffset: [triangle indices]} is required");
-            return f.EnumerateObject().ToDictionary(p => int.Parse(p.Name), p => p.Value.EnumerateArray().Select(x => x.GetInt32()).ToArray());
+            return f.EnumerateObject().ToDictionary(p => OffsetKey(p.Name, "faces"), p => p.Value.EnumerateArray().Select(x => x.GetInt32()).ToArray());
         }
+
+        // An object key that is a chunk's geometryOffset ("faces" / "vertices" maps).
+        private static int OffsetKey(string key, string field) =>
+            int.TryParse(key, out int v) ? v : throw new ArgumentException($"\"{field}\" keys are geometry offsets (numbers), not '{key}'");
 
         private static MeshTopology.InputMesh ArraysMesh(JsonElement me)
         {
@@ -510,6 +524,122 @@ namespace MapBuilder.Server.Services
             string label = Str(a, "label") ?? string.Join("; ", labels);
             if (merged.Count > 0) s.Undo.Push((label, merged));
             return new { revision = s.Revision, description = label, results };
+        }
+
+        /// <summary>
+        /// Runs an edit (a batch too) and takes it back: the answer says what it would do (the archives it changes,
+        /// the indices it would add) while the session, its history and its revision stay as they were.
+        /// </summary>
+        private static object DryRun(AssetSession s, JsonElement a)
+        {
+            var node = System.Text.Json.Nodes.JsonNode.Parse(a.GetRawText())!.AsObject();
+            node.Remove("dryRun");
+            int depth = s.Undo.Count, revision = s.Revision;
+            var redo = s.Redo.Reverse().ToList();
+            var dirty = s.Dirty.ToList();
+            object result;
+            try { result = Edit(s, node.ToJsonString()); }
+            finally
+            {
+                while (s.Undo.Count > depth) UndoRedo(s, undo: true);
+                s.Redo.Clear();
+                foreach (var entry in redo) s.Redo.Push(entry);
+                s.Dirty.Clear();
+                s.Dirty.UnionWith(dirty);
+                s.Revision = revision;
+            }
+            return new { dryRun = true, wouldDo = result };
+        }
+
+        /// <summary>The undo and redo steps (most recent first) and the revision.</summary>
+        private static object History(AssetSession s) => new
+        {
+            revision = s.Revision,
+            undo = s.Undo.Select(u => new { description = u.Description, archives = u.Before.Keys.OrderBy(k => k).ToList() }).ToList(),
+            redo = s.Redo.Select(u => new { description = u.Description, archives = u.Before.Keys.OrderBy(k => k).ToList() }).ToList(),
+            dirty = s.Dirty.OrderBy(x => x).ToList(),
+        };
+
+        private sealed record ValidateArgs(long? VramBudget);
+
+        /// <summary>
+        /// A map lint: what would break or look wrong in game. Problems are {severity: error | warning | info, code,
+        /// message, and the geoIndex / clutterIndex / point / texture it is about}.
+        /// </summary>
+        private static object Validate(AssetSession s, string? json)
+        {
+            var args = Parse<ValidateArgs>(json) ?? new ValidateArgs(null);
+            var problems = new List<Dictionary<string, object?>>();
+            void Add(string severity, string code, string message, params (string Key, object? Value)[] about)
+            {
+                var p = new Dictionary<string, object?> { ["severity"] = severity, ["code"] = code, ["message"] = message };
+                foreach (var (k, v) in about) p[k] = v;
+                problems.Add(p);
+            }
+
+            // Scene and clutter: references to models the package does not have, and broken transforms.
+            var map = s.Package.MapScene();
+            if (map == null) Add("error", "no-map-scene", "No GEO archive has a worldmodel, so the package is not a map");
+            Func<string, bool> resolves = n => s.Package.ResolveModel(n) != null;
+            var instances = map == null ? new List<SceneInstances.Instance>() : SceneInstances.Collect(map.Value.Scene.MapRoot, resolves);
+            if (s.Package.Entry(PackageEdits.ClutterLeaf) is { } clutter)
+                instances.AddRange(SceneInstances.FromClutter(ClutterFile.Parse(s.Package.Container(clutter.Leaf)), resolves));
+            foreach (var i in instances)
+            {
+                (string, object?) at = i.ClutterIndex >= 0 ? ("clutterIndex", i.ClutterIndex) : ("geoIndex", i.Node?.Index);
+                if (i.Kind is "reference" or "clutter" && !i.Resolved)
+                    Add("error", "missing-model", $"{i.InstanceName} places {i.ModelName}, which the package does not have", at);
+                if (!i.Matrix.All(float.IsFinite))
+                    Add("error", "bad-transform", $"{i.InstanceName} has a non-finite transform", at);
+                else if (MathF.Sqrt(i.Matrix[0] * i.Matrix[0] + i.Matrix[1] * i.Matrix[1] + i.Matrix[2] * i.Matrix[2]) < 1e-4f)
+                    Add("warning", "zero-scale", $"{i.InstanceName} has (almost) zero scale", at);
+            }
+
+            // AIMAPS: duplicate names, and placed items outside the AI map (players cannot reach them).
+            var mps = s.Package.Entries.FirstOrDefault(e => e.Leaf.EndsWith(".MPS", StringComparison.OrdinalIgnoreCase));
+            if (mps == null) Add("warning", "no-aimaps", "The package has no AIMAPS.MPS (no spawn points)");
+            else
+            {
+                var grid = MpsFile.Parse(mps.Data).Maps.FirstOrDefault();
+                var points = MapPoints.Parse(mps.Data, grid);
+                foreach (var g in points.GroupBy(p => p.Name, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1))
+                    Add("error", "duplicate-point", $"{g.Count()} points are named {g.Key}", ("point", g.Key));
+                if (!points.Any(p => p.Kind == "start")) Add("warning", "no-start", "AIMAPS has no start points");
+                if (grid != null)
+                    foreach (var i in instances.Where(i => i.Kind is "reference" or "clutter" && i.Matrix.All(float.IsFinite)))
+                        if (i.Matrix[12] < grid.MinX || i.Matrix[12] > grid.MaxX || i.Matrix[14] < grid.MinZ || i.Matrix[14] > grid.MaxZ)
+                            Add("info", "outside-ai-map", $"{i.InstanceName} at ({i.Matrix[12]:0.#}, {i.Matrix[14]:0.#}) is outside the AI map",
+                                i.ClutterIndex >= 0 ? ("clutterIndex", i.ClutterIndex) : ("geoIndex", i.Node?.Index));
+            }
+
+            // Textures: names retail models cannot hold, and the total the map asks VRAM for.
+            long textureBytes = 0;
+            int textures = 0;
+            foreach (var e in s.Package.Entries.Where(e => e.Kind == "txr"))
+            {
+                IReadOnlyList<ZedNode> nodes;
+                try { nodes = s.Package.Container(e.Leaf).Nodes; } catch (InvalidDataException) { continue; }
+                for (int i = 0; i + 1 < nodes.Count; i++)
+                {
+                    if (!nodes[i].Name.EndsWith(".tif", StringComparison.OrdinalIgnoreCase) || nodes[i + 1].Name != "texdat") continue;
+                    textures++;
+                    textureBytes += nodes[i + 1].Data.Length;
+                    if (nodes[i].Name.Length > 15)
+                        Add("warning", "long-texture-name", $"{nodes[i].Name} is longer than 15 characters: retail models cannot name it", ("texture", nodes[i].Name));
+                }
+            }
+            if (args.VramBudget is long budget && textureBytes > budget)
+                Add("warning", "vram-budget", $"Textures take {textureBytes:N0} bytes, over the {budget:N0} budget");
+
+            return new
+            {
+                ok = problems.All(p => (string)p["severity"]! != "error"),
+                counts = problems.GroupBy(p => (string)p["severity"]!).ToDictionary(g => g.Key, g => g.Count()),
+                instances = instances.Count,
+                textures,
+                textureBytes,
+                problems,
+            };
         }
 
         // ------------------------------------------------------------------ animations
@@ -761,13 +891,8 @@ namespace MapBuilder.Server.Services
         /// <summary>A transform from <c>matrix</c>, or <c>position</c>/<c>yaw</c>/<c>scale</c> over <paramref name="current"/>.</summary>
         private static float[] Placement(JsonElement a, float[] current)
         {
-            if (Floats(a, "matrix") is { } m)
-            {
-                if (m.Length != 16) throw new ArgumentException("\"matrix\" needs 16 floats");
-                return m;
-            }
-            float[] pos = Floats(a, "position") ?? new[] { current[12], current[13], current[14] };
-            if (pos.Length != 3) throw new ArgumentException("\"position\" needs [x, y, z]");
+            if (Vec(a, "matrix", 16) is { } m) return m;
+            float[] pos = Vec(a, "position", 3) ?? new[] { current[12], current[13], current[14] };
             bool rotates = a.TryGetProperty("yaw", out _) || a.TryGetProperty("scale", out _);
             if (!rotates)
             {
@@ -775,8 +900,9 @@ namespace MapBuilder.Server.Services
                 moved[12] = pos[0]; moved[13] = pos[1]; moved[14] = pos[2];
                 return moved;
             }
-            float yaw = a.TryGetProperty("yaw", out var y) ? y.GetSingle() : Matrix4.YawOf(current);
-            float scale = a.TryGetProperty("scale", out var sc) ? sc.GetSingle() : Matrix4.ScaleOf(current);
+            float yaw = a.TryGetProperty("yaw", out var y) ? Number(y, "yaw") : Matrix4.YawOf(current);
+            float scale = a.TryGetProperty("scale", out var sc) ? Number(sc, "scale") : Matrix4.ScaleOf(current);
+            if (scale <= 0) throw new ArgumentException("\"scale\" must be greater than 0");
             return Matrix4.Compose(pos[0], pos[1], pos[2], yaw, scale);
         }
 
@@ -789,15 +915,29 @@ namespace MapBuilder.Server.Services
         private static float[]? Floats(JsonElement a, string name) =>
             a.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Array ? v.EnumerateArray().Select(x => x.GetSingle()).ToArray() : null;
 
+        /// <summary>
+        /// An optional array of finite numbers with one of <paramref name="lengths"/>; null when absent. Wrong
+        /// lengths, non-numbers and values a float cannot hold are argument errors, never index errors later.
+        /// </summary>
+        private static float[]? Vec(JsonElement a, string name, params int[] lengths)
+        {
+            if (!a.TryGetProperty(name, out var v) || v.ValueKind == JsonValueKind.Null) return null;
+            if (v.ValueKind != JsonValueKind.Array || !lengths.Contains(v.GetArrayLength()))
+                throw new ArgumentException($"\"{name}\" needs {string.Join(" or ", lengths)} numbers");
+            return v.EnumerateArray().Select(x => Number(x, name)).ToArray();
+        }
+
+        private static float Number(JsonElement x, string name)
+        {
+            if (x.ValueKind != JsonValueKind.Number) throw new ArgumentException($"\"{name}\" takes numbers");
+            float f = x.GetSingle();
+            return float.IsFinite(f) ? f : throw new ArgumentException($"\"{name}\" is out of range ({x.GetRawText()})");
+        }
+
         // ------------------------------------------------------------------ save
 
-        private sealed record SaveArgs(string? Mode, string? OutputPath, string? PackName, string? FolderCard, List<string>? Leaves);
+        private sealed record SaveArgs(string? Mode, string? OutputPath, string? PackName, string? FolderCard, List<string>? Leaves, string? ArchiveDir = null);
 
-        /// <summary>
-        /// <c>{"mode":"zdb","outputPath":...}</c> writes the package (over the source keeps a .bak) ;
-        /// <c>{"mode":"pack","packName":"mxxxx","outputPath":dir,"folderCard":dir}</c> writes a memory-card CDB of the
-        /// changed archives. <c>leaves</c> defaults to every archive changed in the session.
-        /// </summary>
         /// <summary>
         /// A SOCOM II model (character, weapon, vehicle, prop) as a SOCOM 3 / Combined Assault package: a ZDB v6
         /// &lt;outputDir&gt;/&lt;MODEL&gt;.ZDB with an ASST library, the chosen clips as a BONE bank and a NAMS name list.
@@ -822,6 +962,12 @@ namespace MapBuilder.Server.Services
 
         private sealed record CaExportArgs(string? ModelName, string? OutputDir, string[]? Clips);
 
+        /// <summary>
+        /// <c>{"mode":"zdb","outputPath":...}</c> writes the package (over the source keeps a .bak) ;
+        /// <c>{"mode":"pack","packName":"mxxxx","outputPath":dir,"folderCard":dir}</c> writes a memory-card CDB of the
+        /// changed archives (a loose package's under <c>archiveDir</c>, default <c>RUN\MP\&lt;FOLDER&gt;</c>). <c>leaves</c>
+        /// defaults to every archive changed in the session.
+        /// </summary>
         private static object Save(AssetSession s, string? json)
         {
             var args = Parse<SaveArgs>(json) ?? new SaveArgs("zdb", null, null, null, null);
@@ -832,16 +978,40 @@ namespace MapBuilder.Server.Services
             {
                 case "zdb":
                     written = PackageSave.Write(s.Package, leaves, args.OutputPath);
+                    if (SavesOverSource(s, args.OutputPath))
+                    {
+                        foreach (string leaf in leaves)
+                        {
+                            s.Clean[leaf] = s.Package.Entry(leaf)!.Data;
+                            s.Dirty.Remove(leaf);
+                        }
+                        s.SourceStamp = SourceStampOf(s.OpenPath.Length > 0 ? s.OpenPath : s.Package.SourcePath);
+                    }
                     break;
                 case "pack":
                     string name = args.PackName ?? throw new ArgumentException("\"packName\" is required for a pack");
                     string dir = args.OutputPath ?? Path.Combine(Path.GetDirectoryName(s.Package.SourcePath)!, "packs", name);
-                    written = PackageSave.WritePack(s.Package, leaves, name, dir, args.FolderCard);
+                    written = PackageSave.WritePack(s.Package, leaves, name, dir, args.FolderCard, args.ArchiveDir);
                     break;
                 default:
                     throw new ArgumentException($"Unknown save mode '{args.Mode}' (zdb or pack)");
             }
             return new { written, leaves, revision = s.Revision };
+        }
+
+        // A ZDB saved over its own file, or a loose folder written back in place.
+        private static bool SavesOverSource(AssetSession s, string? outputPath) =>
+            outputPath == null
+            || (s.Package.IsZdb
+                ? Path.GetFullPath(outputPath).Equals(Path.GetFullPath(s.Package.SourcePath), StringComparison.OrdinalIgnoreCase)
+                : Path.TrimEndingDirectorySeparator(Path.GetFullPath(outputPath)).Equals(Path.GetDirectoryName(s.Package.SourcePath), StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>The open session with unsaved edits on <paramref name="path"/> (a package file or folder), or null.</summary>
+        internal static string? UnsavedSessionOn(string path)
+        {
+            string full = Path.GetFullPath(path);
+            return Sessions.Values.FirstOrDefault(s => s.Dirty.Count > 0 &&
+                (s.OpenPath.Equals(full, StringComparison.OrdinalIgnoreCase) || s.Package.SourcePath.Equals(full, StringComparison.OrdinalIgnoreCase)))?.Id;
         }
 
         internal static AssetSession? Find(string? id) =>
@@ -860,13 +1030,29 @@ namespace MapBuilder.Server.Services
             a.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt32() : null;
 
         /// <summary>The package an import reads from: an open session (its unsaved edits included), else the file.</summary>
-        private static ZipperPackage SourcePackage(string? sessionId, string? path)
+        private static (ZipperPackage Package, AssetSession? Session) SourceOf(string? sessionId, string? path)
         {
-            if (sessionId != null) return (Find(sessionId) ?? throw new KeyNotFoundException($"No asset session '{sessionId}'")).Package;
+            if (sessionId != null)
+            {
+                var found = Find(sessionId) ?? throw new KeyNotFoundException($"No asset session '{sessionId}'");
+                return (found.Package, found);
+            }
             if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("\"sourceSession\" or \"source\" (a package path) is required");
             string full = Path.GetFullPath(path);
-            return Sessions.Values.FirstOrDefault(x => x.Package.SourcePath.Equals(full, StringComparison.OrdinalIgnoreCase))?.Package
-                ?? ZipperPackage.Open(full);
+            var open = Sessions.Values.FirstOrDefault(x => x.OpenPath.Equals(full, StringComparison.OrdinalIgnoreCase) || x.Package.SourcePath.Equals(full, StringComparison.OrdinalIgnoreCase));
+            return open != null ? (open.Package, open) : (ZipperPackage.Open(full), null);
+        }
+
+        /// <summary>
+        /// Runs an import while the source session (when it is one) is not being edited. Two sessions importing from
+        /// each other at once could otherwise deadlock, so waiting gives up after a few seconds.
+        /// </summary>
+        private static T WithSource<T>(AssetSession? source, AssetSession target, Func<T> body)
+        {
+            if (source == null || ReferenceEquals(source, target)) return body();
+            if (!Monitor.TryEnter(source.Gate, TimeSpan.FromSeconds(5))) throw new InvalidOperationException("The source session is busy; try again");
+            try { return body(); }
+            finally { Monitor.Exit(source.Gate); }
         }
 
         // ------------------------------------------------------------------ session lifecycle
@@ -881,20 +1067,30 @@ namespace MapBuilder.Server.Services
                 if (TryOpenCa(full) is string ca) return ca;
                 // GTA: San Andreas (the disc image or GTA3.IMG) opens as a read-only GTA session.
                 if (Assets.GtaAssetService.TryOpen(full) is string gta) return gta;
-                // One session per package path: the editor and an agent opening the same map share it.
-                AssetSession? existing = Sessions.Values.FirstOrDefault(s => s.Package.SourcePath.Equals(full, StringComparison.OrdinalIgnoreCase));
-                // A session whose file changed on disk since (a save over it) is replaced, unless it holds unsaved edits.
-                if (existing != null && existing.Dirty.Count == 0 && existing.SourceStamp != SourceStampOf(full))
+                // One session per package path: the editor and an agent opening the same map share it. The lock keeps
+                // two opens at once from making two sessions.
+                lock (OpenGate)
                 {
-                    Sessions.TryRemove(existing.Id, out _);
-                    existing = null;
+                    AssetSession? existing = Sessions.Values.FirstOrDefault(s =>
+                        s.OpenPath.Equals(full, StringComparison.OrdinalIgnoreCase) || s.Package.SourcePath.Equals(full, StringComparison.OrdinalIgnoreCase));
+                    // A session whose file changed on disk since (another tool wrote it) is reloaded, unless it holds
+                    // unsaved edits. It keeps its id and moves its revision on, so the pages polling it reload too.
+                    AssetSession? reloaded = null;
+                    if (existing != null && existing.Dirty.Count == 0 && existing.SourceStamp != SourceStampOf(full))
+                    {
+                        lock (existing.Gate)
+                            reloaded = new AssetSession { Id = existing.Id, Package = ZipperPackage.Open(full), OpenPath = full, SourceStamp = SourceStampOf(full), Revision = existing.Revision + 1 };
+                        existing = null;
+                    }
+                    AssetSession session = existing ?? reloaded ?? new AssetSession { Id = NewId(full), Package = ZipperPackage.Open(full), OpenPath = full, SourceStamp = SourceStampOf(full) };
+                    Sessions[session.Id] = session;
+                    return Ok("ASSET_OPEN", new { reused = existing != null, status = StatusObject(session) });
                 }
-                AssetSession session = existing ?? new AssetSession { Id = NewId(full), Package = ZipperPackage.Open(full), SourceStamp = SourceStampOf(full) };
-                Sessions[session.Id] = session;
-                return Ok("ASSET_OPEN", new { reused = existing != null, status = StatusObject(session) });
             }
             catch (Exception ex) { return Responses.Error($"ASSET_OPEN error: {ex.Message}"); }
         }
+
+        private static readonly object OpenGate = new();
 
         private static DateTime SourceStampOf(string path) =>
             File.Exists(path) ? File.GetLastWriteTimeUtc(path) : Directory.GetLastWriteTimeUtc(path);
@@ -904,7 +1100,9 @@ namespace MapBuilder.Server.Services
         private static string HandleClose(string? id)
         {
             if (id != null && (CloseCa(id) || Assets.GtaAssetService.Close(id))) return Ok("ASSET_CLOSE", new { session = id, discardedEdits = 0 });
-            if (id == null || !Sessions.TryRemove(id, out var s)) return Responses.Error($"No asset session '{id}'");
+            if (Find(id) is not { } s) return Responses.Error($"No asset session '{id}'");
+            // Wait for an edit in progress on it to finish.
+            lock (s.Gate) Sessions.TryRemove(s.Id, out _);
             return Ok("ASSET_CLOSE", new { session = id, discardedEdits = s.Dirty.Count });
         }
 
@@ -921,7 +1119,9 @@ namespace MapBuilder.Server.Services
                 lock (s.Gate) { result = body(s); }
                 return Ok(command, result);
             }
-            catch (Exception ex) when (ex is ArgumentException or KeyNotFoundException or InvalidOperationException or InvalidDataException or NotSupportedException)
+            // Bad input and unreadable files are the caller's to fix: answer them, do not fail the request.
+            catch (Exception ex) when (ex is ArgumentException or KeyNotFoundException or InvalidOperationException or InvalidDataException
+                or NotSupportedException or IndexOutOfRangeException or FormatException or JsonException or IOException or UnauthorizedAccessException)
             {
                 return Responses.Error($"{command}: {ex.Message}");
             }
@@ -963,13 +1163,21 @@ namespace MapBuilder.Server.Services
             foreach (var (leaf, bytes) in changed)
             {
                 before[leaf] = s.Package.Entry(leaf)!.Data;
+                s.Clean.TryAdd(leaf, before[leaf]);
                 s.Package.ReplaceEntry(leaf, bytes);
-                s.Dirty.Add(leaf);
+                MarkDirty(s, leaf);
             }
             s.Undo.Push((description, before));
             s.Redo.Clear();
             s.Revision++;
             return new { revision = s.Revision, description, changed = changed.Keys.ToList() };
+        }
+
+        // A leaf is dirty while it differs from the bytes on disk (an undo back to them makes it clean again).
+        private static void MarkDirty(AssetSession s, string leaf)
+        {
+            if (s.Clean.TryGetValue(leaf, out var clean) && clean.AsSpan().SequenceEqual(s.Package.Entry(leaf)!.Data)) s.Dirty.Remove(leaf);
+            else s.Dirty.Add(leaf);
         }
 
         private static object UndoRedo(AssetSession s, bool undo)
@@ -983,7 +1191,7 @@ namespace MapBuilder.Server.Services
             {
                 current[leaf] = s.Package.Entry(leaf)!.Data;
                 s.Package.ReplaceEntry(leaf, bytes);
-                s.Dirty.Add(leaf);
+                MarkDirty(s, leaf);
             }
             to.Push((description, current));
             s.Revision++;
@@ -1260,11 +1468,12 @@ namespace MapBuilder.Server.Services
             };
         }
 
-        private sealed record SceneFilter(string? Kind, string? Query, int? Limit, bool? IncludeUnresolved);
+        private sealed record SceneFilter(string? Kind, string? Query, int? Limit, bool? IncludeUnresolved, int? Offset = null);
 
         private static object MapScene(AssetSession s, string? json)
         {
             var f = Parse<SceneFilter>(json) ?? new SceneFilter(null, null, null, null);
+            int offset = Math.Max(0, f.Offset ?? 0), limit = Math.Max(0, f.Limit ?? 500);
             var map = s.Package.MapScene() ?? throw new InvalidOperationException("The package has no map scene (no GEO with a worldmodel)");
             Func<string, bool> resolves = n => s.Package.ResolveModel(n) != null;
             var instances = SceneInstances.Collect(map.Scene.MapRoot, resolves);
@@ -1272,11 +1481,12 @@ namespace MapBuilder.Server.Services
                 instances.AddRange(SceneInstances.FromClutter(ClutterFile.Parse(s.Package.Container(clutter.Leaf)), resolves));
 
             var counts = instances.GroupBy(i => i.Kind).ToDictionary(g => g.Key, g => g.Count());
-            var selected = instances.Where(i =>
+            var matching = instances.Where(i =>
                     (f.IncludeUnresolved == true || i.Resolved) &&
                     (f.Kind == null || i.Kind.Equals(f.Kind, StringComparison.OrdinalIgnoreCase)) &&
                     (f.Query == null || i.ModelName.Contains(f.Query, StringComparison.OrdinalIgnoreCase) || i.Path.Contains(f.Query, StringComparison.OrdinalIgnoreCase)))
-                .Take(f.Limit ?? 500)
+                .ToList();
+            var selected = matching.Skip(offset).Take(limit)
                 .Select(i =>
                 {
                     var m = s.Package.ResolveModel(i.ModelName);
@@ -1294,7 +1504,8 @@ namespace MapBuilder.Server.Services
                         source = m == null ? null : $"{m.Archive}:{m.Name}",
                     };
                 }).ToList();
-            return new { sceneNamespace = map.Namespace, counts, returned = selected.Count, instances = selected };
+            int? nextOffset = offset + selected.Count < matching.Count ? offset + selected.Count : null;
+            return new { sceneNamespace = map.Namespace, counts, matched = matching.Count, offset, returned = selected.Count, nextOffset, instances = selected };
         }
 
         /// <summary>AIMAPS.MPS points (starts, waypoints) with world X / Z from the first AI map's grid.</summary>

@@ -1,5 +1,5 @@
-import type { MapInstanceWire, MapPointWire, ModelSummary, SessionStatus } from '../webview/model-editor/asset-client';
-import { fmt, movable, scaleOf, yawOf } from '../mapModel';
+import type { MapInstanceWire, MapPointWire, MapProblem, MapValidation, ModelSummary, SessionStatus } from '../webview/model-editor/asset-client';
+import { fmt, movable, scaleOf, sortProblems, yawOf } from '../mapModel';
 import { NumField } from './NumField';
 
 export type PropTab = 'item' | 'place' | 'points' | 'map';
@@ -54,6 +54,11 @@ interface PropsPanelProps {
   setAlignSurface: (on: boolean) => void;
   // Import from package… (a model from another package into this one).
   onImport: () => void;
+  // The map check (ASSET_VALIDATE): its last report, whether it is running, and selecting what a problem is about.
+  check: MapValidation | null;
+  checking: boolean;
+  onCheck: () => void;
+  onPickProblem: (problem: MapProblem) => void;
 }
 
 export function PropsPanel(p: PropsPanelProps) {
@@ -89,6 +94,7 @@ export function PropsPanel(p: PropsPanelProps) {
                 </dl>
               </div>
             )}
+            <ProblemsCard {...p} />
             <div className="me-card">
               <div className="me-card-title">Session</div>
               <div className="me-note">Edits stay in the session until you save. File › Save copy… writes a .ZDB; File › Export memory-card pack… writes a CDB.</div>
@@ -96,6 +102,37 @@ export function PropsPanel(p: PropsPanelProps) {
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+function ProblemsCard(p: PropsPanelProps) {
+  const c = p.check;
+  const summary = !c ? 'Not checked yet.'
+    : c.problems.length === 0 ? 'No problems found.'
+      : (['error', 'warning', 'info'] as const).filter(k => c.counts[k]).map(k => `${c.counts[k]} ${k}${c.counts[k] === 1 ? '' : 's'}`).join(', ');
+  return (
+    <div className="me-card">
+      <div className="me-card-title">Problems</div>
+      <div className="mb-problems-head">
+        <span className={`me-note${c && !c.ok ? ' mb-problem-error' : ''}`}>{p.checking ? 'Checking…' : summary}</span>
+        <button className="lm-tool-btn" disabled={p.checking || !p.status} onClick={p.onCheck}>Check map</button>
+      </div>
+      {c && c.problems.length > 0 && (
+        <ul className="mb-problems">
+          {sortProblems(c.problems).map((pr, i) => {
+            const target = pr.point || typeof pr.geoIndex === 'number' || typeof pr.clutterIndex === 'number';
+            return (
+              <li key={i} className={`mb-problem mb-problem-${pr.severity}${target ? ' mb-problem-link' : ''}`} title={pr.code}
+                onClick={target ? () => p.onPickProblem(pr) : undefined}>
+                <span className="mb-problem-badge">{pr.severity}</span>
+                <span>{pr.message}</span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {c && <div className="lm-muted me-note">{c.instances} instances, {c.textures} textures ({(c.textureBytes / 1024).toFixed(0)} KB).</div>}
     </div>
   );
 }

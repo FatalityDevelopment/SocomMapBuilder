@@ -6,7 +6,7 @@ import { useRef, type MutableRefObject } from 'react';
 import type { ModelSummary } from './webview/model-editor/asset-client';
 import type { MapTool, MapViewport } from './viewport/mapViewport';
 import type { PropTab } from './components/PropsPanel';
-import { movable, placementOp, yawOf } from './mapModel';
+import { addedClutter, deleteOps, duplicateOps, movable, pickDuplicates, placementOp, yawOf } from './mapModel';
 import { SHORTCUTS } from './mapShortcuts';
 import type { useMapSession } from './useMapSession';
 
@@ -51,10 +51,7 @@ export function useMapEdits(session: ReturnType<typeof useMapSession>, viewportR
   const deleteSelection = async () => {
     const sel = selectedInstances();
     if (!sel.length) { return; }
-    // Highest index first so earlier deletes do not shift later ones.
-    const geo = sel.filter(i => i.geoIndex !== null && i.clutterIndex === null).sort((a, b) => b.geoIndex! - a.geoIndex!).map(i => ({ op: 'deleteInstance', geoIndex: i.geoIndex }));
-    const clutter = sel.filter(i => i.clutterIndex !== null).sort((a, b) => b.clutterIndex! - a.clutterIndex!).map(i => ({ op: 'deleteClutter', clutterIndex: i.clutterIndex }));
-    const ops = [...geo, ...clutter];
+    const ops = deleteOps(sel);
     viewportRef.current?.clearSelection();
     await edit(`delete ${ops.length === 1 ? sel[0].model : ops.length + ' instances'}`, ops.length === 1 ? ops[0] : { op: 'batch', ops });
   };
@@ -63,24 +60,12 @@ export function useMapEdits(session: ReturnType<typeof useMapSession>, viewportR
     const sel = selectedInstances();
     if (!sel.length) { return; }
     const list = instancesRef.current;
-    const beforeGeo = list.filter(i => i.clutterIndex === null).map(i => `${i.model}|${i.path}`);
-    // GEO copies insert nodes: go from the highest index down so the earlier indices stay valid.
-    const geo = sel.filter(i => i.clutterIndex === null).sort((a, b) => b.geoIndex! - a.geoIndex!).map(i => ({ op: 'duplicateInstance', geoIndex: i.geoIndex }));
-    const clutter = sel.filter(i => i.clutterIndex !== null).map(i => ({ op: 'addClutter', model: i.model, matrix: i.matrix }));
-    const ops = [...geo, ...clutter];
+    const ops = duplicateOps(sel);
     const raw = await edit(`duplicate ${ops.length === 1 ? sel[0].model : ops.length + ' instances'}`, ops.length === 1 ? ops[0] : { op: 'batch', ops }) as
       { newClutterIndex?: number; results?: Array<{ newClutterIndex?: number }> } | null;
     if (!raw) { return; }
     // Copies come back selected with the Move tool, ready to place.
-    const newClutter = new Set([raw.newClutterIndex, ...(raw.results ?? []).map(r => r?.newClutterIndex)].filter((v): v is number => typeof v === 'number' && v >= 0));
-    // A GEO copy has its original's path and lands right after it: walk old and new in order, the extras are copies.
-    const picked: number[] = [];
-    let k = 0;
-    instancesRef.current.forEach((inst, i) => {
-      if (inst.clutterIndex !== null) { if (newClutter.has(inst.clutterIndex)) { picked.push(i); } return; }
-      if (k < beforeGeo.length && beforeGeo[k] === `${inst.model}|${inst.path}`) { k++; } else { picked.push(i); }
-    });
-    viewportRef.current?.select(picked);
+    viewportRef.current?.select(pickDuplicates(list, instancesRef.current, addedClutter(raw)));
     setTool('move');
   };
 
@@ -102,7 +87,7 @@ export function useMapEdits(session: ReturnType<typeof useMapSession>, viewportR
     const raw = await edit(`paste ${ops.length === 1 ? items[0].model : ops.length + ' placements'}`, ops.length === 1 ? ops[0] : { op: 'batch', ops }) as
       { newClutterIndex?: number; results?: Array<{ newClutterIndex?: number }> } | null;
     if (!raw) { return; }
-    const added = new Set([raw.newClutterIndex, ...(raw.results ?? []).map(r => r?.newClutterIndex)].filter((v): v is number => typeof v === 'number' && v >= 0));
+    const added = addedClutter(raw);
     viewportRef.current?.select(instancesRef.current.map((inst, i) => inst.clutterIndex !== null && added.has(inst.clutterIndex) ? i : -1).filter(i => i >= 0));
     setTool('move');
   };

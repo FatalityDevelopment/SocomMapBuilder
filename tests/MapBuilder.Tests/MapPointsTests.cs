@@ -7,7 +7,7 @@ namespace MapBuilder.Tests
     public sealed class MapPointsTests
     {
         // An MPS with one 100 x 100 AI grid (10 units a cell from 0, 0) and a two-point table after it.
-        private static byte[] Mps()
+        internal static byte[] Mps()
         {
             var b = new byte[0x200];
             BitConverter.GetBytes(1u).CopyTo(b, 0x04);

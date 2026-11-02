@@ -18,7 +18,7 @@ namespace MapBuilder.Server.Services
 
         public void Register(CommandRegistry reg)
         {
-            reg.Add(c => Run("PACKAGE_EDIT", () => Edit(c.InputPath, c.OutputPath, c.Data)), "PACKAGE_EDIT");
+            reg.Add(c => Run("PACKAGE_EDIT", () => Edit(c.InputPath, c.OutputPath, c.Data, c.DryRun)), "PACKAGE_EDIT");
         }
 
         private static string Run(string command, Func<object> body) => Responses.Run(command, body);
@@ -37,11 +37,14 @@ namespace MapBuilder.Server.Services
         /// first, then nested archive records [{name, index}]; in a loose .ZED / .ZAR, only the records (or nothing
         /// for the file itself). "add" takes {name?, file}; "replace" / "remove" take {index, name}.
         /// </summary>
-        private static object Edit(string? input, string? output, string? json)
+        private static object Edit(string? input, string? output, string? json, bool dryRun = false)
         {
             if (string.IsNullOrWhiteSpace(input) || !File.Exists(input)) throw new ArgumentException("InputPath (a .ZDB, .CDB, .ZAR or .ZED) is required");
             if (string.IsNullOrWhiteSpace(json)) throw new ArgumentException("Data (the operations) is required");
             string target = Path.GetFullPath(string.IsNullOrWhiteSpace(output) ? input : output);
+            // Writing under an open session's unsaved edits would make its next save write over this one (or fail).
+            if (ZipperAssetService.UnsavedSessionOn(target) is { } busy)
+                throw new InvalidOperationException($"{Path.GetFileName(target)} has unsaved edits in session {busy}; save or close it first");
             if (!Path.GetExtension(target).Equals(Path.GetExtension(input), StringComparison.OrdinalIgnoreCase))
                 throw new ArgumentException($"OutputPath must be a {Path.GetExtension(input).ToUpperInvariant()} like the source");
             using var doc = JsonDocument.Parse(json);
@@ -76,6 +79,7 @@ namespace MapBuilder.Server.Services
                 }
             }
 
+            if (dryRun) return new { dryRun = true, wouldWrite = target, size = bytes.Length, added = report.Added, replaced = report.Replaced, removed = report.Removed };
             SafeFile.Write(target, bytes);
             return new { written = target, added = report.Added, replaced = report.Replaced, removed = report.Removed };
         }

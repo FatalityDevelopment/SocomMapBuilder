@@ -44,7 +44,7 @@ namespace MapBuilder.Server.Services
             reg.Add(c => HandleWriteWeapon(
                 c.InputPath, c.OutputPath, c.WeaponNewName,
                 c.WeaponModelData, c.WeaponTextureData, c.WeaponPaletteData,
-                c.WeaponTextureEntryName, c.WeaponPaletteEntryName), "ZIPPER_WRITE_WEAPON");
+                c.WeaponTextureEntryName, c.WeaponPaletteEntryName, c.DryRun), "ZIPPER_WRITE_WEAPON");
         }
 
         // -------------------------------------------------------------------
@@ -477,7 +477,7 @@ namespace MapBuilder.Server.Services
         private string HandleWriteWeapon(
             string? inputPath, string? outputPath, string? newName,
             string? modelB64, string? textureB64, string? paletteB64,
-            string? textureEntryName, string? paletteEntryName)
+            string? textureEntryName, string? paletteEntryName, bool dryRun = false)
         {
             string? err = RequireFile(inputPath, out string path);
             if (err != null) return Responses.Error(err);
@@ -490,6 +490,14 @@ namespace MapBuilder.Server.Services
             {
                 using var zed = ZedContainer.Open(path);
                 var added = new List<object>();
+                // New entries never shadow existing ones: the game finds a record by name, first match.
+                var names = new List<string>();
+                if (!string.IsNullOrWhiteSpace(modelB64)) names.Add(newName!);
+                if (!string.IsNullOrWhiteSpace(textureB64)) names.Add(textureEntryName ?? DefaultTextureEntryName(newName!));
+                if (!string.IsNullOrWhiteSpace(paletteB64)) names.Add(paletteEntryName ?? DefaultPaletteEntryName(newName!));
+                foreach (string n in names)
+                    if (zed.FindNode(n) != null) return Responses.Error($"ZIPPER_WRITE_WEAPON: {Path.GetFileName(path)} already has an entry named {n}; pick another name");
+                if (names.Distinct(StringComparer.Ordinal).Count() != names.Count) return Responses.Error("ZIPPER_WRITE_WEAPON: the new entries need different names");
 
                 if (!string.IsNullOrWhiteSpace(modelB64))
                 {
@@ -514,8 +522,13 @@ namespace MapBuilder.Server.Services
                     added.Add(new { name = node.Name, kind = "palette", bytes = palBytes.Length });
                 }
 
-                string saveTo = string.IsNullOrWhiteSpace(outputPath) ? path : outputPath!;
-                SafeFile.Write(saveTo, zed.ToBytes());
+                string saveTo = Path.GetFullPath(string.IsNullOrWhiteSpace(outputPath) ? path : outputPath!);
+                if (ZipperAssetService.UnsavedSessionOn(saveTo) is { } busy)
+                    return Responses.Error($"ZIPPER_WRITE_WEAPON: {Path.GetFileName(saveTo)} has unsaved edits in session {busy}; save or close it first");
+                byte[] bytes = zed.ToBytes();
+                if (dryRun)
+                    return Responses.Ok("ZIPPER_WRITE_WEAPON", new { dryRun = true, wouldWrite = saveTo, size = bytes.Length, added });
+                SafeFile.Write(saveTo, bytes);
 
                 return Responses.Json(new CommandResponse
                 {

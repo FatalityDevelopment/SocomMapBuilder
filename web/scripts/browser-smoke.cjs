@@ -296,16 +296,16 @@ async function checkMcpBridge(browser) {
     assert.equal(initial.serverInfo.name, 'mapbuilder');
     const tools = await rpc('tools/list');
     assert(tools.tools.some(tool => tool.name === 'ui_view'));
-    await rpc('tools/call', { name: 'ui_view', arguments: { lighting: 'studio', backdrop: 'blueprint' } });
+    await rpc('tools/call', { name: 'ui_view', arguments: { lighting: 'studio', backdrop: 'blueprint', reason: 'browser smoke check' } });
     await page.waitForFunction(() => document.body.classList.contains('bg-blueprint')
       && [...document.querySelectorAll('.mp-app .me-seg button.on')].some(button => button.textContent === 'Studio'));
-    const state = await rpc('tools/call', { name: 'ui_state', arguments: {} });
+    const state = await rpc('tools/call', { name: 'ui_state', arguments: { reason: 'browser smoke check' } });
     const data = JSON.parse(state.content.find(content => content.type === 'text').text);
     assert.equal(data.state.pages.map.lighting, 'studio');
     assert.equal(data.state.backdrop, 'blueprint');
-    const screenshot = await rpc('tools/call', { name: 'ui_screenshot', arguments: { maxSize: 320 } });
+    const screenshot = await rpc('tools/call', { name: 'ui_screenshot', arguments: { maxSize: 320, reason: 'browser smoke check' } });
     assert(screenshot.content.some(content => content.type === 'image' && content.data.length > 100));
-    await rpc('tools/call', { name: 'ui_view', arguments: { lighting: 'unlit', backdrop: 'dark' } });
+    await rpc('tools/call', { name: 'ui_view', arguments: { lighting: 'unlit', backdrop: 'dark', reason: 'browser smoke check' } });
     await page.waitForFunction(() => !document.body.classList.contains('bg-blueprint')
       && [...document.querySelectorAll('.mp-app .me-seg button.on')].some(button => button.textContent === 'Unlit'));
     await page.reload();

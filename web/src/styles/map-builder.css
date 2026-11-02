@@ -33,3 +33,15 @@ app-map-editor-page { display: block; height: 100vh; }
 .mp-load-notice summary { cursor: pointer; }
 .mp-load-notice button { margin-top: 6px; }
 .mp-load-notice ul { padding-left: 18px; }
+
+/* Map tab: the map check's problems. */
+.mb-problems-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.mb-problems { list-style: none; margin: 6px 0 0; padding: 0; max-height: 260px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+.mb-problem { display: flex; gap: 6px; align-items: baseline; font-size: 11px; line-height: 1.35; padding: 3px 4px; border-radius: 3px; }
+.mb-problem-link { cursor: pointer; }
+.mb-problem-link:hover { background: rgba(255, 255, 255, 0.06); }
+.mb-problem-badge { flex: none; font-size: 9px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; padding: 1px 4px; border-radius: 2px; }
+.mb-problem-error .mb-problem-badge { color: #f48771; background: rgba(244, 135, 113, 0.14); }
+.mb-problem-warning .mb-problem-badge { color: #e2c08d; background: rgba(226, 192, 141, 0.14); }
+.mb-problem-info .mb-problem-badge { color: #75beff; background: rgba(117, 190, 255, 0.14); }
+.mb-problem-error { color: #f48771; }
