@@ -22,8 +22,10 @@ The goal: people **and AI over MCP** can add, edit and delete every SOCOM asset 
 
 ## In progress / next up
 
-- **Now:** 1a, making the server testable.
-- **Next:** 1b, characterisation tests for the edit ops.
+- **Now:** `McpServerTests.cs`, then the 1c hardening fixes.
+- **Next:** a decodable synthetic mesh plus a TXR/PAL fixture, so the mesh, texture and import ops can be pinned.
+- Note for fixtures: a ZDB of **type 1** (header `0xC8`/`0x58`) is detected as SOCOM 3 / CA and opens read-only. SOCOM II packages are type 2.
+- Note for running tests while the app is open: `dotnet run` locks `server/bin/Debug`, so run `dotnet test tests/MapBuilder.Tests -c Release`.
 
 ## Status checklist
 
@@ -33,18 +35,20 @@ The goal: people **and AI over MCP** can add, edit and delete every SOCOM asset 
 ### Phase 1: lock down what exists
 
 **1a. Testability**
-- [ ] `InternalsVisibleTo` for `MapBuilder.Tests` in `server/MapBuilder.Server.csproj`; the test project references the server.
-- [ ] `tests/MapBuilder.Tests/Fixtures/SyntheticPackage.cs`: an in-memory package with a GEO (worldmodel and a scene node), CLUTTER.ZAR, AIMAPS.MPS, an MDL mesh and a TXR/PAL pair.
+- [x] `InternalsVisibleTo` for `MapBuilder.Tests` in `server/MapBuilder.Server.csproj`; the test project references the server (plus `Microsoft.AspNetCore.App`).
+- [x] `tests/MapBuilder.Tests/Fixtures/SyntheticPackage.cs`: a loose package folder `TST/` (GEO with worldmodel and two `crate` references, MDL records `crate` and `tree`, CLUTTER.ZAR with two `tree` placements, AIMAPS.MPS), `WriteZdb()` for a ZDB copy, and `Backend`, which runs commands like `/api/command`. *Left over:* the MDL records are opaque bytes, so mesh ops can't run on it yet, and there is no TXR/PAL pair. A decodable synthetic mesh is the next fixture to add.
 
 **1b. Characterisation tests** (pin today's behaviour)
-- [ ] `EditOpsTests.cs`: each `ASSET_EDIT` op, then undo back to the original bytes, then redo.
-- [ ] `BatchTests.cs`: a batch is one undo step; a failing op rolls the batch back.
-- [ ] `SessionTests.cs`: join an existing session, reopen after a disk change, save zdb and reopen, pack mode.
-- [ ] `ImportTests.cs`: importModel and importTexture between sessions, with undo.
-- [ ] `PackageEditTests.cs`: PACKAGE_EDIT add, replace, remove and merge.
+- [~] `EditOpsTests.cs`: the map ops (clutter move/add/delete, instance move/duplicate/place/delete, movePoint, setPoint), each followed by undo back to the original bytes and redo; plus revision/label/dirty and unknown op/session. *Left over:* setVertices, transformVertices, deleteFaces/duplicateFaces, addMesh, the texture ops (addTexture/addPalette/replaceTexture/retexture/tint) and the animation ops all need the mesh/TXR fixture.
+- [x] Batches are in `SessionTests.cs`: one undo step, a failing op rolls back the ops before it, a new edit clears redo, empty history.
+- [x] `SessionTests.cs`: join an existing session, missing path, ZDB save keeps `.bak`, save as a copy, no-changes save, pack contents and pack-name rules.
+- [ ] `ImportTests.cs`: importModel and importTexture between sessions, with undo (needs the mesh/TXR fixture).
+- [x] `PackageEditTests.cs`: PACKAGE_EDIT add, remove, replace (the source is left alone), merge, refusals, unknown op.
 - [ ] `McpServerTests.cs`: `tools/list` schemas, an unknown tool, an `assets_edit` round trip.
 
 **1c. Hardening** (each fix lands with a test)
+- [x] Opening a loose package folder twice made two sessions, because `ZipperPackage.SourcePath` for a folder is `<dir>\<name>`, not the folder. The page and the AI therefore never shared edits on an unpacked package. Sessions now remember the path they were opened with (`AssetSession.OpenPath`). Test: `SessionTests.Opening_the_same_package_joins_its_session`.
+- [ ] Pack export from a **loose folder** fails with "Archive name too long": `PackageSave.WritePack` uses the file's disk path as the archive name. It needs the in-game archive path (`RUN\MP\<NAME>\<leaf>`), which a folder doesn't record: ask for it or derive it from the folder name.
 - [ ] Vector length and finite checks (movePoint `position`, setVertices, transformVertices matrix/pivot/translate/rotate/scale); reject scale ≤ 0.
 - [ ] `FaceMap` face keys: `TryParse` with a clear error.
 - [ ] Error mapping: IndexOutOfRange, FileNotFound and IO errors become command/tool errors, not HTTP 500s (`WithSession`, `McpServer.Call`).

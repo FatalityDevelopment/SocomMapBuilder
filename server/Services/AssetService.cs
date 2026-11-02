@@ -28,6 +28,8 @@ namespace MapBuilder.Server.Services
         {
             public required string Id { get; init; }
             public required ZipperPackage Package { get; init; }
+            /// <summary>The full path ASSET_OPEN was given (a loose package's folder differs from its SourcePath).</summary>
+            public string OpenPath { get; init; } = string.Empty;
             /// <summary>Last write time of the package on disk when the session read it.</summary>
             public DateTime SourceStamp { get; init; }
             public DateTime OpenedAt { get; } = DateTime.UtcNow;
@@ -882,14 +884,15 @@ namespace MapBuilder.Server.Services
                 // GTA: San Andreas (the disc image or GTA3.IMG) opens as a read-only GTA session.
                 if (Assets.GtaAssetService.TryOpen(full) is string gta) return gta;
                 // One session per package path: the editor and an agent opening the same map share it.
-                AssetSession? existing = Sessions.Values.FirstOrDefault(s => s.Package.SourcePath.Equals(full, StringComparison.OrdinalIgnoreCase));
+                AssetSession? existing = Sessions.Values.FirstOrDefault(s =>
+                    s.OpenPath.Equals(full, StringComparison.OrdinalIgnoreCase) || s.Package.SourcePath.Equals(full, StringComparison.OrdinalIgnoreCase));
                 // A session whose file changed on disk since (a save over it) is replaced, unless it holds unsaved edits.
                 if (existing != null && existing.Dirty.Count == 0 && existing.SourceStamp != SourceStampOf(full))
                 {
                     Sessions.TryRemove(existing.Id, out _);
                     existing = null;
                 }
-                AssetSession session = existing ?? new AssetSession { Id = NewId(full), Package = ZipperPackage.Open(full), SourceStamp = SourceStampOf(full) };
+                AssetSession session = existing ?? new AssetSession { Id = NewId(full), Package = ZipperPackage.Open(full), OpenPath = full, SourceStamp = SourceStampOf(full) };
                 Sessions[session.Id] = session;
                 return Ok("ASSET_OPEN", new { reused = existing != null, status = StatusObject(session) });
             }

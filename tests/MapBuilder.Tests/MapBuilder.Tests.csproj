@@ -15,6 +15,11 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\server\CodeDesigner.Ps2.FileFormats\CodeDesigner.Ps2.FileFormats.csproj" />
+    <ProjectReference Include="..\..\server\MapBuilder.Server.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
   </ItemGroup>
 
 </Project>

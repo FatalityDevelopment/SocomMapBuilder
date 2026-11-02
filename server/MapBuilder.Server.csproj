@@ -25,6 +25,11 @@
     <None Include="..\web\dist\**" Link="wwwroot\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
 
+  <!-- The tests drive the asset sessions and the MCP server directly. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="MapBuilder.Tests" />
+  </ItemGroup>
+
   <ItemGroup>
     <ProjectReference Include="CodeDesigner.Ps2.FileFormats\CodeDesigner.Ps2.FileFormats.csproj" />
   </ItemGroup>
