@@ -183,7 +183,8 @@ namespace MapBuilder.Server.Services
             var sw = Stopwatch.StartNew();
             ToolResult result;
             try { result = await tool.Run(args); }
-            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or KeyNotFoundException or TimeoutException or JsonException or FormatException)
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or KeyNotFoundException or TimeoutException or JsonException
+                or FormatException or IOException or UnauthorizedAccessException or InvalidDataException or NotSupportedException or IndexOutOfRangeException)
             {
                 result = ToolResult.Fail(ex.Message);
             }

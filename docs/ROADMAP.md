@@ -22,7 +22,7 @@ The goal: people **and AI over MCP** can add, edit and delete every SOCOM asset 
 
 ## In progress / next up
 
-- **Now:** the 1c hardening fixes.
+- **Now:** 1d (web tests), then Phase 2.
 - **Next:** a decodable synthetic mesh plus a TXR/PAL fixture, so the mesh, texture and import ops can be pinned.
 - Note for fixtures: a ZDB of **type 1** (header `0xC8`/`0x58`) is detected as SOCOM 3 / CA and opens read-only. SOCOM II packages are type 2.
 - Note for running tests while the app is open: `dotnet run` locks `server/bin/Debug`, so run `dotnet test tests/MapBuilder.Tests -c Release`.
@@ -49,16 +49,18 @@ The goal: people **and AI over MCP** can add, edit and delete every SOCOM asset 
 **1c. Hardening** (each fix lands with a test)
 - [x] Opening a loose package folder twice made two sessions, because `ZipperPackage.SourcePath` for a folder is `<dir>\<name>`, not the folder. The page and the AI therefore never shared edits on an unpacked package. Sessions now remember the path they were opened with (`AssetSession.OpenPath`). Test: `SessionTests.Opening_the_same_package_joins_its_session`.
 - [ ] Pack export from a **loose folder** fails with "Archive name too long": `PackageSave.WritePack` uses the file's disk path as the archive name. It needs the in-game archive path (`RUN\MP\<NAME>\<leaf>`), which a folder doesn't record: ask for it or derive it from the folder name.
-- [ ] Vector length and finite checks (movePoint `position`, setVertices, transformVertices matrix/pivot/translate/rotate/scale); reject scale ≤ 0.
-- [ ] `FaceMap` face keys: `TryParse` with a clear error.
-- [ ] Error mapping: IndexOutOfRange, FileNotFound and IO errors become command/tool errors, not HTTP 500s (`WithSession`, `McpServer.Call`).
-- [ ] Dirty tracking: cleared on a full save; leaves back to their original bytes after undo are dropped.
-- [ ] replaceTexture, retexture and tintVertexColors honour `label`.
-- [ ] Session races: atomic open, close under the session lock, import reads the source session under its lock.
-- [ ] PACKAGE_EDIT refuses a file whose open session has unsaved edits.
-- [ ] addClutter requires `position`.
-- [ ] `MapPoints.Move` range-checks its 13-bit cell fields.
-- [ ] Move the misplaced Save doc comment in AssetService.cs.
+- [x] Input checks: a `Vec(name, lengths)` / `Number` helper in AssetService. Arrays must have the right length (position 3, uv 2, colour 3/4, matrix 16, translate/rotate/scale/pivot/multiply/add 3), hold only numbers, and fit a float. Placement scale must be > 0 and vertex scale non-zero. Used by every op that reads vectors (movePoint, setPoint, placements, setVertices, transformVertices, duplicateFaces, tint). Test: `HardeningTests.Bad_input_is_an_error_and_changes_nothing` (14 cases).
+- [x] `faces` / `vertices` keys are parsed with `OffsetKey` (TryParse) and give a clear error.
+- [x] Error mapping: `WithSession` also catches IndexOutOfRange, Format, Json, IO and UnauthorizedAccess; `McpServer.Call` also catches IO, UnauthorizedAccess, InvalidData, NotSupported and IndexOutOfRange. Test: the missing-image case above.
+- [x] Dirty tracking: `AssetSession.Clean` holds each leaf's on-disk bytes. A leaf stays dirty only while it differs from them, so undoing back to the file makes it clean. A ZDB save over the source, or a folder save in place, records the new clean bytes and the file stamp; a save to a copy or a pack leaves the session dirty. Tests: `HardeningTests.Undoing_back…`, `Saving_over_the_source…`, `Saving_a_copy…`.
+- [x] A clean session whose file changed on disk **reloads in place**: it keeps its id and bumps its revision. Before, it was replaced under a new id, which broke the page holding the old one. Test: `A_clean_session_reloads_in_place_when_its_file_changes`. *Note:* the reload drops its undo history (there were no unsaved edits).
+- [x] replaceTexture, retexture and tintVertexColors honour `label`.
+- [x] Session races: `HandleOpen` runs under `OpenGate`; `HandleClose` waits for the session's `Gate`; imports read a source session under its `Gate` (`WithSource`, giving up after 5 s so two sessions importing from each other can't deadlock). Test: `Concurrent_opens_share_one_session`. *Not unit-tested:* the import lock (needs the mesh fixture).
+- [x] PACKAGE_EDIT refuses a target that an open session has unsaved edits on, naming the session (`ZipperAssetService.UnsavedSessionOn`). Test: `Package_edit_refuses…`.
+- [x] addClutter requires `position` (or `matrix`).
+- [x] `MapPoints.Move` refuses cells above 8191 (the 13-bit fields). *Not unit-tested:* it needs an MPS grid wider than 8191 cells.
+- [x] The Save doc comment now sits on `Save`.
+- Before/after check: with the old server code, 15 of the 22 HardeningTests fail; with the fixes, all pass.
 
 **1d. Web**
 - [ ] Vitest for the `useMapEdits` index bookkeeping and the clutter copy/paste payload.

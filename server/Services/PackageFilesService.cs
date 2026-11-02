@@ -42,6 +42,9 @@ namespace MapBuilder.Server.Services
             if (string.IsNullOrWhiteSpace(input) || !File.Exists(input)) throw new ArgumentException("InputPath (a .ZDB, .CDB, .ZAR or .ZED) is required");
             if (string.IsNullOrWhiteSpace(json)) throw new ArgumentException("Data (the operations) is required");
             string target = Path.GetFullPath(string.IsNullOrWhiteSpace(output) ? input : output);
+            // Writing under an open session's unsaved edits would make its next save write over this one (or fail).
+            if (ZipperAssetService.UnsavedSessionOn(target) is { } busy)
+                throw new InvalidOperationException($"{Path.GetFileName(target)} has unsaved edits in session {busy}; save or close it first");
             if (!Path.GetExtension(target).Equals(Path.GetExtension(input), StringComparison.OrdinalIgnoreCase))
                 throw new ArgumentException($"OutputPath must be a {Path.GetExtension(input).ToUpperInvariant()} like the source");
             using var doc = JsonDocument.Parse(json);
