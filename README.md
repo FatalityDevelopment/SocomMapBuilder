@@ -37,6 +37,7 @@ Open a game package and work across the map, its props and clutter, vehicles, ch
 - [Command reference](#command-reference)
 - [Format notes](#format-notes)
 - [Format documentation](docs/formats/README.md)
+- [Roadmap and work tracker](docs/ROADMAP.md)
 - [Development](#development)
 - [Status and limits](#status-and-limits)
 
