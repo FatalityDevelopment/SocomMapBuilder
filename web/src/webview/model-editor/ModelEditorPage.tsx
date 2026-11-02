@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from '../../shared/Icon';
-import { openRequest, useSignals } from '../../shared';
+import { activePage, openRequest, useSignals } from '../../shared';
+import { aiChange, aiView, provideAiState } from '../../shared/aiBridge';
 import { PageHeader } from '../../shared/PageHeader';
 import { ModelEditorPageLogic } from './model-editor-page';
+import { LIGHTINGS } from '../zipper-core/viewport-core';
 
 // The Model Editor's view: CodeDesigner's Angular template in JSX over the same logic class.
 export function ModelEditorPage() {
@@ -21,6 +23,22 @@ export function ModelEditorPage() {
   useEffect(() => {
     if (request?.page === 'models') { void c.openPackage(request.path, request.model); }
   }, [request, c]);
+
+  // The AI (MCP): follow its edits, apply ui_view, answer ui_state.
+  const change = aiChange();
+  useEffect(() => {
+    if (!change?.path || (!change.edited && change.page !== 'models')) { return; }
+    void c.follow(change.path, change.page === 'models' ? change.model : null, change.page === 'models');
+  }, [change, c]);
+  const viewRequest = aiView();
+  useEffect(() => {
+    if (!viewRequest || activePage() !== 'models') { return; }
+    if (viewRequest.shading) { c.setShading(viewRequest.shading); }
+    if (viewRequest.lighting) { c.setLighting(viewRequest.lighting); }
+    if (viewRequest.view) { c.view(viewRequest.view); }
+    if (viewRequest.frame === 'selected') { c.frameSelected(); } else if (viewRequest.frame === 'all') { c.frameAll(); }
+  }, [viewRequest, c]);
+  useEffect(() => provideAiState('models', () => c.aiState()), [c]);
 
   const s = c.status();
   const target = c.exportTarget();
@@ -118,7 +136,11 @@ export function ModelEditorPage() {
             <button key={sh.id} className={c.shading() === sh.id ? 'on' : ''} onClick={() => c.setShading(sh.id)}>{sh.label}</button>
           ))}
         </div>
-        <label className="me-toggle"><input type="checkbox" checked={c.baked()} onChange={e => c.setBaked(e.target.checked)} /> Baked lighting</label>
+        <div className="me-seg" title="Lighting">
+          {LIGHTINGS.map(l => (
+            <button key={l.id} className={c.lighting() === l.id ? 'on' : ''} onClick={() => c.setLighting(l.id)} title={l.title}>{l.label}</button>
+          ))}
+        </div>
         <label className="me-toggle"><input type="checkbox" checked={c.grid()} onChange={e => { c.grid.set(e.target.checked); c.applyHelpers(); }} /> Grid</label>
         <label className="me-toggle"><input type="checkbox" checked={c.normals()} onChange={e => { c.normals.set(e.target.checked); c.applyHelpers(); }} /> Normals</label>
         <label className="me-toggle"><input type="checkbox" checked={c.snap()} onChange={e => { c.snap.set(e.target.checked); c.applySnap(); }} /> Snap</label>

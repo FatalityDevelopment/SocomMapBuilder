@@ -10,6 +10,9 @@ new ZipperFileFormatsService().Register(registry);
 new ViewerService().Register(registry);
 new FileSystemService().Register(registry);
 new PackageFilesService().Register(registry);
+// The pages' event stream, and the MCP endpoint an AI drives the same sessions through (the pages follow along).
+var ui = new UiBridge();
+var mcp = new McpServer(registry, ui);
 
 // The page: wwwroot next to the executable (copied there by the build), else ../web/dist when running from source.
 // Without either the API still runs; the console says how to build the page.
@@ -42,7 +45,15 @@ var log = app.Logger;
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
-app.MapGet("/api/health", () => Results.Ok(new { ok = true, commands = registry.Count }));
+app.MapGet("/api/health", () => Results.Ok(new { ok = true, commands = registry.Count, mcpTools = mcp.ToolCount, pages = ui.ClientCount }));
+
+app.MapGet("/api/events", ctx => ui.Stream(ctx));
+app.MapPost("/api/ui/reply", (System.Text.Json.JsonElement body) => { ui.Reply(body); return Results.Ok(); });
+
+// MCP (Streamable HTTP): JSON-RPC requests on POST; there is no server-initiated stream, so GET is refused.
+app.MapPost("/mcp", ctx => mcp.Handle(ctx));
+app.MapGet("/mcp", () => Results.StatusCode(StatusCodes.Status405MethodNotAllowed));
+app.MapDelete("/mcp", () => Results.StatusCode(StatusCodes.Status405MethodNotAllowed));
 
 app.MapPost("/api/command", (CommandMessage command) =>
 {
@@ -65,6 +76,7 @@ app.MapPost("/api/command", (CommandMessage command) =>
 app.Lifetime.ApplicationStarted.Register(() =>
 {
     Console.WriteLine($"Map Builder running at {url}");
+    Console.WriteLine($"MCP server at {url.Split(';')[0].TrimEnd('/')}/mcp ({mcp.ToolCount} tools)");
     if (!loopbackOnly)
     {
         Console.WriteLine("WARNING: listening beyond this machine. Anyone who can reach it can read and write your files " +
