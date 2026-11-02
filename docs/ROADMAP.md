@@ -22,8 +22,7 @@ The goal: people **and AI over MCP** can add, edit and delete every SOCOM asset 
 
 ## In progress / next up
 
-- **Now:** the `weapons_create` dry run and atomic write.
-- **Next:** a decodable synthetic mesh plus a TXR/PAL fixture, so the mesh, texture and import ops can be pinned.
+- **Next candidates:** a decodable synthetic mesh plus a TXR/PAL fixture (so the mesh, texture, import and animation ops get tests); Map Builder UI for prefabs; placing GEO props from the UI; the browser smoke edit flow; paging `assets_model_mesh` arrays.
 - Note for fixtures: a ZDB of **type 1** (header `0xC8`/`0x58`) is detected as SOCOM 3 / CA and opens read-only. SOCOM II packages are type 2.
 - Trying the app without game files: `MAPBUILDER_FIXTURE_OUT=<dir> dotnet test tests/MapBuilder.Tests -c Release --filter FixtureExport` writes the synthetic package (`<dir>/TST` and `<dir>/TST.ZDB`). Its models are opaque, so the page warns that 2 models are not drawn; everything else works. A second backend can run beside yours: `dotnet run -c Release --urls http://127.0.0.1:8790` in `server/` (build `web/` first).
 - Note for running tests while the app is open: `dotnet run` locks `server/bin/Debug`, so run `dotnet test tests/MapBuilder.Tests -c Release`.
@@ -70,7 +69,7 @@ The goal: people **and AI over MCP** can add, edit and delete every SOCOM asset 
 ### Phase 2: MCP authoring
 - [x] Typed schemas: helpers `E` (enum), `N` (number/integer bounds) and `A` (typed array items, min/max items); `additionalProperties:false` on every tool. Enums cover the map scene kind, the save mode, the ui_show page and the ui_view shading/lighting/backdrop/view/frame. `assets_edit.op` is a `oneOf` with one closed branch per op, generated from the op table in `server/Services/EditOps.cs`. The same table checks each op (and each op in a batch) before it runs: unknown fields (typos), missing required fields, wrong types, enums, ranges. Tests: `EditOpsSchemaTests`, including one that keeps the table and the `Edit` switch in AssetService.cs in step. **When you add an op, add it to `EditOps.All`.**
 - [x] Strict arguments: `McpServer.CheckArguments` runs before every tool and rejects unknown names, missing required values (a blank `reason` included), wrong types (an integer must be integral), enum misses, out-of-range numbers and bad array items. Tests: `AuthoringTests.Map_scene_arguments_are_checked` and `View_arguments_are_checked`. `web/scripts/browser-smoke.cjs` now passes `reason`.
-- [~] Dry run: `ASSET_EDIT {dryRun:true}` (batches too) runs the edit, then takes it back with the session's revision, dirty set and redo stack restored; `assets_edit` takes `dryRun`. `PACKAGE_EDIT` / `package_edit` take `DryRun` / `dryRun` and write nothing. Tests: `AuthoringTests.A_dry_run_*` and `Package_edit_dry_run_writes_nothing`. *Left over:* `weapons_create` dry run and making it atomic (it runs three commands).
+- [x] Dry run: `ASSET_EDIT {dryRun:true}` (batches too) runs the edit, then takes it back with the session's revision, dirty set and redo stack restored; `assets_edit` takes `dryRun`. `PACKAGE_EDIT` / `package_edit` take `DryRun` / `dryRun` and write nothing. Tests: `AuthoringTests.A_dry_run_*` and `Package_edit_dry_run_writes_nothing`. `weapons_create` takes `dryRun` too. It was already all or nothing: the two encode steps write nothing, and ZIPPER_WRITE_WEAPON writes once through SafeFile. That write now also refuses entry names already in the archive (before, they were silently added as duplicates) and a target with unsaved session edits. Tests: `WeaponWriteTests`.
 - [~] Safe responses: an over-long reply becomes valid JSON (`truncated`, `totalCharacters`, `hint`, `start`); `assets_map_scene` takes `offset` and answers `matched` / `offset` / `nextOffset` (test: `The_scene_pages_with_offset_and_next_offset`); `ui_screenshot maxSize` is limited to 64..2048. *Left over:* paging for `assets_model_mesh` arrays; no unit test for the truncation path.
 - [x] Tool annotations: `destructiveHint` (save, close, entry, export, package_edit, weapons_create, mapbuilder_command), `idempotentHint` (= read-only), `openWorldHint:false`; `assets_open` is no longer read-only. Test: `Tools_declare_closed_schemas_and_hints`.
 - [~] `ASSET_VALIDATE` / `assets_validate`: errors for missing models (props and clutter), non-finite transforms, duplicate point names and no map scene; warnings for zero scale, no AIMAPS / no start points, texture names over 15 characters and a `vramBudget` overrun; info for items outside the AI map. `ok` is false on any error. Tests: `A_sound_map_validates`, `Missing_models_are_errors`, `The_validate_tool_answers_the_report`. The Map tab has a **Problems** card: it checks when the tab opens and after each edit while open (and has a Check map button), lists errors first, and clicking a problem selects and frames its prop, clutter or point (`problemTarget` / `sortProblems` in `mapModel.ts`, tested in `mapModel.test.ts`). Tried in the app on the synthetic package: it showed `crate_2` outside the AI map, the click selected it, and after an AI move it showed "No problems found". *Left over:* a better VRAM model (it sums texdat sizes).
@@ -97,7 +96,7 @@ MCP (`server/Services/McpServer.cs`):
 - `Str` / `IntOpt` / `Bool` silently return null on the wrong type; `IntOpt` truncates floats; unknown properties are ignored; `reason` is required in the schema but never checked.
 - `MaxText` cuts replies at 120,000 characters mid-JSON (L48).
 - `ui_screenshot` and `assets_texture` images have no size cap; `assets_map_scene` has no offset.
-- `weapons_create` runs three commands and is not atomic.
+- ~~`weapons_create` is not atomic~~: wrong, it writes once. The real issue was duplicate entry names, now fixed.
 - No auth token on `/mcp`: any local process can call it (only Origin and Content-Type are checked).
 
 ## Backlog
@@ -134,4 +133,5 @@ MCP (`server/Services/McpServer.cs`):
 
 ## Completed log
 
-- 2026-11-02: tracker created. Phase 1 done except the mesh/texture/import/animation tests (they need a decodable mesh fixture), the loose-folder pack export and the browser edit flow. Phase 2: strict arguments, dry run, history, validate, paging and annotations done; the op schema, prefabs and the weapons dry run are left. 101 server tests and 36 web tests pass.
+- 2026-11-02: tracker created. Phase 1 done except the mesh/texture/import/animation tests (they need a decodable mesh fixture), the loose-folder pack export and the browser edit flow. Phase 2: strict arguments, dry run, history, validate, paging and annotations done.
+- 2026-11-02 (continued): loose-folder pack export fixed; prefabs; the `EditOps` op table (oneOf schema and op checks); Problems list in the Map tab (tried in the app); `weapons_create` dry run and duplicate-name guard. 126 server tests and 38 web tests pass.
