@@ -26,6 +26,8 @@ export function writeRenderSettings(settings: RenderSettings, storage?: Pick<Sto
   catch { /* A preference must not interrupt editing. */ }
 }
 
+// 100% draws at the screen's own pixel density (a 4K screen at 250% too: a cap there stretches the frame and blurs
+// textures); 75% / 50% trade sharpness for speed.
 export function renderPixelRatio(deviceRatio: number, resolution: number): number {
-  return Math.min(2, Math.max(1, Number.isFinite(deviceRatio) ? deviceRatio : 1)) * resolution;
+  return Math.max(1, Number.isFinite(deviceRatio) ? deviceRatio : 1) * resolution;
 }

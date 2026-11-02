@@ -78,6 +78,42 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.MPS
             return copy;
         }
 
+        /// <summary>
+        /// Changes a point in place: a new name (2-15 printable characters, unique), team byte or kind (start,
+        /// waypoint or other). Records keep their size and order: the table sits mid-file, so points are never
+        /// added or removed.
+        /// </summary>
+        public static byte[] Update(byte[] mps, string name, string? newName, int? team, string? kind)
+        {
+            var points = Parse(mps);
+            var point = points.FirstOrDefault(p => p.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+                ?? throw new KeyNotFoundException($"No point named {name}");
+            var copy = (byte[])mps.Clone();
+            if (newName != null)
+            {
+                if (newName.Length is < 2 or > 15 || newName.Any(c => c < 0x21 || c > 0x7E))
+                    throw new ArgumentException("A point name is 2-15 printable characters without spaces");
+                if (points.Any(p => p != point && p.Name.Equals(newName, StringComparison.OrdinalIgnoreCase)))
+                    throw new ArgumentException($"A point named {newName} already exists");
+                Array.Clear(copy, point.RecordOffset, 16);
+                Encoding.ASCII.GetBytes(newName).CopyTo(copy, point.RecordOffset);
+            }
+            if (team is int t)
+            {
+                if (t is < 0 or > 255) throw new ArgumentOutOfRangeException(nameof(team), "team is a byte (0-255)");
+                copy[point.RecordOffset + 0x10] = (byte)t;
+            }
+            if (kind != null)
+                copy[point.RecordOffset + 0x11] = kind.ToLowerInvariant() switch
+                {
+                    "start" => 2,
+                    "waypoint" => 1,
+                    "other" => 0,
+                    _ => throw new ArgumentException("kind is start, waypoint or other"),
+                };
+            return copy;
+        }
+
         private static string? ReadName(byte[] b, int at)
         {
             var sb = new StringBuilder();

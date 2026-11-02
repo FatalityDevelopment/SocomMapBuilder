@@ -224,6 +224,10 @@ export class ModelEditorPageLogic {
         { label: 'Top', shortcut: 'Numpad 7', action: () => this.view('top') },
         { label: 'Bottom', shortcut: 'Ctrl+Numpad 7', action: () => this.view('bottom') },
         { label: 'Orthographic', shortcut: 'Numpad 5', action: () => this.toggleOrtho(), checked: () => this.ortho() },
+        { label: 'Orbit left / right', shortcut: 'Numpad 4 / 6', action: () => this.viewport.orbitBy(-15, 0) },
+        { label: 'Orbit up / down', shortcut: 'Numpad 8 / 2', action: () => this.viewport.orbitBy(0, 15) },
+        { label: 'Opposite side', shortcut: 'Numpad 9', action: () => this.viewport.orbitBy(180, 0) },
+        { label: 'Zoom in / out', shortcut: 'Numpad + / −', action: () => this.viewport.zoomBy(0.8) },
         { label: 'Model faces −Z (turn views around)', shortcut: 'Ctrl+Numpad 9', action: () => this.viewport.toggleFacing(), checked: () => { this.selectionVersion(); return this.viewport?.facesNegZ ?? false; } },
         { separator: true, label: '' },
         { label: 'Hide selected', shortcut: 'H', action: () => this.viewport.hideSelected() },
@@ -262,6 +266,7 @@ export class ModelEditorPageLogic {
     {
       id: 'help', label: 'Help', items: [
         { label: 'Orbit: middle drag or Alt+left drag · Pan: right drag · Zoom: wheel' },
+        { label: 'Keyboard orbit: arrows (hold, Shift faster) · Numpad 4 / 6 / 8 / 2 steps · Numpad 9 opposite · Numpad + / − zoom' },
         { label: 'Select: click, Shift adds, Ctrl removes, drag for box' },
         { label: 'Tools: Q select · G move · R rotate · S scale · P paint' },
         { label: 'Geometry: Shift+D duplicate · X / Delete delete faces · Add menu for planes, cubes, OBJ' },

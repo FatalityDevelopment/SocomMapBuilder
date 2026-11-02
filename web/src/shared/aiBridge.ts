@@ -34,7 +34,16 @@ export interface AiChange {
   edited: boolean;
 }
 
-export interface AiView { seq: number; shading?: Shading; lighting?: Lighting; view?: ViewPreset; frame?: 'selected' | 'all' }
+// orbit: [yaw, pitch] degrees about the orbit target, applied after view / frame; zoom: distance factor (< 1 closer).
+export interface AiView { seq: number; shading?: Shading; lighting?: Lighting; view?: ViewPreset; frame?: 'selected' | 'all'; orbit?: [number, number]; zoom?: number }
+
+// A ui_view orbit / zoom on the 3D view on screen (each page calls it after its own preset and framing).
+export function applyAiCamera(request: AiView): void {
+  if (!request.orbit && !request.zoom) { return; }
+  const vp = [...ViewportCore.live].find(v => v.visible);
+  if (request.orbit) { vp?.orbitBy(request.orbit[0], request.orbit[1]); }
+  if (request.zoom && request.zoom > 0) { vp?.zoomBy(request.zoom); }
+}
 
 export const aiConnected = signal(false);
 export const aiLog = signal<AiActivity[]>([]);
@@ -107,6 +116,8 @@ function onEvent(e: ServerEvent): void {
         seq: ++seq,
         shading: e['shading'] as Shading | undefined, lighting: e['lighting'] as Lighting | undefined,
         view: e['view'] as ViewPreset | undefined, frame: e['frame'] as AiView['frame'],
+        orbit: Array.isArray(e['orbit']) && e['orbit'].length === 2 ? e['orbit'] as [number, number] : undefined,
+        zoom: typeof e['zoom'] === 'number' ? e['zoom'] : undefined,
       });
       return;
     }

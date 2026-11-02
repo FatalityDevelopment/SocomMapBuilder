@@ -18,8 +18,9 @@ describe('render preferences', () => {
     expect(readRenderSettings({ getItem: () => saved })).toEqual(settings);
     expect(() => writeRenderSettings(settings, { setItem: () => { throw new Error('full'); } })).not.toThrow();
   });
-  it('caps high-DPI cost and scales render area quadratically', () => {
-    expect(renderPixelRatio(4, 1)).toBe(2);
+  it('draws at the screen density at 100% and scales render area quadratically', () => {
+    expect(renderPixelRatio(2.5, 1)).toBe(2.5);
+    expect(renderPixelRatio(0.5, 1)).toBe(1);
     expect(renderPixelRatio(NaN, 1)).toBe(1);
     expect(renderPixelRatio(2, 0.5) ** 2 / renderPixelRatio(2, 1) ** 2).toBe(0.25);
   });

@@ -178,11 +178,12 @@ The API can read and write any file your account can, so the server also only an
 |---|---|
 | Fly | W A S D, Q / E down / up, Shift faster (viewport focused) |
 | Orbit / pan / zoom | Middle drag or Alt + left drag / right drag / wheel |
+| Keyboard orbit | Arrow keys while held (Left / Right turn, Up / Down tilt, Shift faster) · Numpad 4 / 6 / 8 / 2 in 15° steps · Numpad 9 opposite side · Numpad + / − zoom (every 3D view) |
 | Tools | V select · G move · R rotate · T scale · P place |
 | Duplicate / delete / drop | Shift+D / X or Delete / End |
 | Copy / paste clutter | Ctrl+C / Ctrl+V (also into another package that has the model) |
 | Frame selected / frame map | F / Home |
-| Views | Numpad 1 front · 3 right · 7 top · 5 orthographic |
+| Views | Numpad 1 front · 3 right · 7 top · 5 orthographic; with Ctrl: back · left · bottom |
 | Shading | Z cycles textured, solid, wire, X-ray |
 | Lighting / backdrop | Baked · Studio · Unlit in the header / image icon in the activity bar |
 | Undo / redo / save copy | Ctrl+Z / Ctrl+Y / Ctrl+S |
@@ -238,9 +239,16 @@ The AI works on the same asset sessions as the pages, so you watch it work: the 
 |---|---|
 | `assets_open`, `assets_sessions`, `assets_status` | Open or join a package session |
 | `assets_list_models`, `assets_describe_model`, `assets_model_mesh`, `assets_list_textures`, `assets_list_palettes`, `assets_texture` (as an image), `assets_map_scene`, `assets_map_points`, `assets_list_animations`, `assets_animation`, `assets_weapons` | Read |
-| `assets_edit` (every `ASSET_EDIT` op), `assets_undo`, `assets_redo`, `assets_save` | Change and save |
-| `ui_screenshot`, `ui_state`, `ui_show`, `ui_focus`, `ui_view` | See and drive the app (screenshot of the 3D view, page / selection state, open a page or model, frame an item, shading / lighting / backdrop / camera) |
+| `assets_effects`, `assets_weapon_fx` | Read ZANIM effects and what firing a weapon plays |
+| `assets_edit` (every `ASSET_EDIT` op), `assets_undo`, `assets_redo`, `assets_save`, `assets_close` | Change, save and close |
+| `assets_export`, `assets_entry` | Export a model to SOCOM 3 / CA; read or write out one of the package's files (with unsaved edits) |
+| `fs_places`, `fs_list` | Find packages on disk |
+| `package_inspect`, `package_edit` | List and change the files of a package or archive on disk (no session) |
+| `weapons_list`, `weapons_template`, `weapons_texture`, `weapons_create` | Build a new weapon from a template in a weapon archive (model edits, a texture from an image) |
+| `ui_screenshot`, `ui_state`, `ui_show`, `ui_focus`, `ui_view` | See and drive the app (screenshot of the 3D view, page / selection state, open a page or model, frame an item, shading / lighting / backdrop / camera preset, orbit and zoom) |
 | `mapbuilder_command` | Any backend command from the reference below |
+
+Claude Code finds the tools when a session starts, so start Map Builder (`dotnet run`) before opening the Claude session; a session started without it sees no `mapbuilder` tools until it is restarted. Claude Code also asks once to approve the project's `.mcp.json` server.
 
 The pages listen on `GET /api/events` (Server-Sent Events) and answer screenshot / state requests on `POST /api/ui/reply`. `/mcp` refuses requests from other sites' pages (a foreign `Origin` or a non-JSON body).
 
@@ -259,8 +267,10 @@ All commands are `POST /api/command` with a JSON body `{ "Command": ..., ...fiel
 | `PACKAGE_EDIT` | `InputPath`, `OutputPath`, `Data: [ops]` | Add / replace / remove package files and archive records |
 | `FS_PLACES` / `FS_LIST` | `InputPath` | Drives, common folders and folder listings |
 
-Edit ops include `moveClutter`, `addClutter`, `deleteClutter`, `moveInstance`, `duplicateInstance`, `deleteInstance`, `movePoint`, `setVertices`, `transformVertices`, `addMesh`, `deleteFaces`, `duplicateFaces`, `retexture`, `replaceTexture`, `tintVertexColors`, the animation ops, and:
+Edit ops include `moveClutter`, `addClutter`, `deleteClutter`, `moveInstance`, `duplicateInstance`, `placeInstance`, `deleteInstance`, `movePoint`, `setPoint`, `setVertices`, `transformVertices`, `addMesh`, `deleteFaces`, `duplicateFaces`, `retexture`, `replaceTexture`, `tintVertexColors`, the animation ops, and:
 
+- `placeInstance` `{model, position, yaw?, scale?, matrix?, name?, templateGeoIndex?}`: a new placed reference of a package model, copied from the placed reference nearest the position (or `templateGeoIndex`) and added beside it; answers `newGeoIndex`
+- `setPoint` `{name, newName?, team?, kind?: start | waypoint | other, position?}`: changes an AIMAPS point in place (points cannot be added or removed: their table sits mid-file between structures that are not decoded yet)
 - `importModel` `{sourceSession | source, archive, name, targetArchive?, newName?}`
 - `importTexture` `{sourceSession | source, name, sourceNamespace?, namespace?, newName?}`
 - `addTexture` `{name, pngBase64 | imagePath, namespace?, width?, height?, maxSize?, paletteId?}`

@@ -149,6 +149,7 @@ export class AnimationEditorPageLogic {
         { label: 'Space play / pause · , and . step frames · Home / End first / last frame' },
         { label: 'Click a joint to select a bone · R rotate · G move · Q select (gizmo drags key the current frame)' },
         { label: 'Orbit: middle drag or Alt+left drag · Pan: right drag · Zoom: wheel' },
+        { label: 'Keyboard orbit: arrows (hold, Shift faster) · Numpad 4 / 6 / 8 / 2 steps · Numpad 9 opposite · Numpad + / − zoom' },
         { label: 'Shared MOTION_P clips are read-only: Copy into package, then edit the copy' },
       ],
     },

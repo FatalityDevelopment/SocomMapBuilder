@@ -16,7 +16,7 @@ import { PropsPanel, type PropTab } from './components/PropsPanel';
 import { ViewportView } from './components/ViewportView';
 import { NumField } from './components/NumField';
 import { activePage, host } from './shared';
-import { aiView, provideAiState } from './shared/aiBridge';
+import { aiView, applyAiCamera, provideAiState } from './shared/aiBridge';
 import { SHORTCUTS, TOOLS } from './mapShortcuts';
 import { useMapKeys } from './useMapKeys';
 import { useMapSession } from './useMapSession';
@@ -344,6 +344,9 @@ export function MapPage() {
     front: () => void view('front'),
     right: () => void view('right'),
     top: () => void view('top'),
+    back: () => void view('back'),
+    left: () => void view('left'),
+    bottom: () => void view('bottom'),
     ortho: toggleOrtho,
     duplicate: () => void duplicateSelection(),
     selectSame: selectSameModel,
@@ -436,6 +439,7 @@ export function MapPage() {
     if (aiViewRequest.lighting) { setLighting(aiViewRequest.lighting); }
     if (aiViewRequest.view) { view(aiViewRequest.view); }
     if (aiViewRequest.frame === 'selected') { frameSelected(); } else if (aiViewRequest.frame === 'all') { frameAll(); }
+    applyAiCamera(aiViewRequest);
     // Only a new request should run.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aiViewRequest]);

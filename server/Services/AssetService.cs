@@ -116,6 +116,42 @@ namespace MapBuilder.Server.Services
                         [leaf] = MapPoints.Move(p.Entry(leaf)!.Data, name, pos[0], pos[2]),
                     });
                 }
+                case "setPoint":
+                {
+                    // {name, newName?, team?, kind?: start | waypoint | other, position?}: changes an AIMAPS point in place.
+                    string name = Str(a, "name") ?? throw new ArgumentException("\"name\" (a point from ASSET_MAP_POINTS) is required");
+                    string leaf = s.Package.Entries.FirstOrDefault(e => e.Leaf.EndsWith(".MPS", StringComparison.OrdinalIgnoreCase))?.Leaf
+                        ?? throw new InvalidOperationException("The package has no AIMAPS.MPS");
+                    string? newName = Str(a, "newName");
+                    float[]? pos = Floats(a, "position");
+                    if (pos is { Length: not 3 }) throw new ArgumentException("\"position\" needs [x, y, z]");
+                    int? team = OptInt(a, "team");
+                    string? kind = Str(a, "kind");
+                    if (newName == null && team == null && kind == null && pos == null) throw new ArgumentException("Nothing to change: pass newName, team, kind or position");
+                    return ApplyEdit(s, Str(a, "label") ?? $"edit point {name}", p =>
+                    {
+                        byte[] data = MapPoints.Update(p.Entry(leaf)!.Data, name, newName, team, kind);
+                        if (pos != null) data = MapPoints.Move(data, newName ?? name, pos[0], pos[2]);
+                        return new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase) { [leaf] = data };
+                    });
+                }
+                case "placeInstance":
+                {
+                    // {model, position, yaw?, scale?, matrix?, name?, templateGeoIndex?}: a new placed reference of a
+                    // package model, copied from a placed reference (by default the one nearest the position) and
+                    // added beside it in the scene.
+                    string model = Str(a, "model") ?? throw new ArgumentException("\"model\" (a package model, see ASSET_LIST_MODELS) is required");
+                    if (Floats(a, "position") == null && Floats(a, "matrix") == null) throw new ArgumentException("\"position\" [x, y, z] (or \"matrix\") is required");
+                    float[] world = Placement(a, Matrix4.Identity());
+                    var (ns, template) = a.TryGetProperty("templateGeoIndex", out _)
+                        ? SceneNode(s, a, "templateGeoIndex")
+                        : NearestReference(s, Str(a, "scene"), world[12], world[13], world[14]);
+                    float[] local = Matrix4.Multiply(Matrix4.InverseAffine(template.ParentWorldTransform), world);
+                    int newIndex = -1;
+                    var result = ApplyEdit(s, Str(a, "label") ?? $"place {model}",
+                        p => PackageEdits.PlaceReference(p, ns, template.Index, model, local, Str(a, "name"), out newIndex));
+                    return new { result, newGeoIndex = newIndex, template = new { geoIndex = template.Index, name = template.Name } };
+                }
                 case "deleteClutter":
                 {
                     int index = Int(a, "clutterIndex");
@@ -698,9 +734,21 @@ namespace MapBuilder.Server.Services
             };
         }
 
-        private static (string Namespace, GeoNode Node) SceneNode(AssetSession s, JsonElement a)
+        /// <summary>The placed reference (not the sky) nearest a world position: where placeInstance copies from.</summary>
+        private static (string Namespace, GeoNode Node) NearestReference(AssetSession s, string? scene, float x, float y, float z)
         {
-            int geoIndex = Int(a, "geoIndex");
+            string ns = scene ?? s.Package.MapScene()?.Namespace ?? throw new InvalidOperationException("No map scene; pass \"scene\"");
+            GeoScene geo = s.Package.Scene(ns) ?? throw new KeyNotFoundException($"No {ns}_GEO.ZED");
+            var best = SceneInstances.Collect(geo.MapRoot, _ => true)
+                .Where(i => i.Kind == "reference" && i.Node?.Child("model_name") != null && !i.ModelName.Equals("sky", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(i => (i.Matrix[12] - x) * (i.Matrix[12] - x) + (i.Matrix[13] - y) * (i.Matrix[13] - y) + (i.Matrix[14] - z) * (i.Matrix[14] - z))
+                .FirstOrDefault() ?? throw new InvalidOperationException("The map places no references to copy from; duplicate an instance instead");
+            return (ns, best.Node!);
+        }
+
+        private static (string Namespace, GeoNode Node) SceneNode(AssetSession s, JsonElement a, string indexField = "geoIndex")
+        {
+            int geoIndex = Int(a, indexField);
             string ns = Str(a, "scene") ?? s.Package.MapScene()?.Namespace ?? throw new InvalidOperationException("No map scene; pass \"scene\"");
             GeoScene scene = s.Package.Scene(ns) ?? throw new KeyNotFoundException($"No {ns}_GEO.ZED");
             GeoNode? node = null;

@@ -26,7 +26,9 @@ namespace MapBuilder.Server.Services
         private const string Instructions =
             "Map Builder edits SOCOM II packages (.ZDB / .CDB). Start with assets_open (or assets_sessions to join the session the " +
             "user has open), read with assets_map_scene / assets_list_models / assets_describe_model, change with assets_edit " +
-            "(undoable, in memory) and write with assets_save only when the user asks. The user watches the app while you work: " +
+            "(undoable, in memory) and write with assets_save only when the user asks. assets_edit placeInstance adds props and " +
+            "setPoint renames / retypes spawn points; fs_list finds packages; weapons_* builds weapons from a template archive; " +
+            "package_* changes package files on disk. The user watches the app while you work: " +
             "every call's `reason` is shown in its AI activity panel, and edits make the page follow (Map Builder reloads and frames " +
             "the edited item, the Model Editor opens the edited model). ui_screenshot shows you what the user sees; ui_show, " +
             "ui_focus and ui_view move the page.";
@@ -260,6 +262,8 @@ namespace MapBuilder.Server.Services
                 case "deleteClutter":
                 case "deleteInstance": return ("map", null, null);
                 case "movePoint": return ("map", null, new { point = Str(op, "name") });
+                case "setPoint": return ("map", null, new { point = Str(op, "newName") ?? Str(op, "name") });
+                case "placeInstance": return ("map", null, new { geoIndex = R("newGeoIndex") });
                 case "addAnimation":
                 case "deleteAnimation":
                 case "renameAnimation":
@@ -411,8 +415,13 @@ namespace MapBuilder.Server.Services
                 "- deleteClutter {clutterIndex}\n" +
                 "- moveInstance {geoIndex, position?, yaw?, scale?, matrix?} (world space)\n" +
                 "- duplicateInstance {geoIndex, position?, yaw?, scale?, name?} (answers newGeoIndex)\n" +
+                "- placeInstance {model, position, yaw?, scale?, matrix?, name?, templateGeoIndex?} (a new placed reference of any " +
+                "package model, e.g. a crate, turret or vehicle; copied from the placed reference nearest the position unless " +
+                "templateGeoIndex picks one; answers newGeoIndex)\n" +
                 "- deleteInstance {geoIndex}\n" +
                 "- movePoint {name, position:[x,y,z]} (an AIMAPS point; snaps to its grid cell)\n" +
+                "- setPoint {name, newName?, team?, kind?: start|waypoint|other, position?} (changes a point in place; points " +
+                "cannot be added or removed: their table sits mid-file)\n" +
                 "- replaceTexture {texture, pngBase64 | imagePath, namespace?}\n" +
                 "- retexture {archive, model, from, to, visual?}\n" +
                 "- tintVertexColors {archive, model, multiply:[r,g,b], add?, visual?, texture?, alpha?}\n" +
@@ -494,6 +503,161 @@ namespace MapBuilder.Server.Services
                     return result;
                 });
 
+            AddSync("assets_close", "Close session",
+                "Close an asset session, discarding its unsaved edits (the answer says how many archives were changed). Close only " +
+                "sessions you opened, and only when the user agrees to lose unsaved work. Risk: discards in-memory edits.",
+                false, Schema(new[] { "session" }, session), a => FromCommand(new CommandMessage { Command = "ASSET_CLOSE", AssetSession = Session(a) },
+                    d => d.TryGetProperty("discardedEdits", out var n) ? $"closed, {n.GetInt32()} unsaved archive(s) discarded" : "closed"));
+
+            // ── effects and weapons in a session
+            AddSync("assets_effects", "Read effects",
+                "The package's ZANIM effects (CZANIM.ZAR: muzzle flashes, shell ejection, explosions, smoke): without name, every effect " +
+                "with its tracks, the sub-effects it spawns and the package models it uses (filter by query); with name, that effect fully " +
+                "decoded (names, node refs, tracks and their instructions). Risk: read-only.",
+                true, Schema(new[] { "session" }, session, P("name", "string", "Optional effect to decode fully."), P("query", "string", "Optional name substring (list).")),
+                a => Str(a, "name") is { } name
+                    ? FromCommand(new CommandMessage { Command = "ASSET_EFFECT", AssetSession = Session(a), AssetName = name }, _ => name)
+                    : FromCommand(new CommandMessage { Command = "ASSET_EFFECTS", AssetSession = Session(a), AssetJson = JsonSerializer.Serialize(new { query = Str(a, "query") }, Json) },
+                        d => $"{d.GetArrayLength()} effect(s)"));
+
+            AddSync("assets_weapon_fx", "Read weapon effects",
+                "What firing a weapon plays: its zweapon.rdr definition (fire animation, fire wait, tracer) and the ZANIM effect tree " +
+                "(sub-effects, models such as muzzle flashes and shells, textures, tracks). Needs RUN/ZWEAPON.ZAR beside the package. Risk: read-only.",
+                true, Schema(new[] { "session", "weapon" }, session, P("weapon", "string", "Weapon model or internal name (assets_weapons lists them).")),
+                a => FromCommand(new CommandMessage { Command = "ASSET_WEAPON_FX", AssetSession = Session(a), AssetName = Str(a, "weapon") }, _ => Str(a, "weapon")!));
+
+            AddSync("assets_export", "Export to SOCOM 3 / CA",
+                "Export a SOCOM II model (character, weapon, vehicle, prop) as a SOCOM 3 / Combined Assault package: <outputDir>/<MODEL>.ZDB " +
+                "with the asset library, the chosen animation clips as a bone bank and a name list. Answers the written path. Risk: writes disk " +
+                "(a new file).",
+                false, Schema(new[] { "session", "archive", "model" }, session, P("archive", "string", "Archive leaf, e.g. M51_MDL.ZED."), P("model", "string", "Model name."),
+                    P("outputDir", "string", "Optional output folder (default: the app's export folder)."), P("modelName", "string", "Optional name in the new package."),
+                    P("clips", "array", "Optional animation clip names to include (characters).")),
+                a => FromCommand(new CommandMessage
+                {
+                    Command = "ASSET_EXPORT", AssetSession = Session(a), AssetArchive = Str(a, "archive"), AssetName = Str(a, "model"),
+                    AssetJson = JsonSerializer.Serialize(new { outputDir = Str(a, "outputDir"), modelName = Str(a, "modelName"), clips = Strings(a, "clips") }, Json),
+                }, d => d.TryGetProperty("path", out var p) ? "wrote " + Path.GetFileName(p.GetString()) : null!));
+
+            AddSync("assets_entry", "Read package file",
+                "A root file of the session's package (an archive such as M51_GEO.ZED, CLUTTER.ZAR or AIMAPS.MPS) with the session's " +
+                "unsaved edits: its size, and either written to outputPath or returned as base64 (small files only). Risk: writes disk " +
+                "only with outputPath.",
+                false, Schema(new[] { "session", "archive" }, session, P("archive", "string", "Root file leaf, e.g. AIMAPS.MPS."),
+                    P("outputPath", "string", "Optional file to write the bytes to.")), a =>
+                {
+                    var (ok, data, error) = Command(new CommandMessage { Command = "ASSET_ENTRY_BYTES", AssetSession = Session(a), AssetArchive = Str(a, "archive") });
+                    if (!ok || data == null) return ToolResult.Fail(error ?? "ASSET_ENTRY_BYTES failed");
+                    using var d = JsonDocument.Parse(data);
+                    byte[] bytes = Convert.FromBase64String(d.RootElement.GetProperty("data").GetString() ?? "");
+                    string leaf = d.RootElement.GetProperty("leaf").GetString()!;
+                    if (Str(a, "outputPath") is { } output)
+                    {
+                        string full = Path.GetFullPath(output);
+                        CodeDesigner.Ps2.FileFormats.SafeFile.Write(full, bytes);
+                        return ToolResult.Text(JsonSerializer.Serialize(new { leaf, size = bytes.Length, written = full }, Json), $"wrote {Path.GetFileName(full)}");
+                    }
+                    if (bytes.Length * 4 / 3 > MaxText - 200)
+                        return ToolResult.Fail($"{leaf} is {bytes.Length} bytes, too large to return; pass outputPath to write it to a file.");
+                    return ToolResult.Text(JsonSerializer.Serialize(new { leaf, size = bytes.Length, data = Convert.ToBase64String(bytes) }, Json), $"{leaf}, {bytes.Length} bytes");
+                });
+
+            // ── files on disk
+            AddSync("fs_places", "List drives and folders",
+                "The local drives and the user's common folders (Desktop, Documents, Downloads, Home): where to start looking for packages. Risk: read-only.",
+                true, Schema(Array.Empty<string>()), _ => FromCommand(new CommandMessage { Command = "FS_PLACES" }));
+
+            AddSync("fs_list", "List folder",
+                "A folder's folders and files (name, path, size, modified), to find packages (.ZDB, .CDB, .ZAR, .ZED) to open. A file path " +
+                "lists its folder; no path lists the Desktop. Risk: read-only.",
+                true, Schema(Array.Empty<string>(), P("path", "string", "Folder (or file) path.")),
+                a => FromCommand(new CommandMessage { Command = "FS_LIST", InputPath = Str(a, "path") },
+                    d => d.TryGetProperty("entries", out var e) ? $"{e.GetArrayLength()} entr(ies)" : null!));
+
+            AddSync("package_inspect", "Inspect package file",
+                "List what a package or archive file on disk holds (a .ZDB / .CDB's root files, a .ZAR / .ZED's records) without opening a " +
+                "session: the indices and names package_edit takes. Risk: read-only.",
+                true, Schema(new[] { "path" }, P("path", "string", "A .ZDB, .CDB, .ZAR or .ZED.")),
+                a => FromCommand(new CommandMessage { Command = "ZIPPER_INSPECT", InputPath = Str(a, "path") ?? throw new ArgumentException("\"path\" is required") }));
+
+            AddSync("package_edit", "Edit package file",
+                "Add, replace or remove files of a package on disk, or records of an archive, and write the result (outputPath; over the " +
+                "source keeps a one-time .bak). ops: {op: add | replace, path, file} and {op: remove, path} for a .ZDB / .CDB's root files; " +
+                "{op: merge, file (.ZDB / .CDB), replace?}; archive records take \"inside\": [root file path, then nested {name, index}] with " +
+                "add {name?, file} or replace / remove {index, name}. Not for open sessions (use assets_edit). Prefer an outputPath copy. " +
+                "Risk: writes disk.",
+                false, Schema(new[] { "path", "ops" }, P("path", "string", "The .ZDB, .CDB, .ZAR or .ZED to change."),
+                    P("outputPath", "string", "Where to write (same extension); default over the source."), P("ops", "array", "The operations.")), a =>
+                {
+                    if (!a.TryGetProperty("ops", out var ops) || ops.ValueKind != JsonValueKind.Array) throw new ArgumentException("\"ops\" (an array) is required");
+                    return FromCommand(new CommandMessage { Command = "PACKAGE_EDIT", InputPath = Str(a, "path"), OutputPath = Str(a, "outputPath"), Data = ops.GetRawText() },
+                        d => d.TryGetProperty("written", out var w) ? "wrote " + Path.GetFileName(w.GetString()) : null!);
+                });
+
+            // ── weapon archives on disk (a loose *_MDL.ZED / weapon .ZED)
+            AddSync("weapons_list", "List weapon models",
+                "The models in a weapon archive file (.ZED): name, chunk / vertex / triangle counts and textures, to choose a template. Risk: read-only.",
+                true, Schema(new[] { "path" }, P("path", "string", "The weapon archive (.ZED).")),
+                a => FromCommand(new CommandMessage { Command = "ZIPPER_LIST_WEAPONS", InputPath = Str(a, "path") },
+                    d => d.TryGetProperty("weapons", out var w) ? $"{w.GetArrayLength()} weapon(s)" : null!));
+
+            AddSync("weapons_template", "Read weapon template",
+                "One weapon model of an archive in detail: its chunks (index, vertex / triangle counts, bounds, texture) and format notes, " +
+                "the chunk indices weapons_create's meshEdits take. Risk: read-only.",
+                true, Schema(new[] { "path", "weapon" }, P("path", "string", "The weapon archive (.ZED)."), P("weapon", "string", "Weapon model name.")),
+                a => FromCommand(new CommandMessage { Command = "ZIPPER_GET_WEAPON_TEMPLATE", InputPath = Str(a, "path"), WeaponName = Str(a, "weapon") }, _ => Str(a, "weapon")!));
+
+            AddSync("weapons_texture", "View weapon texture",
+                "A weapon model's texture (or a texture entry) decoded as an image. Risk: read-only.",
+                true, Schema(new[] { "path", "weapon" }, P("path", "string", "The weapon archive (.ZED)."), P("weapon", "string", "Weapon model or texture entry.")), a =>
+                {
+                    var (ok, data, error) = Command(new CommandMessage { Command = "ZIPPER_WEAPON_TEXTURE_PNG", InputPath = Str(a, "path"), WeaponName = Str(a, "weapon") });
+                    if (!ok || data == null) return ToolResult.Fail(error ?? "ZIPPER_WEAPON_TEXTURE_PNG failed");
+                    using var d = JsonDocument.Parse(data);
+                    var r = new ToolResult { Summary = d.RootElement.TryGetProperty("textureEntry", out var te) ? te.GetString() : Str(a, "weapon") };
+                    r.Content.Add(new { type = "image", data = d.RootElement.GetProperty("png").GetString(), mimeType = "image/png" });
+                    var info = System.Text.Json.Nodes.JsonNode.Parse(d.RootElement.GetRawText())!.AsObject();
+                    info.Remove("png");
+                    r.Content.Add(new { type = "text", text = info.ToJsonString() });
+                    return r;
+                });
+
+            AddSync("weapons_create", "Create weapon",
+                "Make a new weapon from a template in a weapon archive: re-encodes the template model (meshEdits: {perChunk: [{chunkIndex, " +
+                "transform?: {scaleX, scaleY, scaleZ, translateX, translateY, translateZ}, newTextureName?}]}), optionally a new texture " +
+                "from an image (imagePath or imageBase64, resampled to the template texture's size and depth, with a new palette when " +
+                "indexed), and adds them as new entries named newName (originals untouched), written to outputPath (default over the " +
+                "archive). Prefer an outputPath copy. Risk: writes disk.",
+                false, Schema(new[] { "path", "template", "newName" }, P("path", "string", "The weapon archive (.ZED)."),
+                    P("template", "string", "The template weapon model."), P("newName", "string", "The new model entry's name."),
+                    P("outputPath", "string", "Where to write the archive (default over the source)."),
+                    P("imagePath", "string", "Optional PNG / JPG for the new texture."), P("imageBase64", "string", "Optional PNG as base64 (instead of imagePath)."),
+                    P("meshEdits", "object", "Optional {perChunk: [...]} model edits."),
+                    P("textureEntryName", "string", "Optional name for the new .tif entry."), P("paletteEntryName", "string", "Optional name for the new palette entry.")), a =>
+                {
+                    string path = Str(a, "path") ?? throw new ArgumentException("\"path\" is required");
+                    string template = Str(a, "template") ?? throw new ArgumentException("\"template\" is required");
+                    string? edits = a.TryGetProperty("meshEdits", out var me) && me.ValueKind == JsonValueKind.Object ? me.GetRawText() : null;
+                    var (mok, mdata, merror) = Command(new CommandMessage { Command = "ZIPPER_ENCODE_WEAPON_MODEL", InputPath = path, WeaponName = template, WeaponMeshEditsJson = edits });
+                    if (!mok || mdata == null) return ToolResult.Fail(merror ?? "ZIPPER_ENCODE_WEAPON_MODEL failed");
+                    using var model = JsonDocument.Parse(mdata);
+                    string? tif = null, palette = null;
+                    if (Str(a, "imagePath") != null || Str(a, "imageBase64") != null)
+                    {
+                        var (tok, tdata, terror) = Command(new CommandMessage { Command = "ZIPPER_ENCODE_WEAPON_TEXTURE", InputPath = path, WeaponName = template, WeaponImagePath = Str(a, "imagePath"), WeaponImageData = Str(a, "imageBase64") });
+                        if (!tok || tdata == null) return ToolResult.Fail(terror ?? "ZIPPER_ENCODE_WEAPON_TEXTURE failed");
+                        using var texture = JsonDocument.Parse(tdata);
+                        tif = texture.RootElement.GetProperty("tif").GetString();
+                        palette = texture.RootElement.TryGetProperty("palette", out var pal) && pal.ValueKind == JsonValueKind.String ? pal.GetString() : null;
+                    }
+                    return FromCommand(new CommandMessage
+                    {
+                        Command = "ZIPPER_WRITE_WEAPON", InputPath = path, OutputPath = Str(a, "outputPath"), WeaponNewName = Str(a, "newName"),
+                        WeaponModelData = model.RootElement.GetProperty("mdl").GetString(), WeaponTextureData = tif, WeaponPaletteData = palette,
+                        WeaponTextureEntryName = Str(a, "textureEntryName"), WeaponPaletteEntryName = Str(a, "paletteEntryName"),
+                    }, d => d.TryGetProperty("outputPath", out var o) ? $"{Str(a, "newName")} → {Path.GetFileName(o.GetString())}" : null!);
+                });
+
             // ── the app
             Add("ui_screenshot", "Screenshot",
                 "A screenshot of the 3D view on the page the user has in front (Map Builder, Model Editor, Animation Editor or Asset Viewer), to " +
@@ -551,12 +715,22 @@ namespace MapBuilder.Server.Services
 
             AddSync("ui_view", "Change view",
                 "Change the view on the page in front (Map Builder or Model Editor): shading (textured, solid, wireframe, xray), lighting (baked, " +
-                "studio, unlit), backdrop (dark, blueprint), a camera preset (front, back, left, right, top, bottom, iso), or frame (selected, all). Risk: read-only.",
+                "studio, unlit), backdrop (dark, blueprint), a camera preset (front, back, left, right, top, bottom, iso), frame (selected, all), " +
+                "then orbit [yaw, pitch] degrees about the view's centre (yaw turns right, pitch looks more from above) and zoom (a distance " +
+                "factor: 0.5 twice as close, 2 twice as far). Risk: read-only.",
                 true, Schema(Array.Empty<string>(), P("shading", "string", "textured, solid, wireframe or xray."), P("lighting", "string", "baked, studio or unlit."),
-                    P("backdrop", "string", "dark or blueprint."), P("view", "string", "front, back, left, right, top, bottom or iso."), P("frame", "string", "selected or all.")), a =>
+                    P("backdrop", "string", "dark or blueprint."), P("view", "string", "front, back, left, right, top, bottom or iso."), P("frame", "string", "selected or all."),
+                    P("orbit", "array", "[yaw, pitch] degrees."), P("zoom", "number", "Distance factor (< 1 closer).")), a =>
                 {
-                    _ui.Publish(new { type = "view", shading = Str(a, "shading"), lighting = Str(a, "lighting"), backdrop = Str(a, "backdrop"), view = Str(a, "view"), frame = Str(a, "frame") });
-                    return ToolResult.Text("View changed.", string.Join(", ", new[] { "shading", "lighting", "backdrop", "view", "frame" }.Select(k => Str(a, k)).Where(v => v != null)));
+                    float[]? orbit = a.TryGetProperty("orbit", out var o) && o.ValueKind == JsonValueKind.Array ? o.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.Number).Select(x => x.GetSingle()).ToArray() : null;
+                    if (orbit is { Length: not 2 }) throw new ArgumentException("\"orbit\" is [yaw, pitch]");
+                    float? zoom = a.TryGetProperty("zoom", out var z) && z.ValueKind == JsonValueKind.Number ? z.GetSingle() : null;
+                    if (zoom is <= 0) throw new ArgumentException("\"zoom\" is a positive factor");
+                    _ui.Publish(new { type = "view", shading = Str(a, "shading"), lighting = Str(a, "lighting"), backdrop = Str(a, "backdrop"), view = Str(a, "view"), frame = Str(a, "frame"), orbit, zoom });
+                    var parts = new[] { "shading", "lighting", "backdrop", "view", "frame" }.Select(k => Str(a, k)).Where(v => v != null).ToList();
+                    if (orbit != null) parts.Add($"orbit {orbit[0]}°, {orbit[1]}°");
+                    if (zoom != null) parts.Add($"zoom ×{zoom}");
+                    return ToolResult.Text("View changed.", string.Join(", ", parts));
                 });
 
             return tools;
@@ -600,6 +774,10 @@ namespace MapBuilder.Server.Services
 
         private static int? IntOpt(JsonElement a, string name) =>
             a.ValueKind == JsonValueKind.Object && a.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? (int)v.GetDouble() : null;
+
+        private static string[]? Strings(JsonElement a, string name) =>
+            a.ValueKind == JsonValueKind.Object && a.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Array
+                ? v.EnumerateArray().Where(x => x.ValueKind == JsonValueKind.String).Select(x => x.GetString()!).ToArray() : null;
 
         private static bool Bool(JsonElement a, string name) =>
             a.ValueKind == JsonValueKind.Object && a.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.True;

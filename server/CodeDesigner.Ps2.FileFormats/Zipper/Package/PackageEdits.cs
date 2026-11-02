@@ -99,6 +99,61 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             return One(leaf, container);
         }
 
+        /// <summary>
+        /// Places <paramref name="modelName"/> as a new reference: a copy of the placed reference
+        /// <paramref name="templateIndex"/> (a scene node with a <c>model_name</c>) appended next to it, its
+        /// <c>model_name</c> rewritten, its local transform set and its nparams bounds taken from the model's own
+        /// definition when it has one. <paramref name="newIndex"/> is the new node's record index.
+        /// </summary>
+        public static Dictionary<string, byte[]> PlaceReference(ZipperPackage pkg, string sceneNs, int templateIndex, string modelName,
+            float[] localMatrix, string? newName, out int newIndex)
+        {
+            var model = pkg.ResolveModel(modelName) ?? throw new ArgumentException($"No model '{modelName}' in the package (see ASSET_LIST_MODELS)");
+            var (leaf, container, node) = SceneNode(pkg, sceneNs, templateIndex);
+            if (node.Child("model_name") == null) throw new ArgumentException($"{node.Name} (#{templateIndex}) is not a placed reference; pick one from ASSET_MAP_SCENE kind=reference");
+            int parent = ZedTree.ParentIndices(container.Nodes)[templateIndex];
+            if (parent < 0) throw new InvalidOperationException("Top-level scene records cannot be copied");
+
+            float[] m = CheckMatrix(localMatrix);
+            var bounds = pkg.FindDefinition(model)?.Node.Bounds;
+            ZedTree.Record template = ZedTree.Copy(container.Nodes, templateIndex);
+            var children = template.Children.Select(c => c.Name switch
+            {
+                "model_name" => c with { Data = ModelNameData(c.Data, model.Name) },
+                "nparams" => c with { Data = Nparams(c.Data, m, bounds) },
+                _ => c,
+            }).ToList();
+            var copy = template with { Name = string.IsNullOrWhiteSpace(newName) ? model.Name : newName, Children = children };
+            newIndex = ZedTree.AppendChild(container, parent, copy);
+            return One(leaf, container);
+        }
+
+        // A model_name record naming another model: the template's text with its model swapped (keeping a
+        // "{var} name" form), NUL-terminated and padded to 4 bytes, never shorter than the original record.
+        private static byte[] ModelNameData(byte[] original, string modelName)
+        {
+            string raw = GeoNames.Ascii(original);
+            string old = GeoNames.Clean(raw);
+            string text = old.Length > 0 && raw.Contains(old, StringComparison.Ordinal) ? raw.Replace(old, modelName, StringComparison.Ordinal) : modelName;
+            byte[] ascii = Encoding.ASCII.GetBytes(text);
+            var data = new byte[Math.Max(original.Length, (ascii.Length + 1 + 3) & ~3)];
+            ascii.CopyTo(data, 0);
+            return data;
+        }
+
+        private static byte[] Nparams(byte[] original, float[] matrix, (float[] Min, float[] Max)? bounds)
+        {
+            byte[] data = (byte[])original.Clone();
+            for (int k = 0; k < 16; k++) BitConverter.GetBytes(matrix[k]).CopyTo(data, k * 4);
+            if (bounds is { } b && data.Length >= 22 * 4)
+                for (int k = 0; k < 3; k++)
+                {
+                    BitConverter.GetBytes(b.Min[k]).CopyTo(data, 64 + k * 4);
+                    BitConverter.GetBytes(b.Max[k]).CopyTo(data, 76 + k * 4);
+                }
+            return data;
+        }
+
         public static Dictionary<string, byte[]> DeleteInstance(ZipperPackage pkg, string sceneNs, int geoIndex)
         {
             var (leaf, container, node) = SceneNode(pkg, sceneNs, geoIndex);
