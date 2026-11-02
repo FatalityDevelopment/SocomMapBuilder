@@ -590,11 +590,12 @@ namespace MapBuilder.Server.Services
                 "folderCard (a PCSX2 folder memory card), installs it. Prefer a copy (outputPath) over the retail file, and save only when the " +
                 "user asks. Risk: writes disk.",
                 false, Schema(new[] { "session" }, session, E("mode", "zdb (default) or pack.", "zdb", "pack"), P("outputPath", "string", "zdb: output .ZDB path. pack: output folder."),
-                    P("packName", "string", "pack: the name, e.g. mfrst."), P("folderCard", "string", "pack: optional PCSX2 folder memory card to install into.")),
+                    P("packName", "string", "pack: the name, e.g. mfrst."), P("folderCard", "string", "pack: optional PCSX2 folder memory card to install into."),
+                    P("archiveDir", "string", "pack from an unpacked folder: the files' folder in game, e.g. RUN\\MP\\M51 (default RUN\\MP\\<FOLDER>).")),
                 a => FromCommand(new CommandMessage
                 {
                     Command = "ASSET_SAVE", AssetSession = Session(a),
-                    AssetJson = JsonSerializer.Serialize(new { mode = Str(a, "mode") ?? "zdb", outputPath = Str(a, "outputPath"), packName = Str(a, "packName"), folderCard = Str(a, "folderCard") }, Json),
+                    AssetJson = JsonSerializer.Serialize(new { mode = Str(a, "mode") ?? "zdb", outputPath = Str(a, "outputPath"), packName = Str(a, "packName"), folderCard = Str(a, "folderCard"), archiveDir = Str(a, "archiveDir") }, Json),
                 }, d => d.TryGetProperty("written", out var w) ? "wrote " + string.Join(", ", w.EnumerateArray().Select(x => Path.GetFileName(x.GetString()))) : null!));
 
             AddSync("mapbuilder_command", "Run command",

@@ -933,7 +933,7 @@ namespace MapBuilder.Server.Services
 
         // ------------------------------------------------------------------ save
 
-        private sealed record SaveArgs(string? Mode, string? OutputPath, string? PackName, string? FolderCard, List<string>? Leaves);
+        private sealed record SaveArgs(string? Mode, string? OutputPath, string? PackName, string? FolderCard, List<string>? Leaves, string? ArchiveDir = null);
 
         /// <summary>
         /// A SOCOM II model (character, weapon, vehicle, prop) as a SOCOM 3 / Combined Assault package: a ZDB v6
@@ -962,7 +962,8 @@ namespace MapBuilder.Server.Services
         /// <summary>
         /// <c>{"mode":"zdb","outputPath":...}</c> writes the package (over the source keeps a .bak) ;
         /// <c>{"mode":"pack","packName":"mxxxx","outputPath":dir,"folderCard":dir}</c> writes a memory-card CDB of the
-        /// changed archives. <c>leaves</c> defaults to every archive changed in the session.
+        /// changed archives (a loose package's under <c>archiveDir</c>, default <c>RUN\MP\&lt;FOLDER&gt;</c>). <c>leaves</c>
+        /// defaults to every archive changed in the session.
         /// </summary>
         private static object Save(AssetSession s, string? json)
         {
@@ -987,7 +988,7 @@ namespace MapBuilder.Server.Services
                 case "pack":
                     string name = args.PackName ?? throw new ArgumentException("\"packName\" is required for a pack");
                     string dir = args.OutputPath ?? Path.Combine(Path.GetDirectoryName(s.Package.SourcePath)!, "packs", name);
-                    written = PackageSave.WritePack(s.Package, leaves, name, dir, args.FolderCard);
+                    written = PackageSave.WritePack(s.Package, leaves, name, dir, args.FolderCard, args.ArchiveDir);
                     break;
                 default:
                     throw new ArgumentException($"Unknown save mode '{args.Mode}' (zdb or pack)");

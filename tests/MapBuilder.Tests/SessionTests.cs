@@ -151,6 +151,22 @@ namespace MapBuilder.Tests
         }
 
         [Fact]
+        public void A_pack_from_a_loose_folder_uses_in_game_paths()
+        {
+            string s = Open(_pkg.Folder);
+            _b.Edit(s, Move(0, 1));
+            string dir = Path.Combine(Path.GetDirectoryName(_pkg.Folder)!, "packs");
+            string Pack(object args)
+            {
+                var r = _b.Ok(new CommandMessage { Command = "ASSET_SAVE", AssetSession = s, AssetJson = JsonSerializer.Serialize(args) });
+                using var pack = ZdbArchive.Open(r.GetProperty("written")[0].GetString()!);
+                return pack.Entries.Single().FullPath;
+            }
+            Assert.Equal(@"RUN\MP\TST\CLUTTER.ZAR", Pack(new { mode = "pack", packName = "mloose", outputPath = dir }));
+            Assert.Equal(@"RUN\SP\S01\CLUTTER.ZAR", Pack(new { mode = "pack", packName = "mloose", outputPath = dir, archiveDir = "RUN/SP/S01/" }));
+        }
+
+        [Fact]
         public void A_pack_name_must_follow_the_card_rules()
         {
             string s = Open(_pkg.Folder);
