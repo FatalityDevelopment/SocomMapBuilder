@@ -48,6 +48,22 @@ namespace CodeDesigner.Ps2.FileFormats.Ps2
             return change / (double)Math.Max(1, samples);
         }
 
+        /// <summary>The screen with new pixels: a picture of the same size, written over the old in the file's own
+        /// layout (each pixel's fourth byte, when it has one, kept as it was).</summary>
+        public static byte[] WithRgba(byte[] data, byte[] rgba, int width, int height)
+        {
+            var g = GuessLayout(data) ?? throw new InvalidDataException("No screen size fits this file.");
+            if (width != g.Width || height != g.Height) throw new ArgumentException($"The picture must be {g.Width}×{g.Height} (it is {width}×{height}).");
+            var output = (byte[])data.Clone();
+            for (int i = 0; i < width * height; i++)
+            {
+                output[i * g.BytesPerPixel] = rgba[i * 4];
+                output[i * g.BytesPerPixel + 1] = rgba[i * 4 + 1];
+                output[i * g.BytesPerPixel + 2] = rgba[i * 4 + 2];
+            }
+            return output;
+        }
+
         /// <summary>The pixels as opaque RGBA (the PS2's alpha byte is 0 or 0x80 in these files, not real alpha).</summary>
         public static byte[] ToRgba(ReadOnlySpan<byte> data, Guess g)
         {

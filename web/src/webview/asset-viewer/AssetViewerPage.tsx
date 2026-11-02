@@ -5,7 +5,8 @@ import { openRequest, useSignals } from '../../shared';
 import { aiChange } from '../../shared/aiBridge';
 import { LIGHTINGS } from '../zipper-core/viewport-core';
 import { AssetViewerLogic, KIND_LABEL, formatBytes } from './asset-viewer-page';
-import { placeKey, type ItemKind, type Preview, type RdrValue, type ViewerItem } from './viewer-client';
+import { placeKey, type ItemKind, type Preview, type ViewerItem } from './viewer-client';
+import { BytePatch, IconSysEditor, MpsEditor, RdrEditor, TextEditor } from './editors';
 
 const KIND_ICON: Record<ItemKind, string> = {
   folder: 'library', package: 'harddrive', models: 'database', textures: 'image', palettes: 'sparkles', geo: 'workflow',
@@ -69,6 +70,11 @@ export function AssetViewerPage() {
         ))}
         <span className="me-spacer" />
         {l && <span className="me-pkg" title={l.path}>{l.path}</span>}
+        {c.editStatus() && (
+          <span className={`me-badge${c.editStatus()!.dirty.length ? ' me-badge-dirty' : ''}`} title={c.editStatus()!.dirty.join(', ') || 'No unsaved changes'}>
+            {c.editStatus()!.dirty.length ? `${c.editStatus()!.dirty.length} unsaved` : 'saved'} · rev {c.editStatus()!.revision}
+          </span>
+        )}
         {l?.session && <span className="me-session" title="Asset session the previews read (shared with the editors)">{l.session}</span>}
       </div>
 
@@ -278,6 +284,7 @@ function Actions({ c }: { c: C }) {
   }
   if (c.modelEditorTarget()) { buttons.push({ label: 'Open in Model Editor', run: () => c.openInModelEditor(), primary: sel?.kind === 'model' }); }
   if (c.animationTarget()) { buttons.push({ label: 'Open in Animation Editor', run: () => c.openInAnimationEditor() }); }
+  if (c.canReplaceImage()) { buttons.push({ label: 'Replace picture…', run: () => void c.replaceImage(), title: 'Replace it from an image file (PNG, JPG …); Edit › Undo takes it back' }); }
   if (c.canExportImage()) { buttons.push({ label: 'Export PNG…', run: () => c.exportImage() }); }
   if (c.canExportAudio()) { buttons.push({ label: 'Save WAV…', run: () => c.exportAudio() }); }
   if (c.canExtract(sel)) { buttons.push({ label: 'Extract…', run: () => void c.extractSelected(), title: 'Save the record’s bytes as they are stored' }); }
@@ -366,22 +373,15 @@ function StageBody({ c }: { c: C }) {
         </div>
       ) : null;
     case 'rdr':
-      return p?.type === 'rdr' ? <div className="av-scroll av-mono"><RdrNode c={c} name={p.name} value={p.root} path="" depth={0} /></div> : null;
+      return p?.type === 'rdr' ? <RdrEditor c={c} p={p} /> : null;
     case 'mps':
-      return p?.type === 'mps' ? (
-        <div className="av-scroll">
-          <table className="av-table">
-            <thead><tr><th>Name</th><th>Grid</th><th>Min X Y Z</th><th>Max X Y Z</th><th>Scale X / Z</th></tr></thead>
-            <tbody>{p.maps.map(m => (
-              <tr key={m.offset}><td>{m.name}</td><td>{m.width} × {m.height}</td><td>{m.min.map(v => v.toFixed(1)).join(', ')}</td><td>{m.max.map(v => v.toFixed(1)).join(', ')}</td><td>{m.scale.map(v => v.toFixed(3)).join(' / ')}</td></tr>
-            ))}</tbody>
-          </table>
-        </div>
-      ) : null;
+      return p?.type === 'mps' ? <MpsEditor c={c} p={p} /> : null;
     case 'text':
-      return p?.type === 'text' ? <pre className="av-scroll av-mono av-text">{p.text}{p.truncated ? '\n… (first 512 KB)' : ''}</pre> : null;
+      return p?.type === 'text' ? <TextEditor c={c} p={p} /> : null;
+    case 'iconsys':
+      return p?.type === 'iconsys' ? <IconSysEditor c={c} p={p} /> : null;
     case 'hex':
-      return p?.type === 'hex' ? <HexStage p={p} /> : null;
+      return p?.type === 'hex' ? <HexStage c={c} p={p} /> : null;
     case 'program':
       return p?.type === 'program' ? (
         <div className="av-scroll">
@@ -444,7 +444,7 @@ function PaletteStage({ rgba }: { rgba: number[] }) {
   );
 }
 
-function HexStage({ p }: { p: Extract<Preview, { type: 'hex' }> }) {
+function HexStage({ c, p }: { c: C; p: Extract<Preview, { type: 'hex' }> }) {
   const lines = useMemo(() => {
     const bin = atob(p.bytes);
     const out: string[] = [];
@@ -458,7 +458,10 @@ function HexStage({ p }: { p: Extract<Preview, { type: 'hex' }> }) {
   }, [p.bytes]);
   return (
     <div className="av-hex">
-      <pre className="av-scroll av-mono">{lines.join('\n')}{lines.length >= 256 ? '\n… (first 4 KB)' : ''}</pre>
+      <div className="av-hex-main">
+        {c.canEditInPlace() && <BytePatch c={c} />}
+        <pre className="av-scroll av-mono">{lines.join('\n')}{lines.length >= 256 ? '\n… (first 4 KB)' : ''}</pre>
+      </div>
       {p.strings.length > 0 && (
         <div className="av-strings">
           <div className="me-card-title">Strings <span className="lm-muted">{p.strings.length}</span></div>
@@ -466,35 +469,5 @@ function HexStage({ p }: { p: Extract<Preview, { type: 'hex' }> }) {
         </div>
       )}
     </div>
-  );
-}
-
-function RdrNode({ c, name, value, path, depth }: { c: C; name: string; value: RdrValue; path: string; depth: number }) {
-  const open = c.rdrOpen().has(path);
-  const isList = Array.isArray(value);
-  const isObj = !!value && typeof value === 'object';
-  const toggle = () => {
-    const next = new Set(c.rdrOpen());
-    if (open) { next.delete(path); } else { next.add(path); }
-    c.rdrOpen.set(next);
-  };
-  if (!isObj) {
-    return (
-      <div className="av-rdr-row" style={{ paddingLeft: depth * 14 + 16 }}>
-        <span className="av-rdr-key">{name}</span>
-        <span className={`av-rdr-val t-${typeof value}`}>{typeof value === 'string' ? `"${value}"` : String(value)}</span>
-      </div>
-    );
-  }
-  const entries: Array<[string, RdrValue]> = isList ? (value as RdrValue[]).map((v, i) => [`[${i}]`, v]) : Object.entries(value as Record<string, RdrValue>);
-  return (
-    <>
-      <div className="av-rdr-row av-rdr-branch" style={{ paddingLeft: depth * 14 }} onClick={toggle}>
-        <span className="av-rdr-caret">{open ? '▾' : '▸'}</span>
-        <span className="av-rdr-key">{name}</span>
-        <span className="lm-muted">{isList ? `[${entries.length}]` : `{${entries.length}}`}</span>
-      </div>
-      {open && entries.map(([k, v]) => <RdrNode key={k} c={c} name={k} value={v} path={`${path}/${k}`} depth={depth + 1} />)}
-    </>
   );
 }

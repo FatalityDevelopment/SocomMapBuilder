@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 
 namespace CodeDesigner.Ps2.FileFormats.Zipper.MPS
@@ -86,6 +87,34 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.MPS
             }
 
             return new MpsFile { MapCount = mapCount, Maps = maps };
+        }
+
+        /// <summary>
+        /// The file with one AI map's header changed: its name (+0x38, up to 31 characters), bounds (+0x04 min,
+        /// +0x10 max) or cell scale (+0x24 X, +0x28 Z). The grid's size stays: the cells after the header depend on it.
+        /// </summary>
+        public static byte[] WithMap(byte[] data, int index, string? name, float[]? min, float[]? max, float[]? scale)
+        {
+            var maps = Parse(data).Maps;
+            if (index < 0 || index >= maps.Count) throw new ArgumentOutOfRangeException(nameof(index), $"No AI map #{index}");
+            int o = (int)maps[index].Offset;
+            var output = (byte[])data.Clone();
+            if (name != null)
+            {
+                if (name.Length is 0 or > 31 || name.Any(c => c < 0x20 || c > 0x7E)) throw new ArgumentException("A map name is 1-31 printable characters.");
+                Array.Clear(output, o + 0x38, 0x20);
+                Encoding.ASCII.GetBytes(name).CopyTo(output, o + 0x38);
+            }
+            void Floats(float[]? v, int at, int count, bool positive)
+            {
+                if (v == null) return;
+                if (v.Length != count || v.Any(f => !float.IsFinite(f) || (positive && f <= 0))) throw new ArgumentException($"Expected {count} {(positive ? "positive " : "")}numbers.");
+                for (int i = 0; i < count; i++) BitConverter.GetBytes(v[i]).CopyTo(output, o + at + i * 4);
+            }
+            Floats(min, 0x04, 3, false);
+            Floats(max, 0x10, 3, false);
+            Floats(scale, 0x24, 2, true);
+            return output;
         }
 
         private static bool IsFinitePositive(float value)

@@ -451,7 +451,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZED
 
                 if (zero > cursor)
                 {
-                    string value = Encoding.ASCII.GetString(data, cursor, zero - cursor);
+                    string value = Encoding.Latin1.GetString(data, cursor, zero - cursor);
                     RememberName(value);
                 }
 
@@ -471,7 +471,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZED
 
             int zero = Array.IndexOf(data, (byte)0, stringOffset, stringTableEnd - stringOffset);
             if (zero < 0) zero = stringTableEnd;
-            return Encoding.ASCII.GetString(data, stringOffset, zero - stringOffset);
+            return Encoding.Latin1.GetString(data, stringOffset, zero - stringOffset);
         }
 
         private byte[] BuildStringTable(out Dictionary<string, uint> nameOffsets)
@@ -499,7 +499,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZED
             foreach (string name in orderedNames)
             {
                 nameOffsets[name] = (uint)ms.Position;
-                byte[] ascii = Encoding.ASCII.GetBytes(name);
+                byte[] ascii = Encoding.Latin1.GetBytes(name);
                 ms.Write(ascii, 0, ascii.Length);
                 ms.WriteByte(0);
             }

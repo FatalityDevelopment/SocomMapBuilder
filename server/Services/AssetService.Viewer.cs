@@ -3,6 +3,7 @@ using CodeDesigner.Ps2.FileFormats.Imaging;
 using CodeDesigner.Ps2.FileFormats.Ps2;
 using CodeDesigner.Ps2.FileFormats.Zipper.Anim;
 using CodeDesigner.Ps2.FileFormats.Zipper.MPS;
+using CodeDesigner.Ps2.FileFormats.Zipper.Package;
 using CodeDesigner.Ps2.FileFormats.Zipper.RDR;
 using CodeDesigner.Ps2.FileFormats.Zipper.Texture;
 using CodeDesigner.Ps2.FileFormats.Zipper.ZDB;
@@ -48,6 +49,7 @@ namespace MapBuilder.Server.Services
         {
             reg.Add(c => Responses.Run("VIEWER_LIST", () => ViewerList(c.InputPath, Parse<ViewerRequest>(c.AssetJson))), "VIEWER_LIST");
             reg.Add(c => Responses.Run("VIEWER_PREVIEW", () => ViewerPreview(c.InputPath, Parse<ViewerRequest>(c.AssetJson))), "VIEWER_PREVIEW");
+            RegisterViewerEdits(reg);
             reg.Add(c => Responses.Run("VIEWER_EXTRACT", () => ViewerExtract(c.InputPath, Parse<ViewerRequest>(c.AssetJson), c.OutputPath)), "VIEWER_EXTRACT");
         }
 
@@ -69,6 +71,12 @@ namespace MapBuilder.Server.Services
             inner ??= Array.Empty<int>();
             long size = new FileInfo(full).Length;
             var place = new Place { Path = full, Inner = Array.Empty<int>(), Name = System.IO.Path.GetFileName(full), Size = size, Bytes = () => File.ReadAllBytes(full) };
+            // A loose file edited in its folder's session reads as edited.
+            if (!ZdbArchive.IsArchivePath(full) && EditedSessionOf(full)?.Package.Entry(place.Name) is { } edited)
+            {
+                byte[] data = edited.Data;
+                place = new Place { Path = full, Inner = Array.Empty<int>(), Name = place.Name, Size = data.Length, Bytes = () => data, Loaded = data };
+            }
             for (int depth = 0; depth < inner.Length; depth++)
             {
                 var children = Children(place) ?? throw new InvalidDataException($"{place.Name} is not an archive");
@@ -84,7 +92,7 @@ namespace MapBuilder.Server.Services
         private static IReadOnlyList<ViewerNode>? Children(Place p)
         {
             if (p.Inner.Length == 0 && ZdbArchive.IsArchivePath(p.Path)) return ZdbNodes(p.Path);
-            if (p.Inner.Length == 0 && IsContainerFile(p.Path)) return LooseNodes(p.Path);
+            if (p.Inner.Length == 0 && IsContainerFile(p.Path) && p.Loaded == null) return LooseNodes(p.Path);
             byte[] data = p.Loaded ?? (p.Size <= ViewerReadWhole ? p.Bytes() : Array.Empty<byte>());
             if (!LooksLikeContainer(data)) return null;
             try { return ZedContainer.FromBytes(data).Nodes.Select(n => new ViewerNode(n.Name, n.Size, () => n.Data, n.Data)).ToList(); }
@@ -110,7 +118,24 @@ namespace MapBuilder.Server.Services
             return nodes;
         }
 
-        private static List<ViewerNode> ZdbNodes(string path) => Cached(path, () =>
+        // A package's files in the ZDB's own order (record positions must not change once it has edits), with the
+        // bytes its session holds when it has edits; files the session added come last.
+        private static List<ViewerNode> ZdbNodes(string path)
+        {
+            var disk = DiskZdbNodes(path);
+            if (EditedSessionOf(path) is not { } s) return disk;
+            lock (s.Gate)
+            {
+                var byPath = s.Package.Entries.GroupBy(e => e.Path, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.Last(), StringComparer.OrdinalIgnoreCase);
+                var list = disk.Select(n => n.EntryPath != null && byPath.TryGetValue(n.EntryPath, out var e) ? Node(e) : n).ToList();
+                var known = new HashSet<string>(disk.Select(n => n.EntryPath ?? ""), StringComparer.OrdinalIgnoreCase);
+                list.AddRange(s.Package.Entries.Where(e => !known.Contains(e.Path)).Select(Node));
+                return list;
+            }
+            static ViewerNode Node(ZipperPackage.RootEntry e) { byte[] data = e.Data; return new ViewerNode(e.Leaf, data.Length, () => data, data, e.Path); }
+        }
+
+        private static List<ViewerNode> DiskZdbNodes(string path) => Cached(path, () =>
         {
             using var zdb = ZdbArchive.Open(path);
             return zdb.Entries.Select(e =>
@@ -227,7 +252,8 @@ namespace MapBuilder.Server.Services
                 return Directory.GetFiles(dir, "*.ZDB").Where(f => !Path.GetFileName(f).StartsWith("APACHE", StringComparison.OrdinalIgnoreCase))
                     .OrderBy(f => new FileInfo(f).Length).FirstOrDefault();
             }
-            return kind is "models" or "textures" or "palettes" or "geo" ? p.Path : null;
+            // A loose file's package is its folder (one session for every file in it, as edits use).
+            return kind is "models" or "textures" or "palettes" or "geo" ? EditPackageOf(p.Path) : null;
         }
 
         // ------------------------------------------------------------------ VIEWER_LIST
@@ -247,7 +273,7 @@ namespace MapBuilder.Server.Services
                 lock (s.Gate)
                 {
                     var items = SemanticItems(s, place, kind);
-                    return new { path = full, inner = place.Inner, name = place.Name, kind, size = place.Size, session = s.Id, package = s.OpenPath, crumbs, items };
+                    return new { path = full, inner = place.Inner, name = place.Name, kind, size = place.Size, session = s.Id, package = s.OpenPath, crumbs, items, editable = false, editSession = EditedSessionOf(full)?.Id, editPackage = EditPackageOf(full) };
                 }
             }
 
@@ -260,7 +286,9 @@ namespace MapBuilder.Server.Services
                 if (n.Size == 0) k = "group";
                 return (object)new { name = n.Name, kind = k, size = n.Size, path = full, inner = place.Inner.Append(i).ToArray(), entryPath = n.EntryPath };
             }).ToList();
-            return new { path = full, inner = place.Inner, name = place.Name, kind, size = place.Size, session, package = session != null ? full : null, crumbs, items = list };
+            // Records of a package, or of a loose file its folder's session can hold, can be edited.
+            bool editable = ZdbArchive.IsArchivePath(full) || LooseEditable(full);
+            return new { path = full, inner = place.Inner, name = place.Name, kind, size = place.Size, session, package = session != null ? full : null, crumbs, items = list, editable, editSession = EditedSessionOf(full)?.Id, editPackage = EditPackageOf(full) };
         }
 
         private static object FolderList(string dir)
@@ -285,9 +313,10 @@ namespace MapBuilder.Server.Services
                 }
                 catch (IOException) { }
                 catch (UnauthorizedAccessException) { }
-                items.Add(new { name = f.Name, kind = KindOf(f.Name, head), size = f.Length, path = f.FullName, inner = Array.Empty<int>() });
+                items.Add(new { name = f.Name, kind = KindOf(f.Name, head), size = f.Length, path = f.FullName, inner = Array.Empty<int>(), editable = LooseEditable(f.FullName) });
             }
-            return new { path = dir, inner = Array.Empty<int>(), name = info.Name, kind = "folder", size = 0L, session = (string?)null, package = (string?)null, crumbs = Crumbs(dir, Array.Empty<int>()), items };
+            var edited = Sessions.Values.FirstOrDefault(x => x.OpenPath.Equals(Path.TrimEndingDirectorySeparator(dir), StringComparison.OrdinalIgnoreCase) && (x.Dirty.Count > 0 || x.Undo.Count > 0 || x.Redo.Count > 0));
+            return new { path = dir, inner = Array.Empty<int>(), name = info.Name, kind = "folder", size = 0L, session = (string?)null, package = (string?)null, crumbs = Crumbs(dir, Array.Empty<int>()), items, editable = false, editSession = edited?.Id, editPackage = dir };
         }
 
         // The path bar: the folders down to the file, then each archive entered.
@@ -466,7 +495,8 @@ namespace MapBuilder.Server.Services
             facts.Add(("RDR version", rdr.Version.ToString()));
             facts.Add(("Atoms", rdr.Atoms.Length.ToString()));
             facts.Add(("String pool", Bytes(rdr.StringPool.Length)));
-            return new { type = "rdr", name = place.Name, root = RdrShape.Shape(rdr.BuildTree()), facts = Facts(facts) };
+            // [atom, type, value, children?] from the root: atoms are what VIEWER_EDIT's rdr ops name.
+            return new { type = "rdr", name = place.Name, tree = RdrDocument.Parse(data).Tree(), facts = Facts(facts) };
         }
 
         private static object MpsPreview(Place place, List<(string, string)> facts)
@@ -474,7 +504,19 @@ namespace MapBuilder.Server.Services
             var mps = MpsFile.Parse(place.Bytes());
             facts.Add(("AI maps", $"{mps.Maps.Count} (declared {mps.MapCount})"));
             var maps = mps.Maps.Select(m => new { m.Name, m.Width, m.Height, min = new[] { m.MinX, m.MinY, m.MinZ }, max = new[] { m.MaxX, m.MaxY, m.MaxZ }, scale = new[] { m.ScaleX, m.ScaleZ }, m.Offset }).ToList();
-            return new { type = "mps", name = place.Name, maps, facts = Facts(facts) };
+            // The package's AIMAPS (its first .MPS, a root file): its points, edited with ASSET_EDIT movePoint / setPoint.
+            bool root = ZdbArchive.IsArchivePath(place.Path) ? place.Inner.Length == 1 : place.Inner.Length == 0 && LooseEditable(place.Path);
+            if (root)
+            {
+                var s = ViewerSession(EditPackageOf(place.Path));
+                lock (s.Gate)
+                {
+                    var first = s.Package.Entries.FirstOrDefault(e => e.Leaf.EndsWith(".MPS", StringComparison.OrdinalIgnoreCase));
+                    if (first != null && first.Leaf.Equals(place.Name, StringComparison.OrdinalIgnoreCase))
+                        return new { type = "mps", name = place.Name, maps, points = MapPointsOf(s), session = s.Id, facts = Facts(facts) };
+                }
+            }
+            return new { type = "mps", name = place.Name, maps, points = (object?)null, session = (string?)null, facts = Facts(facts) };
         }
 
         // Long sounds are cut to this many seconds in the preview.
@@ -598,7 +640,7 @@ namespace MapBuilder.Server.Services
             facts.Add(("Title", sys.Title));
             string[] roles = { "Icon", "Copy icon", "Delete icon" };
             for (int i = 0; i < sys.Icons.Length; i++) if (sys.Icons[i].Length > 0) facts.Add((roles[i], sys.Icons[i]));
-            return new { type = "info", name = place.Name, facts = Facts(facts) };
+            return new { type = "iconsys", name = place.Name, line1 = sys.Line1, line2 = sys.Line2, icons = sys.Icons, facts = Facts(facts) };
         }
 
         private static object ProgramPreview(Place place, List<(string, string)> facts)

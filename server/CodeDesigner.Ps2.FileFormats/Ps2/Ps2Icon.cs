@@ -1,6 +1,8 @@
 using System;
 using System.Buffers.Binary;
 using System.IO;
+using System.Collections.Generic;
+using System.Linq;
 using System.Text;
 
 namespace CodeDesigner.Ps2.FileFormats.Ps2
@@ -23,6 +25,8 @@ namespace CodeDesigner.Ps2.FileFormats.Ps2
         public int TextureType { get; init; }
         public int VertexCount { get; init; }
         public int FrameCount { get; init; }
+        /// <summary>Where the texture starts (just past the animation), whether or not the icon has one.</summary>
+        public int TextureOffset { get; init; }
         /// <summary>The first shape (the rest pose), Y up, front toward +Z.</summary>
         public float[] Positions { get; init; } = Array.Empty<float>();
         public float[] Normals { get; init; } = Array.Empty<float>();
@@ -87,7 +91,7 @@ namespace CodeDesigner.Ps2.FileFormats.Ps2
 
             return new Ps2Icon
             {
-                Shapes = shapes, TextureType = texType, VertexCount = count, FrameCount = frames,
+                Shapes = shapes, TextureType = texType, VertexCount = count, FrameCount = frames, TextureOffset = pos,
                 Positions = positions, Normals = normals, Uvs = uvs, Colors = colors, Texture = texture,
             };
         }
@@ -140,17 +144,87 @@ namespace CodeDesigner.Ps2.FileFormats.Ps2
 
         private static byte Expand5(int v) => (byte)((v << 3) | (v >> 2));
 
-        /// <summary>The save title and icon file names of an icon.sys ("PS2D").</summary>
-        public static (string Title, string[] Icons)? ReadIconSys(ReadOnlySpan<byte> data)
+        /// <summary>
+        /// The icon with a new texture: the picture (any size, scaled to 128×128 by nearest pixel) stored unpacked
+        /// after the animation, texture type bits 2 (textured) set and 3 (packed) cleared. Transparent pixels
+        /// (alpha below half) become colour 0; opaque black is kept just above it so it stays visible.
+        /// </summary>
+        public static byte[] WithTexture(byte[] icon, byte[] rgba, int width, int height)
+        {
+            var parsed = Parse(icon);
+            if (rgba.Length != width * height * 4 || width <= 0 || height <= 0) throw new ArgumentException("The picture's size does not match its pixels.");
+            var output = new byte[parsed.TextureOffset + TextureBytes];
+            Buffer.BlockCopy(icon, 0, output, 0, parsed.TextureOffset);
+            BinaryPrimitives.WriteInt32LittleEndian(output.AsSpan(8), (parsed.TextureType | 4) & ~8);
+            for (int y = 0; y < TextureSize; y++)
+                for (int x = 0; x < TextureSize; x++)
+                {
+                    int src = ((y * height / TextureSize) * width + x * width / TextureSize) * 4;
+                    int r = rgba[src] >> 3, g = rgba[src + 1] >> 3, b = rgba[src + 2] >> 3;
+                    int v = rgba[src + 3] < 128 ? 0 : (r | g << 5 | b << 10) is 0 ? 0x0421 : r | g << 5 | b << 10;
+                    BinaryPrimitives.WriteUInt16LittleEndian(output.AsSpan(parsed.TextureOffset + (y * TextureSize + x) * 2), (ushort)v);
+                }
+            return output;
+        }
+
+        /// <summary>An icon.sys ("PS2D") with a new two-line title (full-width Shift-JIS, 68 bytes with the line
+        /// break word at 6) and icon file names (64 bytes each at 0x104, 0x144, 0x184).</summary>
+        public static byte[] WithIconSys(byte[] sys, string line1, string line2, string[] icons)
+        {
+            if (ReadIconSys(sys) == null) throw new InvalidDataException("Not a PS2D icon.sys.");
+            byte[] first = ToShiftJis(line1), second = ToShiftJis(line2);
+            if (first.Length + second.Length > 66) throw new ArgumentException("The title is too long (33 characters across both lines).");
+            var output = (byte[])sys.Clone();
+            Array.Clear(output, 0xC0, 68);
+            first.CopyTo(output, 0xC0);
+            second.CopyTo(output, 0xC0 + first.Length);
+            BinaryPrimitives.WriteUInt16LittleEndian(output.AsSpan(6), (ushort)first.Length);
+            for (int i = 0; i < 3; i++)
+            {
+                string name = i < icons.Length ? icons[i] ?? "" : "";
+                if (name.Length > 63 || name.Any(c => c < 0x20 || c > 0x7E)) throw new ArgumentException($"\"{name}\" is not a file name (printable ASCII, up to 63 characters).");
+                Array.Clear(output, 0x104 + i * 64, 64);
+                Encoding.ASCII.GetBytes(name).CopyTo(output, 0x104 + i * 64);
+            }
+            return output;
+        }
+
+        // Printable ASCII to the full-width Shift-JIS the browser shows (the inverse of ShiftJisText).
+        private static byte[] ToShiftJis(string text)
+        {
+            var bytes = new List<byte>();
+            foreach (char c in text)
+            {
+                (int hi, int lo) = c switch
+                {
+                    ' ' => (0x81, 0x40), ':' => (0x81, 0x46), '.' => (0x81, 0x44), ',' => (0x81, 0x43), '-' => (0x81, 0x5B),
+                    '(' => (0x81, 0x69), ')' => (0x81, 0x6A), '&' => (0x81, 0x95), '/' => (0x81, 0x5E), '!' => (0x81, 0x49), '?' => (0x81, 0x48),
+                    >= '0' and <= '9' => (0x82, 0x4F + c - '0'),
+                    >= 'A' and <= 'Z' => (0x82, 0x60 + c - 'A'),
+                    >= 'a' and <= 'z' => (0x82, 0x81 + c - 'a'),
+                    _ => throw new ArgumentException($"'{c}' cannot be written in a save title (letters, digits, space and : . , - ( ) & / ! ?)."),
+                };
+                bytes.Add((byte)hi);
+                bytes.Add((byte)lo);
+            }
+            return bytes.ToArray();
+        }
+
+        public sealed record IconSys(string Line1, string Line2, string[] Icons)
+        {
+            public string Title => $"{Line1} {Line2}".Trim();
+        }
+
+        /// <summary>The two-line save title and icon file names of an icon.sys ("PS2D").</summary>
+        public static IconSys? ReadIconSys(ReadOnlySpan<byte> data)
         {
             if (data.Length < 0x1C4 || !data[..4].SequenceEqual("PS2D"u8)) return null;
             // Word 6: where the title's second line starts, in bytes.
             int lineBreak = BinaryPrimitives.ReadUInt16LittleEndian(data[6..]);
-            string title = lineBreak is > 0 and < 68
-                ? ShiftJisText(data.Slice(0xC0, lineBreak)) + " " + ShiftJisText(data.Slice(0xC0 + lineBreak, 68 - lineBreak))
-                : ShiftJisText(data.Slice(0xC0, 68));
-            var icons = new[] { Ascii(data.Slice(0x104, 64)), Ascii(data.Slice(0x144, 64)), Ascii(data.Slice(0x184, 64)) };
-            return (title, icons);
+            var title = data.Slice(0xC0, 68);
+            bool split = lineBreak is > 0 and < 68;
+            string line1 = ShiftJisText(split ? title[..lineBreak] : title), line2 = split ? ShiftJisText(title[lineBreak..]) : "";
+            return new IconSys(line1, line2, new[] { Ascii(data.Slice(0x104, 64)), Ascii(data.Slice(0x144, 64)), Ascii(data.Slice(0x184, 64)) });
         }
 
         private static string Ascii(ReadOnlySpan<byte> s)

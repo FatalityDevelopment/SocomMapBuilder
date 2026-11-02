@@ -14,9 +14,9 @@ import { loadMapModels } from '../zipper-core/map-models';
 import type { Lighting, Shading, ViewPreset, ViewportCore } from '../zipper-core/viewport-core';
 import type { ModelTexturePixels } from '../zipper-core/texture-pixels';
 import * as api from './viewer-client';
-import type { ItemKind, Listing, Place, Preview, ViewerItem } from './viewer-client';
+import type { EditStatus, ItemKind, Listing, Place, Preview, ViewerItem } from './viewer-client';
 
-export type Stage = 'empty' | 'loading' | 'model' | 'map' | 'clip' | 'image' | 'palette' | 'audio' | 'movie' | 'rdr' | 'mps' | 'text' | 'hex' | 'program' | 'summary' | 'error';
+export type Stage = 'empty' | 'loading' | 'model' | 'map' | 'clip' | 'image' | 'palette' | 'audio' | 'movie' | 'rdr' | 'mps' | 'text' | 'hex' | 'program' | 'iconsys' | 'summary' | 'error';
 type ViewportKind = 'model' | 'map' | 'clip';
 
 export interface MenuItem { label: string; action?: () => void; disabled?: () => boolean; shortcut?: string; separator?: boolean }
@@ -72,6 +72,10 @@ export class AssetViewerLogic {
   readonly movieUrl = signal('');
   readonly movieBusy = signal(false);
   readonly movieNote = signal('');
+  // Edits: the asset session holding this package's edits (undo, redo, save), its status, and an edit in flight.
+  readonly editSession = signal<string | null>(null);
+  readonly editStatus = signal<EditStatus | null>(null);
+  readonly editBusy = signal(false);
   // 3D previews.
   readonly viewportKind = signal<ViewportKind | null>(null);
   readonly shading = signal<Shading>('textured');
@@ -85,7 +89,7 @@ export class AssetViewerLogic {
   readonly clipTime = signal(0);
   readonly clipDuration = signal(0);
   // RDR trees: expanded paths.
-  readonly rdrOpen = signal<ReadonlySet<string>>(new Set(['']));
+  readonly rdrOpen = signal<ReadonlySet<string>>(new Set(['0']));
 
   readonly shadings: Array<{ id: Shading; label: string }> = [
     { id: 'textured', label: 'Textured' }, { id: 'solid', label: 'Solid' }, { id: 'wireframe', label: 'Wire' },
@@ -118,6 +122,15 @@ export class AssetViewerLogic {
         { label: '', separator: true },
         { label: 'Copy path', action: () => void this.copyPath(), disabled: () => !this.listing() },
         { label: 'Reload', action: () => void this.reload(), shortcut: 'F5', disabled: () => !this.listing() },
+      ],
+    },
+    {
+      id: 'edit', label: 'Edit', items: [
+        { label: 'Undo', action: () => void this.undo(), shortcut: 'Ctrl+Z', disabled: () => !this.editStatus()?.canUndo },
+        { label: 'Redo', action: () => void this.redo(), shortcut: 'Ctrl+Y', disabled: () => !this.editStatus()?.canRedo },
+        { label: '', separator: true },
+        { label: 'Save changes…', action: () => void this.saveEdits(), shortcut: 'Ctrl+S', disabled: () => !this.editStatus()?.dirty.length },
+        { label: 'Replace picture from image…', action: () => void this.replaceImage(), disabled: () => !this.canReplaceImage() },
       ],
     },
     {
@@ -176,7 +189,7 @@ export class AssetViewerLogic {
 
   // ------------------------------------------------------------------ navigation
 
-  async navigate(place: Place, replace = false): Promise<void> {
+  async navigate(place: Place, replace = false, keepView = false): Promise<void> {
     const seq = ++this.listSeq;
     this.listBusy.set(true);
     try {
@@ -185,6 +198,8 @@ export class AssetViewerLogic {
       const current = this.listing();
       if (current && !replace && !api.samePlace(current, listing)) { this.history.push({ path: current.path, inner: current.inner }); this.future = []; }
       this.listing.set(listing);
+      void this.followEditSession(listing.editSession);
+      if (keepView) { return; }
       this.query.set('');
       this.kindFilter.set('');
       this.selected.set(null);
@@ -361,7 +376,8 @@ export class AssetViewerLogic {
         this.movieNote.set('');
         this.setStage('movie', p);
         return;
-      case 'rdr': this.rdrOpen.set(new Set([''])); this.setStage('rdr', p); return;
+      case 'rdr': if (!this.keepRdrOpen) { this.rdrOpen.set(new Set(['0'])); } this.setStage('rdr', p); return;
+      case 'iconsys': this.setStage('iconsys', p); return;
       case 'mps': this.setStage('mps', p); return;
       case 'text': this.setStage('text', p); return;
       case 'hex': this.setStage('hex', p); if (p.note) { this.stageNote.set(p.note); } return;
@@ -659,6 +675,155 @@ export class AssetViewerLogic {
     this.audioUrl.set(wav ? URL.createObjectURL(new Blob([base64Bytes(wav)], { type: 'audio/wav' })) : '');
   }
 
+  // ------------------------------------------------------------------ editing (VIEWER_EDIT, through the package's session)
+
+  private keepRdrOpen = false;
+
+  /** Whether the selection (or, with nothing selected, this place) can be edited in place. */
+  canEditInPlace(item: ViewerItem | null = this.selected()): boolean {
+    const l = this.listing();
+    if (!item || !l || item.ref) { return false; }
+    if (['folder', 'package', 'group', 'sound', 'bank', 'movie'].includes(item.kind)) { return false; }
+    return item.inner.length === 0 ? !!item.editable || (l.editable && api.samePlace(item, l)) : l.editable;
+  }
+
+  canReplaceImage(): boolean {
+    const s = this.selected();
+    return !!s && (s.kind === 'texture' ? !!s.ref && !!this.listing()?.session : (s.kind === 'image' || s.kind === 'icon') && this.canEditInPlace(s));
+  }
+
+  private editTarget(): ViewerItem | null {
+    const s = this.selected();
+    if (s) { return s; }
+    const l = this.listing();
+    return l && l.kind !== 'folder' ? { path: l.path, inner: l.inner, name: l.name, kind: l.kind, size: l.size, editable: l.editable } : null;
+  }
+
+  /** Runs one edit on the selection, then shows the result (the listing and preview read the edited bytes). */
+  async applyEdit(op: Record<string, unknown>): Promise<boolean> {
+    const target = this.editTarget();
+    if (!target || this.editBusy()) { return false; }
+    this.editBusy.set(true);
+    try {
+      const r = await api.edit(target, op);
+      this.editSession.set(r.session);
+      this.editStatus.set(r.status);
+      this.say(`${r.status.canUndo ?? 'Edited'} (unsaved: ${r.status.dirty.join(', ') || 'none'})`);
+      await this.refreshAfterEdit();
+      return true;
+    } catch (err) {
+      this.say(errText(err), true);
+      return false;
+    } finally {
+      this.editBusy.set(false);
+    }
+  }
+
+  // The listing again (sizes, kinds) with the same selection, filters and open RDR branches.
+  private async refreshAfterEdit(): Promise<void> {
+    const l = this.listing();
+    const sel = this.selected();
+    if (!l) { return; }
+    await this.navigate(l, true, true).catch(() => undefined);
+    const again = sel ? this.listing()?.items.find(i => api.placeKey(i, i.ref) === api.placeKey(sel, sel.ref)) ?? null : null;
+    this.selected.set(again);
+    this.keepRdrOpen = true;
+    try { await this.showPreview(again); } finally { this.keepRdrOpen = false; }
+  }
+
+  private async followEditSession(session: string | null): Promise<void> {
+    if (session === this.editSession() && session) { return; }
+    this.editSession.set(session);
+    this.editStatus.set(null);
+    if (!session) { return; }
+    try { this.editStatus.set(await this.clientFor(session).client.status() as unknown as EditStatus); } catch { this.editSession.set(null); }
+  }
+
+  async undo(): Promise<void> { await this.stepHistory(true); }
+  async redo(): Promise<void> { await this.stepHistory(false); }
+
+  private async stepHistory(undo: boolean): Promise<void> {
+    const session = this.editSession();
+    const st = this.editStatus();
+    const what = undo ? st?.canUndo : st?.canRedo;
+    if (!session || !what) { return; }
+    try {
+      const { client } = this.clientFor(session);
+      await (undo ? client.undo() : client.redo());
+      this.editStatus.set(await client.status() as unknown as EditStatus);
+      this.say(`${undo ? 'Undid' : 'Redid'}: ${what}`);
+      await this.refreshAfterEdit();
+    } catch (err) { this.say(errText(err), true); }
+  }
+
+  /** Writes the changed files: a package to a .ZDB you choose (over itself keeps a .bak), loose files into a folder. */
+  async saveEdits(): Promise<void> {
+    const session = this.editSession();
+    const st = this.editStatus();
+    if (!session || !st?.dirty.length) { return; }
+    const folder = st.path.replace(/[\\/][^\\/]*$/, '');
+    const target = st.isZdb
+      ? await host.browse({ mode: 'save', title: `Save ${fileName(st.path)}`, filters: [{ label: 'Package', extensions: ['zdb', 'cdb'] }], start: folder, fileName: fileName(st.path), key: 'save', submitLabel: 'Save' })
+      : await host.browse({ mode: 'folder', title: `Save ${st.dirty.length} changed file(s) into a folder`, key: 'save', submitLabel: 'Save here' });
+    if (!target) { return; }
+    try {
+      const { client } = this.clientFor(session);
+      const r = await client.save({ mode: 'zdb', outputPath: target });
+      this.editStatus.set(await client.status() as unknown as EditStatus);
+      this.say(`Saved ${r.leaves.join(', ')} → ${r.written.join(', ')}`);
+    } catch (err) { this.say(`Save: ${errText(err)}`, true); }
+  }
+
+  // RDR
+  setRdrValue(atom: number, text: string): Promise<boolean> { return this.applyEdit({ op: 'rdrSet', atom, value: text }); }
+  duplicateRdr(atom: number): Promise<boolean> { return this.applyEdit({ op: 'rdrDuplicate', atom }); }
+  removeRdr(atom: number): Promise<boolean> { return this.applyEdit({ op: 'rdrRemove', atom }); }
+
+  // AI maps: the header through VIEWER_EDIT; points through the package session's setPoint (as the Map Builder does).
+  setMap(map: number, fields: { name?: string; min?: number[]; max?: number[]; scale?: number[] }): Promise<boolean> {
+    return this.applyEdit({ op: 'mpsMap', map, ...fields });
+  }
+
+  async setPoint(name: string, fields: { newName?: string; team?: number; kind?: string; position?: number[] }): Promise<void> {
+    const p = this.preview();
+    if (p?.type !== 'mps' || !p.session) { return; }
+    try {
+      const { client } = this.clientFor(p.session);
+      await client.edit({ op: 'setPoint', name, ...fields });
+      this.editSession.set(p.session);
+      this.editStatus.set(await client.status() as unknown as EditStatus);
+      this.say(`Changed point ${name}`);
+      await this.refreshAfterEdit();
+    } catch (err) { this.say(errText(err), true); }
+  }
+
+  setText(text: string): Promise<boolean> { return this.applyEdit({ op: 'text', text }); }
+  patchBytes(offset: number, hex: string): Promise<boolean> { return this.applyEdit({ op: 'bytes', offset, hex }); }
+  setIconSys(title1: string, title2: string, icons: string[]): Promise<boolean> { return this.applyEdit({ op: 'iconSys', title1, title2, icons }); }
+
+  /** A texture of the package (its session's replaceTexture), a screen or an icon's texture, from an image file. */
+  async replaceImage(): Promise<void> {
+    const s = this.selected();
+    if (!s || !this.canReplaceImage()) { return; }
+    const picked = await host.pickImage();
+    if (!picked) { return; }
+    if (s.kind === 'texture' && s.ref) {
+      const session = this.listing()!.session!;
+      try {
+        const { client, textures } = this.clientFor(session);
+        await client.edit({ op: 'replaceTexture', texture: s.ref.name, namespace: s.ref.namespace ?? undefined, pngBase64: picked.base64 });
+        const status = await client.status();
+        textures.invalidate(status.revision);
+        this.editSession.set(session);
+        this.editStatus.set(status as unknown as EditStatus);
+        this.say(`Replaced ${s.name} with ${picked.name}`);
+        await this.refreshAfterEdit();
+      } catch (err) { this.say(errText(err), true); }
+      return;
+    }
+    await this.applyEdit({ op: 'image', pngBase64: picked.base64 });
+  }
+
   canExportImage(): boolean { return !!this.png && (this.stage() === 'image' || this.stage() === 'model'); }
   canExportAudio(): boolean { return !!this.wav && this.stage() === 'audio'; }
 
@@ -841,6 +1006,9 @@ export class AssetViewerLogic {
     let handled = true;
     if (e.ctrlKey && e.key.toLowerCase() === 'o') { void this.openFolder(); }
     else if (e.key === 'F5') { void this.reload(); }
+    else if (e.ctrlKey && !typing && e.key.toLowerCase() === 'z') { void this.undo(); }
+    else if (e.ctrlKey && !typing && e.key.toLowerCase() === 'y') { void this.redo(); }
+    else if (e.ctrlKey && e.key.toLowerCase() === 's') { void this.saveEdits(); }
     else if (e.altKey && e.key === 'ArrowLeft') { void this.back(); }
     else if (e.altKey && e.key === 'ArrowRight') { void this.forward(); }
     else if (typing || inCanvas) { handled = false; }

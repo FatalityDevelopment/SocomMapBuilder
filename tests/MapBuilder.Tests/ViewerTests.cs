@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Text.Json;
 using CodeDesigner.Ps2.FileFormats.Ps2;
+using CodeDesigner.Ps2.FileFormats.Zipper.RDR;
 using CodeDesigner.Ps2.FileFormats.Zipper.ZED;
 using MapBuilder.Server;
 using MapBuilder.Tests.Fixtures;
@@ -67,8 +68,10 @@ namespace MapBuilder.Tests
         [Fact]
         public void An_editor_opening_the_package_takes_over_the_viewers_session()
         {
-            string viewer = List(Path.Combine(_pkg.Folder, "TST_MDL.ZED")).GetProperty("session").GetString()!;
-            string editor = _b.Open(Path.Combine(_pkg.Folder, "TST_MDL.ZED"));
+            // A loose file's package is its folder: the viewer's "Open in Model Editor" opens that.
+            var listing = List(Path.Combine(_pkg.Folder, "TST_MDL.ZED"));
+            string viewer = listing.GetProperty("session").GetString()!;
+            string editor = _b.Open(listing.GetProperty("package").GetString()!);
             Assert.Equal(viewer, editor);
             _b.Close(editor);
         }
@@ -84,6 +87,74 @@ namespace MapBuilder.Tests
             string target = Path.Combine(Path.GetDirectoryName(_pkg.Folder)!, "out", "AIMAPS.MPS");
             _b.Ok(new CommandMessage { Command = "VIEWER_EXTRACT", InputPath = zdb, OutputPath = target, AssetJson = JsonSerializer.Serialize(new { inner = new[] { mps } }) });
             Assert.Equal(File.ReadAllBytes(Path.Combine(_pkg.Folder, "AIMAPS.MPS")), File.ReadAllBytes(target));
+        }
+
+        // ------------------------------------------------------------------ editing
+
+        private JsonElement Edit(string path, int[] inner, object op) =>
+            _b.Ok(new CommandMessage { Command = "VIEWER_EDIT", InputPath = path, AssetJson = JsonSerializer.Serialize(op).TrimEnd('}') + $",\"inner\":{JsonSerializer.Serialize(inner)}}}" });
+
+        private static int RdrValue(JsonElement tree, int atom)
+        {
+            if (tree[0].GetInt32() == atom) return tree[2].GetInt32();
+            if (tree[1].GetString() != "list") return int.MinValue;
+            foreach (var c in tree[3].EnumerateArray()) { int v = RdrValue(c, atom); if (v != int.MinValue) return v; }
+            return int.MinValue;
+        }
+
+        [Fact]
+        public void An_rdr_inside_an_archive_edits_with_undo_redo_and_save()
+        {
+            string dir = Path.Combine(Path.GetDirectoryName(_pkg.Folder)!, "LOOSE");
+            Directory.CreateDirectory(dir);
+            var zar = ZedContainer.CreateNew();
+            zar.AddEntry("first.bin", new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17 });
+            zar.AddEntry("menu.rdr", RdrDocumentTests.Sample());
+            string path = Path.Combine(dir, "MENU.ZAR");
+            File.WriteAllBytes(path, zar.ToBytes());
+            byte[] before = File.ReadAllBytes(path);
+
+            var r = Edit(path, new[] { 1 }, new { op = "rdrSet", atom = 5, value = "42" });
+            string session = r.GetProperty("session").GetString()!;
+            Assert.Equal(42, RdrValue(Preview(path, 1).GetProperty("tree"), 5));
+            Assert.Equal(session, List(path).GetProperty("editSession").GetString());
+
+            _b.Undo(session);
+            Assert.Equal(3, RdrValue(Preview(path, 1).GetProperty("tree"), 5));
+            _b.Redo(session);
+
+            string outDir = Path.Combine(dir, "out");
+            _b.Ok(new CommandMessage { Command = "ASSET_SAVE", AssetSession = session, AssetJson = JsonSerializer.Serialize(new { mode = "zdb", outputPath = outDir }) });
+            byte[] saved = File.ReadAllBytes(Path.Combine(outDir, "MENU.ZAR"));
+            var nodes = ZedContainer.FromBytes(saved).Nodes;
+            Assert.Equal(new byte[] { 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17 }, nodes[0].Data);
+            Assert.Equal(42, RdrDocument.Parse(nodes[1].Data).ValueOf(5));
+            // Only the edited value's four bytes changed.
+            Assert.Equal(before.Length, saved.Length);
+            Assert.InRange(before.Zip(saved).Count(p => p.First != p.Second), 1, 4);
+            _b.Close(session);
+        }
+
+        [Fact]
+        public void An_ai_map_in_a_package_renames_and_text_files_edit()
+        {
+            string zdb = _pkg.WriteZdb();
+            int mps = Item(List(zdb), "AIMAPS.MPS").GetProperty("inner")[0].GetInt32();
+            var maps = Preview(zdb, mps).GetProperty("maps");
+            Assert.True(maps.GetArrayLength() > 0);
+            var r = Edit(zdb, new[] { mps }, new { op = "mpsMap", map = 0, name = "renamed" });
+            Assert.Equal("renamed", Preview(zdb, mps).GetProperty("maps")[0].GetProperty("name").GetString());
+            // Records keep their positions once the package has edits.
+            Assert.Equal(mps, Item(List(zdb), "AIMAPS.MPS").GetProperty("inner")[0].GetInt32());
+            Assert.Contains("AIMAPS.MPS", r.GetProperty("status").GetProperty("dirty").EnumerateArray().Select(x => x.GetString()));
+            _b.Close(r.GetProperty("session").GetString()!);
+
+            string text = Path.Combine(_pkg.Folder, "NOTES.CNF");
+            File.WriteAllText(text, "BOOT2 = cdrom0:\\X;1\n");
+            var t = Edit(text, Array.Empty<int>(), new { op = "text", text = "VMODE = PAL\n" });
+            Assert.Equal("VMODE = PAL\n", Preview(text).GetProperty("text").GetString());
+            _b.Fails(new CommandMessage { Command = "VIEWER_EDIT", InputPath = text, AssetJson = "{\"op\":\"nothing\"}" });
+            _b.Close(t.GetProperty("session").GetString()!);
         }
 
         // ------------------------------------------------------------------ sound stores

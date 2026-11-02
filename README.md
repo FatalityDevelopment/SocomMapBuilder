@@ -98,6 +98,7 @@ Browse a whole disc (or any folder) down into packages and archives, preview wha
 - Every file type on the retail disc previews: memory-card icons (.ICO, in 3D with their texture) and icon lists, sounds (.VAG and the VAGSTORE / BNKSTORE stores, .BNK / .BD banks sample by sample) played in the page, the RAW / RGB loading screens, RDR trees, AI maps, text (.CNF), programs (.ELF, .IRX: sections, IOP module name), movies (.PSS: picture size, frame rate, length, and **Convert for preview**, which takes out its sound track (the PS2's "SShd" PCM stream, which ffmpeg does not read) and has ffmpeg join it to the picture as an H.264 / AAC MP4, kept in `%LOCALAPPDATA%\MapBuilder\movies`, so it plays in the page; needs ffmpeg on the server: `winget install Gyan.FFmpeg` or `MAPBUILDER_FFMPEG`), and a hex dump with strings for anything else.
 - Actions: open in the Map Builder, Model Editor or Animation Editor; export a texture, screen or icon texture as PNG and a sound as WAV; extract any record as stored.
 - **Import… / Replace… / Remove**: change a package's files or an archive's records; the result is written to a file you choose.
+- **Edit in place** (Edit menu: Undo Ctrl+Z, Redo Ctrl+Y, Save changes… Ctrl+S): RDR values, strings and list items (duplicate / remove), AI map headers and points, text files, icon.sys titles, a byte patcher for any record, and pictures (textures, RAW / RGB screens, icon textures) replaced from an image. Edits go through the package's asset session (a .ZDB's, or a loose file's folder's) and are spliced into their archives in place, so every other byte stays as it was.
 
 Edits in the editors are undoable. SOCOM 3 / Combined Assault archives and GTA: San Andreas (.ISO or .IMG) open read-only.
 
@@ -274,6 +275,7 @@ All commands are `POST /api/command` with a JSON body `{ "Command": ..., ...fiel
 | `ASSET_HISTORY` / `ASSET_VALIDATE` | `AssetSession` (+ `AssetJson: {vramBudget?}` for validate) | The undo / redo steps; a map lint |
 | `PACKAGE_EDIT` | `InputPath`, `OutputPath`, `Data: [ops]`, `DryRun?` | Add / replace / remove package files and archive records (refused while an open session has unsaved edits on the file) |
 | `FS_PLACES` / `FS_LIST` | `InputPath` | Drives, common folders and folder listings |
+| `VIEWER_EDIT` | `InputPath`, `AssetJson: {inner, op: rdrSet / rdrDuplicate / rdrRemove / mpsMap / text / bytes / image / iconSys, …}` | One in-place edit through the package's asset session (undo / redo / save with `ASSET_UNDO` / `ASSET_REDO` / `ASSET_SAVE`) |
 | `VIEWER_MOVIE` | `InputPath` (a .PSS) | Converts a movie to MP4 once (ffmpeg) and answers its `/api/viewer/movie/…` stream URL |
 | `VIEWER_LIST` / `VIEWER_PREVIEW` / `VIEWER_EXTRACT` | `InputPath`, `AssetJson: {inner?: [entry indices], sample?, rate?}` (+ `OutputPath` for extract) | Asset Viewer: what a folder, file or archive holds; a typed preview of one file or record; a record's bytes as stored |
 

@@ -24,6 +24,8 @@ export interface ViewerItem extends Place {
   detail?: string;
   entryPath?: string | null;
   ref?: ItemRef;
+  // Folder listings say per file whether it can be edited; records follow their listing's `editable`.
+  editable?: boolean;
 }
 
 export interface Crumb extends Place { label: string; entryPath?: string | null }
@@ -36,19 +38,27 @@ export interface Listing extends Place {
   package: string | null;
   crumbs: Crumb[];
   items: ViewerItem[];
+  // Whether this listing's records can be edited, the session holding edits to its package (if any), and that package.
+  editable: boolean;
+  editSession: string | null;
+  editPackage: string;
 }
 
 export type Fact = [string, string];
 
-export type RdrValue = string | number | boolean | null | RdrValue[] | { [key: string]: RdrValue };
+/** An RDR atom: [atom, 'list', count, children] or [atom, 'int' | 'float' | 'string' | other, value]. */
+export type RdrTree = [number, 'list', number, RdrTree[]] | [number, string, string | number];
+
+export interface MpsPoint { name: string; team: number; kind: string; x: number; z: number; cellX: number; cellZ: number }
 
 export type Preview = { name: string; facts: Fact[] } & (
   | { type: 'folder' | 'info' }
   | { type: 'movie'; canConvert: boolean; url: string | null }
   | { type: 'archive'; kind: ItemKind }
   | { type: 'package'; session: string; package: string; hasMap: boolean; mapNamespace: string | null; models: number; characters: number }
-  | { type: 'rdr'; root: RdrValue }
-  | { type: 'mps'; maps: Array<{ name: string; width: number; height: number; min: number[]; max: number[]; scale: number[]; offset: number }> }
+  | { type: 'rdr'; tree: RdrTree }
+  | { type: 'mps'; maps: Array<{ name: string; width: number; height: number; min: number[]; max: number[]; scale: number[]; offset: number }>; points: { points: MpsPoint[] } | null; session: string | null }
+  | { type: 'iconsys'; line1: string; line2: string; icons: string[] }
   | { type: 'audio'; rate: number; seconds: number; wav: string | null; sample?: number; samples?: Array<{ offset: number; length: number; seconds: number }> }
   | { type: 'image'; width: number; height: number; png: string }
   | { type: 'icon'; mesh: unknown; png: string | null }
@@ -75,6 +85,13 @@ export function palette(session: string, archive: string, id: number): Promise<P
 /** Converts a .PSS to MP4 (once; it is cached) and answers where the page can stream it. */
 export function convertMovie(path: string): Promise<{ url: string; size: number; silent: boolean }> {
   return command('VIEWER_MOVIE', { InputPath: path });
+}
+
+export interface EditStatus { session: string; path: string; isZdb: boolean; revision: number; dirty: string[]; canUndo: string | null; canRedo: string | null }
+
+/** One VIEWER_EDIT on a file or record (rdrSet, rdrDuplicate, rdrRemove, mpsMap, text, bytes, image, iconSys). */
+export function edit(place: Place, op: Record<string, unknown>): Promise<{ session: string; package: string; result: unknown; status: EditStatus }> {
+  return command('VIEWER_EDIT', { InputPath: place.path, AssetJson: json({ ...op, inner: place.inner }) });
 }
 
 export function extract(place: Place, outputPath: string): Promise<{ written: string; size: number }> {
