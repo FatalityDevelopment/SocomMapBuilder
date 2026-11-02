@@ -32,6 +32,38 @@ export function placementOp(inst: MapInstanceWire, fields: Record<string, unknow
   return null;
 }
 
+// Deletes for a selection, highest index first so earlier deletes do not shift later ones.
+export function deleteOps(sel: MapInstanceWire[]): Record<string, unknown>[] {
+  const geo = sel.filter(i => i.geoIndex !== null && i.clutterIndex === null).sort((a, b) => b.geoIndex! - a.geoIndex!).map(i => ({ op: 'deleteInstance', geoIndex: i.geoIndex }));
+  const clutter = sel.filter(i => i.clutterIndex !== null).sort((a, b) => b.clutterIndex! - a.clutterIndex!).map(i => ({ op: 'deleteClutter', clutterIndex: i.clutterIndex }));
+  return [...geo, ...clutter];
+}
+
+// Copies for a selection. GEO copies insert nodes: go from the highest index down so the earlier indices stay valid.
+export function duplicateOps(sel: MapInstanceWire[]): Record<string, unknown>[] {
+  const geo = sel.filter(i => i.clutterIndex === null).sort((a, b) => b.geoIndex! - a.geoIndex!).map(i => ({ op: 'duplicateInstance', geoIndex: i.geoIndex }));
+  const clutter = sel.filter(i => i.clutterIndex !== null).map(i => ({ op: 'addClutter', model: i.model, matrix: i.matrix }));
+  return [...geo, ...clutter];
+}
+
+// The clutter indices an addClutter edit (or a batch of them) answered.
+export function addedClutter(raw: { newClutterIndex?: number; results?: Array<{ newClutterIndex?: number } | null> }): Set<number> {
+  return new Set([raw.newClutterIndex, ...(raw.results ?? []).map(r => r?.newClutterIndex)].filter((v): v is number => typeof v === 'number' && v >= 0));
+}
+
+// The copies after a duplicate: the added clutter, and the GEO instances that were not there before. A GEO copy has its
+// original's path and lands right after it, so walking the old and new lists in order leaves the copies as extras.
+export function pickDuplicates(before: MapInstanceWire[], after: MapInstanceWire[], newClutter: Set<number>): number[] {
+  const beforeGeo = before.filter(i => i.clutterIndex === null).map(i => `${i.model}|${i.path}`);
+  const picked: number[] = [];
+  let k = 0;
+  after.forEach((inst, i) => {
+    if (inst.clutterIndex !== null) { if (newClutter.has(inst.clutterIndex)) { picked.push(i); } return; }
+    if (k < beforeGeo.length && beforeGeo[k] === `${inst.model}|${inst.path}`) { k++; } else { picked.push(i); }
+  });
+  return picked;
+}
+
 export function yawOf(m: number[]): number { return Math.atan2(-m[2], m[0]) * 180 / Math.PI; }
 export function scaleOf(m: number[]): number { return Math.hypot(m[0], m[1], m[2]); }
 export function fmt(v: number): string { return (Math.abs(v) < 1e-4 ? 0 : v).toFixed(2); }

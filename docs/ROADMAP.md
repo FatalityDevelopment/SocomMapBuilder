@@ -22,7 +22,7 @@ The goal: people **and AI over MCP** can add, edit and delete every SOCOM asset 
 
 ## In progress / next up
 
-- **Now:** 1d (web tests), then Phase 2.
+- **Now:** Phase 2 (MCP authoring).
 - **Next:** a decodable synthetic mesh plus a TXR/PAL fixture, so the mesh, texture and import ops can be pinned.
 - Note for fixtures: a ZDB of **type 1** (header `0xC8`/`0x58`) is detected as SOCOM 3 / CA and opens read-only. SOCOM II packages are type 2.
 - Note for running tests while the app is open: `dotnet run` locks `server/bin/Debug`, so run `dotnet test tests/MapBuilder.Tests -c Release`.
@@ -63,8 +63,8 @@ The goal: people **and AI over MCP** can add, edit and delete every SOCOM asset 
 - Before/after check: with the old server code, 15 of the 22 HardeningTests fail; with the fixes, all pass.
 
 **1d. Web**
-- [ ] Vitest for the `useMapEdits` index bookkeeping and the clutter copy/paste payload.
-- [ ] Browser smoke: edit → undo → save-request flow.
+- [x] Vitest for the selection-edit bookkeeping: `deleteOps`, `duplicateOps`, `addedClutter` and `pickDuplicates` moved from `useMapEdits.ts` into `mapModel.ts`, tested in `mapModel.test.ts` (delete/duplicate order, batch result parsing, picking the copies).
+- [ ] Browser smoke: edit → undo → save-request flow. *Not done:* it needs the backend and the Vite dev server running; add it to `web/scripts/browser-smoke.cjs` next to `checkWorkflow`.
 
 ### Phase 2: MCP authoring
 - [ ] Typed schemas: `enum`, `items`, min/max, `additionalProperties:false`; `assets_edit.op` as `oneOf` from one op-spec table that also drives validation.
