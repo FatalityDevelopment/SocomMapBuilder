@@ -4,9 +4,10 @@
 // go to the page, which sends them to the bridge (moveInstance / moveClutter / movePoint / addClutter ...).
 
 import * as THREE from 'three';
-import { SELECT_COLOR, ViewportCore, chunkGeometry, isIdentity, labelSprite, type MaterialSpec } from '../webview/zipper-core/viewport-core';
+import { placementMatrix, samplePlacement, surfaceNormal, type PlacementOptions, type PlacementSample, type PlacementTransform } from './placement';
+import { SELECT_COLOR, ViewportCore, billboardYaw, chunkGeometry, isIdentity, labelSprite, type MaterialSpec } from '../webview/zipper-core/viewport-core';
 import type { EditorMesh } from '../webview/model-editor/mesh-data';
-import { layerOf, movable as isMovable, pointColor } from '../mapModel';
+import { groupInstancesByLayer, layerOf, movable as isMovable, pointColor } from '../mapModel';
 
 export type MapTool = 'select' | 'move' | 'rotate' | 'scale' | 'place';
 export type MapLayer = 'world' | 'reference' | 'clutter' | 'sky' | 'points';
@@ -36,7 +37,7 @@ export interface MapCallbacks {
   // New model-space world matrices for moved instances.
   onTransformCommit?: (items: Array<{ index: number; matrix: number[] }>, kind: 'move' | 'rotate' | 'scale') => void;
   onPointMove?: (name: string, position: [number, number, number]) => void;
-  onPlace?: (position: [number, number, number]) => void;
+  onPlace?: (transform: PlacementTransform) => void;
   onOpenModel?: (index: number) => void;
   onCameraChange?: () => void;
 }
@@ -70,6 +71,15 @@ function cardAxis(box: THREE.Box3 | undefined): 'x' | 'z' | null {
 
 export class MapViewport extends ViewportCore {
   private readonly content = new THREE.Group();
+  private readonly placementGhost = new THREE.Group();
+  private readonly placementMaterial = new THREE.MeshBasicMaterial({ color: 0x66ddbb, transparent: true, opacity: 0.45, depthWrite: false, side: THREE.DoubleSide });
+  private placementOptions: PlacementOptions | null = null;
+  private placementSample: PlacementSample = { yaw: 0, scale: 1 };
+  private placementSource: EditorMesh | null = null;
+  private readonly placementCameraPosition = new THREE.Vector3(NaN, NaN, NaN);
+  private readonly placementProjection = new THREE.Matrix4();
+  private readonly placementCameraRotation = new THREE.Quaternion();
+  private placementPointer: { x: number; y: number } | null = null;
   private readonly overlay = new THREE.Group();
   private readonly pointGroup = new THREE.Group();
   private instances: MapInstance[] = [];
@@ -81,6 +91,8 @@ export class MapViewport extends ViewportCore {
   private readonly billboards = new Map<number, 'x' | 'z'>();
   private readonly overlayHolders = new Map<number, THREE.Object3D>();
   private readonly lastBillboardCamera = new THREE.Vector3(NaN, NaN, NaN);
+  private readonly lastBillboardRotation = new THREE.Quaternion();
+  private lastBillboardOrtho = false;
   private billboardsDirty = true;
   private targets: Array<{ mesh: THREE.Mesh; spec: MaterialSpec }> = [];
   private localBounds = new Map<string, THREE.Box3>();
@@ -107,7 +119,9 @@ export class MapViewport extends ViewportCore {
 
   constructor(canvas: HTMLCanvasElement, private readonly callbacks: MapCallbacks = {}) {
     super(canvas, () => callbacks.onCameraChange?.());
-    this.scene.add(this.content, this.overlay, this.pointGroup);
+    this.scene.add(this.content, this.overlay, this.pointGroup, this.placementGhost);
+    this.placementGhost.visible = false;
+    this.placementGhost.matrixAutoUpdate = false;
     this.boxEl = document.createElement('div');
     this.boxEl.className = 'me-boxselect';
     canvas.parentElement?.appendChild(this.boxEl);
@@ -115,12 +129,18 @@ export class MapViewport extends ViewportCore {
     canvas.addEventListener('pointermove', this.onPointerMove);
     canvas.addEventListener('dblclick', this.onDoubleClick);
     window.addEventListener('pointerup', this.onPointerUp);
-    canvas.addEventListener('pointerleave', () => this.callbacks.onHover?.(null));
+    canvas.addEventListener('pointerleave', () => { this.placementPointer = null; this.placementGhost.visible = false; this.callbacks.onHover?.(null); }, { signal: this.listenerAbort.signal });
     canvas.tabIndex = 0;
   }
 
   dispose(): void {
     window.removeEventListener('pointerup', this.onPointerUp);
+    this.canvas.removeEventListener('pointerdown', this.onPointerDown);
+    this.canvas.removeEventListener('pointermove', this.onPointerMove);
+    this.canvas.removeEventListener('dblclick', this.onDoubleClick);
+    this.boxEl.remove();
+    this.setPlacementMesh(null);
+    this.placementMaterial.dispose();
     this.clearContent();
     this.overlay.traverse(o => { (o as THREE.Mesh).geometry?.dispose(); });
     this.overlayMaterial.dispose();
@@ -131,7 +151,56 @@ export class MapViewport extends ViewportCore {
   protected materialTargets(): Array<{ mesh: THREE.Mesh; spec: MaterialSpec }> { return this.targets; }
   protected override onShadingChanged(): void { this.refreshOverlay(); }
   // The base constructor renders a first frame before this class's fields exist, hence the guard.
-  protected override onFrame(): void { if (this.billboards) { this.updateBillboards(); } }
+  protected override onFrame(): void {
+    if (this.billboards) { this.updateBillboards(); }
+    if (this.placementGhost && this.placementPointer && this.toolValue === 'place') {
+      const cameraChanged = !this.placementCameraPosition.equals(this.camera.position)
+        || !this.placementCameraRotation.equals(this.camera.quaternion)
+        || !this.placementProjection.equals(this.camera.projectionMatrix);
+      if (cameraChanged) { this.updatePlacementGhost(); }
+    }
+  }
+
+  setPlacementMesh(mesh: EditorMesh | null): void {
+    if (mesh === this.placementSource) { return; }
+    this.placementGhost.traverse(object => { (object as THREE.Mesh).geometry?.dispose(); });
+    this.placementGhost.clear();
+    this.placementSource = mesh;
+    for (const chunk of mesh?.chunks ?? []) {
+      this.placementGhost.add(new THREE.Mesh(chunkGeometry(chunk), this.placementMaterial));
+    }
+    this.updatePlacementGhost();
+  }
+
+  setPlacementOptions(options: PlacementOptions): void {
+    this.placementOptions = options;
+    this.placementSample = samplePlacement(options);
+    this.updatePlacementGhost();
+  }
+
+  private canPlace(): boolean {
+    return this.toolValue === 'place' && this.editableValue && !!this.placementSource && !!this.placementOptions
+      && !this.lockedLayers.has('clutter') && !this.hiddenLayers.has('clutter');
+  }
+
+  private updatePlacementGhost(): void {
+    this.placementCameraPosition.copy(this.camera.position);
+    this.placementCameraRotation.copy(this.camera.quaternion);
+    this.placementProjection.copy(this.camera.projectionMatrix);
+    this.placementGhost.visible = false;
+    if (!this.canPlace() || !this.placementPointer) { return; }
+    const { x, y } = this.placementPointer;
+    const hit = this.placementHit(x, y);
+    if (!hit) { return; }
+    this.placementGhost.matrix.copy(placementMatrix(hit.point, surfaceNormal(hit), this.placementSample, this.placementOptions!.alignSurface));
+    this.placementGhost.visible = true;
+  }
+
+  private placementHit(x: number, y: number): THREE.Intersection | null {
+    // Point labels and the ghost never obscure placement surfaces.
+    const surfaces = this.content.children.filter(object => object.visible && object.userData['layer'] !== 'sky');
+    return this.rayFrom(x, y).intersectObjects(surfaces, false)[0] ?? null;
+  }
 
   // ------------------------------------------------------------------ billboards
 
@@ -139,16 +208,18 @@ export class MapViewport extends ViewportCore {
   private billboardMatrix(i: number, axis: 'x' | 'z'): THREE.Matrix4 {
     const pos = new THREE.Vector3(), rot = new THREE.Quaternion(), scale = new THREE.Vector3();
     this.live[i].decompose(pos, rot, scale);
-    const dx = this.camera.position.x - pos.x, dz = this.camera.position.z - pos.z;
+
     // Turn the card's normal (+Z for a card flat in Z, +X for one flat in X) onto the camera direction.
-    const yaw = axis === 'z' ? Math.atan2(dx, dz) : Math.atan2(-dz, dx);
+    const yaw = billboardYaw(axis, this.camera, pos);
     return new THREE.Matrix4().compose(pos, rot.setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw), scale);
   }
 
   private updateBillboards(): void {
     if (!this.billboards.size) { return; }
-    if (!this.billboardsDirty && this.lastBillboardCamera.equals(this.camera.position)) { return; }
+    if (!this.billboardsDirty && this.lastBillboardCamera.equals(this.camera.position) && this.lastBillboardRotation.equals(this.camera.quaternion) && this.lastBillboardOrtho === this.isOrtho) { return; }
     this.lastBillboardCamera.copy(this.camera.position);
+    this.lastBillboardRotation.copy(this.camera.quaternion);
+    this.lastBillboardOrtho = this.isOrtho;
     this.billboardsDirty = false;
     const touched = new Set<THREE.InstancedMesh>();
     for (const [i, axis] of this.billboards) {
@@ -183,16 +254,9 @@ export class MapViewport extends ViewportCore {
     this.display = instances.map(i => toDisplay(i.matrix));
     this.slots = instances.map(() => []);
 
-    const bySource = new Map<string, number[]>();
-    instances.forEach((inst, i) => {
-      if (!inst.source || !models.has(inst.source)) { return; }
-      const list = bySource.get(inst.source) ?? [];
-      list.push(i);
-      bySource.set(inst.source, list);
-    });
-
-    for (const [source, idx] of bySource) {
-      const model = models.get(source)!;
+    for (const { source, layer, indices: idx } of groupInstancesByLayer(instances)) {
+      const model = models.get(source);
+      if (!model) { continue; }
       const ns = model.textureNamespace;
       const box = new THREE.Box3();
       for (const chunk of model.mesh.chunks) {
@@ -209,7 +273,7 @@ export class MapViewport extends ViewportCore {
         mesh.instanceMatrix.needsUpdate = true;
         mesh.computeBoundingSphere();
         mesh.userData['instances'] = idx;
-        mesh.userData['layer'] = layerOf(instances[idx[0]]);
+        mesh.userData['layer'] = layer;
         mesh.userData['source'] = source;
         this.content.add(mesh);
         this.targets.push({ mesh, spec });
@@ -229,17 +293,8 @@ export class MapViewport extends ViewportCore {
     });
     this.billboardsDirty = true;
 
-    this.worldBox = new THREE.Box3();
-    instances.forEach((inst, i) => {
-      const b = inst.source ? this.localBounds.get(inst.source) : null;
-      if (!b || b.isEmpty() || layerOf(inst) === 'sky') { return; }
-      this.worldBox.union(b.clone().applyMatrix4(this.display[i]));
-    });
-    if (!this.worldBox.isEmpty()) {
-      this.extent = Math.max(10, this.worldBox.getSize(new THREE.Vector3()).length());
-      this.worldBox.getCenter(this.center);
-      this.flySpeed = this.extent / 12;
-    }
+    this.updateWorldBounds();
+    this.flySpeed = this.worldBox.isEmpty() ? 100 : this.extent / 12;
     this.applyVisibility();
     this.buildPoints(points);
     this.clearHelpers();
@@ -247,6 +302,19 @@ export class MapViewport extends ViewportCore {
     if (!keepCamera) { this.frameAll(); }
     this.refreshOverlay();
     this.updateGizmo();
+    this.updatePlacementGhost();
+  }
+
+  private updateWorldBounds(): void {
+    this.worldBox.makeEmpty();
+    this.instances.forEach((inst, i) => {
+      const bounds = inst.source ? this.localBounds.get(inst.source) : null;
+      if (!bounds || bounds.isEmpty() || layerOf(inst) === 'sky') { return; }
+      this.worldBox.union(bounds.clone().applyMatrix4(this.display[i]));
+    });
+    this.extent = this.worldBox.isEmpty() ? 100 : Math.max(10, this.worldBox.getSize(new THREE.Vector3()).length());
+    if (this.worldBox.isEmpty()) { this.center.set(0, 0, 0); }
+    else { this.worldBox.getCenter(this.center); }
   }
 
   // The same instances (in order) drawn from the same decoded meshes and textures as the built scene.
@@ -272,14 +340,22 @@ export class MapViewport extends ViewportCore {
     });
     touched.forEach(m => { m.instanceMatrix.needsUpdate = true; m.computeBoundingSphere(); });
     this.billboardsDirty = true;
+    this.updateWorldBounds();
+    this.clearHelpers();
+    this.buildGridAxes(this.worldBox);
     this.buildPoints(points);
     this.refreshOverlay();
     this.updateGizmo();
+    this.updatePlacementGhost();
   }
 
   private clearContent(): void {
     const geos = new Set<THREE.BufferGeometry>();
-    this.content.traverse(o => { const g = (o as THREE.Mesh).geometry; if (g) { geos.add(g); } });
+    this.content.traverse(o => {
+      const mesh = o as THREE.Mesh;
+      if (mesh.geometry) { geos.add(mesh.geometry); }
+      if (o instanceof THREE.InstancedMesh) { o.dispose(); }
+    });
     geos.forEach(g => g.dispose());
     this.content.clear();
     this.targets = [];
@@ -376,6 +452,7 @@ export class MapViewport extends ViewportCore {
       c.visible = !this.hiddenLayers.has(c.userData['layer']) && !this.hiddenModels.has(c.userData['source']);
     }
     this.pointGroup.visible = !this.hiddenLayers.has('points');
+    this.updatePlacementGhost();
     this.refreshOverlay();
   }
 
@@ -387,6 +464,7 @@ export class MapViewport extends ViewportCore {
   // A locked layer stays visible (and something to drop onto or place on) but can't be picked.
   setLayerLocked(layer: MapLayer, locked: boolean): void {
     if (locked) { this.lockedLayers.add(layer); } else { this.lockedLayers.delete(layer); }
+    this.updatePlacementGhost();
     let changed = false;
     for (const i of [...this.selected]) { if (!this.selectable(i)) { this.selected.delete(i); changed = true; } }
     if (layer === 'points' && locked && this.selectedPoint) { this.selectedPoint = null; changed = true; }
@@ -421,25 +499,25 @@ export class MapViewport extends ViewportCore {
 
   // ------------------------------------------------------------------ selection
 
-  set tool(value: MapTool) { this.toolValue = value; this.updateGizmo(); }
+  set tool(value: MapTool) { this.toolValue = value; this.updateGizmo(); this.updatePlacementGhost(); }
   get tool(): MapTool { return this.toolValue; }
 
   set gizmoLocal(value: boolean) { this.localSpace = value; this.updateGizmo(); }
   get gizmoLocal(): boolean { return this.localSpace; }
 
   // Off while the page waits on an edit or the session is read-only: no gizmo, no placing.
-  set editable(value: boolean) { if (this.editableValue !== value) { this.editableValue = value; this.updateGizmo(); } }
+  set editable(value: boolean) { if (this.editableValue !== value) { this.editableValue = value; this.updateGizmo(); this.updatePlacementGhost(); } }
   get editable(): boolean { return this.editableValue; }
 
   select(indices: number[], additive = false): void {
     if (!additive) { this.selected.clear(); this.selectedPoint = null; }
-    for (const i of indices) { this.selected.add(i); }
+    for (const i of indices) { if (this.instances[i] && this.selectable(i)) { this.selected.add(i); } }
     this.selectionChanged();
   }
 
   selectPoint(name: string | null): void {
     this.selected.clear();
-    this.selectedPoint = name;
+    this.selectedPoint = name && !this.lockedLayers.has('points') && this.points.some(point => point.name === name) ? name : null;
     this.selectionChanged();
   }
 
@@ -637,9 +715,13 @@ export class MapViewport extends ViewportCore {
     if (e.button !== 0 || this.orbitWithAlt) { return; }
     if (this.gizmo.dragging || (this.gizmo as unknown as { axis: string | null }).axis) { return; }
     if (this.toolValue === 'place') {
-      if (!this.editableValue) { return; }
-      const h = this.hit(e.clientX, e.clientY);
-      if (h && !this.pointOf(h)) { this.callbacks.onPlace?.([h.point.x, h.point.y, h.point.z]); }
+      this.placementPointer = { x: e.clientX, y: e.clientY };
+      this.updatePlacementGhost();
+      if (this.placementGhost.visible && this.canPlace()) {
+        this.callbacks.onPlace?.({ ...this.placementSample, matrix: this.placementGhost.matrix.toArray() });
+        this.placementSample = samplePlacement(this.placementOptions!);
+        this.updatePlacementGhost();
+      }
       return;
     }
     this.canvas.setPointerCapture(e.pointerId);
@@ -647,6 +729,8 @@ export class MapViewport extends ViewportCore {
   };
 
   private readonly onPointerMove = (e: PointerEvent): void => {
+    this.placementPointer = { x: e.clientX, y: e.clientY };
+    this.updatePlacementGhost();
     if (this.dragStart && (e.buttons & 1)) {
       const dx = e.clientX - this.dragStart.x, dy = e.clientY - this.dragStart.y;
       if (Math.hypot(dx, dy) > 4) {
@@ -672,6 +756,7 @@ export class MapViewport extends ViewportCore {
 
   // Double-click a prop: open its model in the Model Editor.
   private readonly onDoubleClick = (e: MouseEvent): void => {
+    if (this.toolValue === 'place') { return; }
     const h = this.hit(e.clientX, e.clientY);
     const i = h && !this.pointOf(h) ? this.instanceOf(h) : null;
     if (i !== null) { this.callbacks.onOpenModel?.(i); }

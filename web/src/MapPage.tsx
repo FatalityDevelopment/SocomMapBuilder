@@ -1,3 +1,8 @@
+import { readEditorPreferences, writeEditorPreferences } from './viewport/editorPreferences';
+import { ShortcutReference } from './components/ShortcutReference';
+import { adjustPlacement, type PlacementTransform } from './viewport/placement';
+import { readRenderSettings, writeRenderSettings } from './viewport/renderSettings';
+import type { ViewportStats } from './webview/zipper-core/viewport-core';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AssetClient, type MapInstanceWire, type MapPointWire, type ModelSummary, type SessionStatus } from './webview/model-editor/asset-client';
 import { TextureCache } from './webview/model-editor/model-loader';
@@ -5,7 +10,7 @@ import { decodeMesh, type MeshWire } from './webview/model-editor/mesh-data';
 import type { ModelTexturePixels } from './webview/zipper-workbench/zed-model-renderer';
 import { MapViewport, type MapLayer, type MapModel, type MapTool } from './viewport/mapViewport';
 import type { Shading, ViewPreset } from './webview/zipper-core/viewport-core';
-import { LAYERS, errText, layerOf, movable, placementOp, pointKindCounts, scaleOf, yawOf, type ModelGroup } from './mapModel';
+import { LAYERS, errText, layerOf, movable, placementOp, pointKindCounts, yawOf, type ModelGroup } from './mapModel';
 import { MenuBar, type Menu } from './components/MenuBar';
 import { PageHeader } from './shared/PageHeader';
 import { Outliner } from './components/Outliner';
@@ -33,6 +38,8 @@ export const TOOLS: Array<{ id: MapTool; label: string; key: string; glyph: stri
 const SHADING_ORDER: Shading[] = ['textured', 'solid', 'wireframe', 'xray'];
 
 export function MapPage() {
+  const [initialPreferences] = useState(readEditorPreferences);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const clientRef = useRef(new AssetClient());
   const texturesRef = useRef(new TextureCache(clientRef.current));
   const meshCacheRef = useRef(new Map<string, MapModel>());
@@ -42,7 +49,10 @@ export function MapPage() {
   const pointsRef = useRef<MapPointWire[]>([]);
   const statusRef = useRef<SessionStatus | null>(null);
   const busyRef = useRef(false);
+  const operationRevisionRef = useRef(0);
   const reloadingRef = useRef(0);
+  const pollingRef = useRef(false);
+  const sceneReadyRef = useRef(false);
 
   const [status, setStatusState] = useState<SessionStatus | null>(null);
   const [sceneNs, setSceneNs] = useState('');
@@ -55,22 +65,28 @@ export function MapPage() {
   const [libQuery, setLibQuery] = useState('');
   const [propTab, setPropTab] = useState<PropTab>('item');
   const [tool, setToolState] = useState<MapTool>('select');
-  const [shading, setShadingState] = useState<Shading>('textured');
-  const [baked, setBaked] = useState(false);
-  const [grid, setGrid] = useState(true);
-  const [snap, setSnap] = useState(false);
-  const [snapMove, setSnapMove] = useState(10);
-  const [snapRotate, setSnapRotate] = useState(15);
-  const [snapScale, setSnapScale] = useState(0.1);
-  const [gizmoLocal, setGizmoLocal] = useState(false);
+  const [shading, setShadingState] = useState<Shading>(initialPreferences.shading);
+  const [baked, setBaked] = useState(initialPreferences.baked);
+  const [grid, setGrid] = useState(initialPreferences.grid);
+  const [snap, setSnap] = useState(initialPreferences.snap);
+  const [snapMove, setSnapMove] = useState(initialPreferences.snapMove);
+  const [snapRotate, setSnapRotate] = useState(initialPreferences.snapRotate);
+  const [snapScale, setSnapScale] = useState(initialPreferences.snapScale);
+  const [gizmoLocal, setGizmoLocal] = useState(initialPreferences.gizmoLocal);
   const [locked, setLocked] = useState<Set<MapLayer>>(() => new Set());
   // Copied clutter placements (model + matrix); they paste into this package or another one that has the model.
   const clipboardRef = useRef<Array<{ model: string; matrix: number[] }>>([]);
-  const [ortho, setOrtho] = useState(false);
-  const [backfaces, setBackfaces] = useState(true);
+  const [ortho, setOrtho] = useState(initialPreferences.ortho);
+  const [backfaces, setBackfaces] = useState(initialPreferences.backfaces);
+  const [renderSettings, setRenderSettings] = useState(readRenderSettings);
+  const [viewportStats, setViewportStats] = useState<ViewportStats | null>(null);
   const [flySpeed, setFlySpeedState] = useState(100);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [sceneReady, setSceneReady] = useState(false);
+  const [loadWarnings, setLoadWarnings] = useState<string[]>([]);
+  const [connectionIssue, setConnectionIssue] = useState<string | null>(null);
   const [message, setMessage] = useState('');
   const [messageIsError, setMessageIsError] = useState(false);
   const [hover, setHover] = useState<string | null>(null);
@@ -79,16 +95,24 @@ export function MapPage() {
   const [openNodes, setOpenNodes] = useState<Set<string>>(() => new Set(['L:reference', 'L:clutter']));
   const [hidden, setHidden] = useState<{ layers: Set<MapLayer>; models: Set<string> }>(() => ({ layers: new Set<MapLayer>(['sky']), models: new Set<string>() }));
   const [placeModel, setPlaceModel] = useState<ModelSummary | null>(null);
-  const [placeYaw, setPlaceYaw] = useState(0);
-  const [placeScale, setPlaceScale] = useState(1);
-  const [randomYaw, setRandomYaw] = useState(false);
+  const [placeYaw, setPlaceYaw] = useState(initialPreferences.placeYaw);
+  const [placeScale, setPlaceScale] = useState(initialPreferences.placeScale);
+  const [randomYaw, setRandomYaw] = useState(initialPreferences.randomYaw);
+  const [randomScale, setRandomScale] = useState(initialPreferences.randomScale);
+  const [minPlaceScale, setMinPlaceScale] = useState(initialPreferences.minPlaceScale);
+  const [maxPlaceScale, setMaxPlaceScale] = useState(initialPreferences.maxPlaceScale);
+  const [alignSurface, setAlignSurface] = useState(initialPreferences.alignSurface);
 
   const dirtyCount = status?.dirty.length ?? 0;
   const single = selection.length === 1 ? instances[selection[0]] ?? null : null;
   const movableCount = selection.filter(i => movable(instances[i])).length;
 
   const setStatus = useCallback((s: SessionStatus | null) => { statusRef.current = s; setStatusState(s); }, []);
-  const setBusyFlag = useCallback((on: boolean) => { busyRef.current = on; setBusy(on); }, []);
+  const setBusyFlag = useCallback((on: boolean) => {
+    if (on) { operationRevisionRef.current++; }
+    busyRef.current = on;
+    setBusy(on);
+  }, []);
 
   // The revision last opened or saved: status.dirty compares with the source file, so it stays set after a Save copy.
   const savedRevisionRef = useRef<number | null>(null);
@@ -114,9 +138,14 @@ export function MapPage() {
       const s = statusRef.current;
       if (s) { texturesRef.current.invalidate(s.revision); }
     }
+    setProgress('Reading map scene…');
+    const warnings: string[] = [];
     const [scene, pts] = await Promise.all([
       clientRef.current.mapScene(),
-      clientRef.current.mapPoints().catch(() => ({ points: [] as MapPointWire[] })),
+      clientRef.current.mapPoints().catch(error => {
+        warnings.push(`AIMAPS points could not be loaded: ${errText(error)}`);
+        return { points: [] as MapPointWire[] };
+      }),
     ]);
     setSceneNs(scene.sceneNamespace);
     setCounts(scene.counts);
@@ -148,7 +177,7 @@ export function MapPage() {
     await Promise.all(Array.from({ length: Math.min(6, queue.length) }, async () => {
       while (queue.length) { await loadOne(queue.shift()!); }
     }));
-    setProgress('');
+    setProgress('Preparing viewport…');
     instancesRef.current = scene.instances;
     pointsRef.current = pts.points;
     setInstances(scene.instances);
@@ -160,7 +189,9 @@ export function MapPage() {
       const kinds = Object.entries(scene.counts).map(([kind, count]) => `${count} ${kind}`).join(', ');
       say(`${scene.sceneNamespace}: ${scene.instances.length} instances (${kinds}), ${pts.points.length} points.`);
     }
-    // All failures at once (they used to overwrite each other); the console has the full list.
+    warnings.push(...failed.map(failure => `Model not drawn: ${failure}`));
+    setLoadWarnings(warnings);
+    // Keep details visible until a successful retry, rather than only in the status bar.
     if (failed.length) {
       console.warn('Map Builder: models that did not load', failed);
       say(`${failed.length} model(s) did not load and are not drawn: ${failed.slice(0, 3).join('; ')}${failed.length > 3 ? '; …' : ''}`, true);
@@ -172,25 +203,67 @@ export function MapPage() {
   // Polls skip while a load runs: a map with many models takes longer than one poll interval.
   const reload = useCallback(async (keepCamera: boolean, modelsChanged: boolean) => {
     reloadingRef.current++;
-    try { await loadScene(keepCamera, modelsChanged); } finally { reloadingRef.current--; }
+    sceneReadyRef.current = false;
+    setSceneReady(false);
+    setLoading(true);
+    setLoadWarnings([]);
+    if (viewportRef.current) { viewportRef.current.editable = false; }
+    try {
+      await loadScene(keepCamera, modelsChanged);
+      sceneReadyRef.current = true;
+      setSceneReady(true);
+    }
+    catch (error) {
+      setLoadWarnings([`Scene could not be loaded: ${errText(error)}`]);
+      throw error;
+    } finally {
+      reloadingRef.current--;
+      if (reloadingRef.current === 0) {
+        setProgress('');
+        setLoading(false);
+        if (viewportRef.current) { viewportRef.current.editable = sceneReadyRef.current && !busyRef.current && !statusRef.current?.readOnly; }
+      }
+    }
   }, [loadScene]);
 
   const openPackage = useCallback(async (path: string) => {
+    if (busyRef.current || reloadingRef.current > 0) { say('Wait for the current operation to finish before opening another package.', true); return; }
     const current = statusRef.current;
     if (current && current.path !== path && unsaved() && !window.confirm(`${current.path} has unsaved changes (${current.dirty.join(', ')}). They stay in the session until the server stops; open ${path} anyway?`)) { return; }
     setBusyFlag(true);
     say(`Opening ${path}…`);
+    let opened = false;
     try {
       const s = await clientRef.current.open(path);
+      opened = true;
+      sceneReadyRef.current = false;
+      setSceneReady(false);
+      if (viewportRef.current) { viewportRef.current.editable = false; }
       setStatus(s);
+      setConnectionIssue(null);
+      // Once the client switches sessions, old instance indices must never address the new package.
+      instancesRef.current = [];
+      pointsRef.current = [];
+      setInstances([]);
+      setPoints([]);
+      setModels([]);
+      setCounts({});
+      setSceneNs('');
+      setPlaceModel(null);
+      viewportRef.current?.setPlacementMesh(null);
+      viewportRef.current?.clearSelection();
+      viewportRef.current?.setScene([], new Map(), {}, [], true);
+      setSelection([]);
+      setSelectedPoint(null);
+      setLoadWarnings([]);
       savedRevisionRef.current = s.revision;
       texturesRef.current.invalidate(s.revision);
       meshCacheRef.current.clear();
       pixelCacheRef.current = {};
       setModels(await clientRef.current.listModels());
-      viewportRef.current?.clearSelection();
       await reload(false, false);
     } catch (err) {
+      if (opened) { setLoadWarnings([`Package opened, but its map could not be loaded: ${errText(err)}`]); }
       say(`Could not open ${path}: ${errText(err)}`, true);
     } finally {
       setBusyFlag(false);
@@ -209,24 +282,35 @@ export function MapPage() {
   // Edits made by anyone on the session (an assistant on the same backend) show up here.
   useEffect(() => {
     const timer = setInterval(async () => {
-      if (!clientRef.current.session || busyRef.current || reloadingRef.current > 0) { return; }
+      if (!clientRef.current.session || busyRef.current || reloadingRef.current > 0 || pollingRef.current) { return; }
+      pollingRef.current = true;
+      const session = clientRef.current.session;
+      const operationRevision = operationRevisionRef.current;
+      let receivedStatus = false;
       try {
         const next = await clientRef.current.status();
+        receivedStatus = true;
+        if (busyRef.current || reloadingRef.current > 0 || clientRef.current.session !== session || operationRevisionRef.current !== operationRevision) { return; }
+        setConnectionIssue(null);
         const before = statusRef.current?.revision;
         setStatus(next);
         if (before !== undefined && next.revision !== before) {
           await reload(true, true);
           say(`Session changed (revision ${next.revision}${next.canUndo ? `: ${next.canUndo}` : ''}).`);
         }
-      } catch { /* retried next poll */ }
+      } catch (error) {
+        if (!receivedStatus && clientRef.current.session === session && operationRevisionRef.current === operationRevision) {
+          setConnectionIssue(`Session refresh failed: ${errText(error)}. Retrying automatically.`);
+        }
+      } finally { pollingRef.current = false; }
     }, 2000);
     return () => clearInterval(timer);
   }, [reload, say, setStatus]);
 
   // The gizmo and Place tool are off while an edit runs or the session is read-only.
   useEffect(() => {
-    if (viewportRef.current) { viewportRef.current.editable = !busy && !status?.readOnly; }
-  }, [busy, status]);
+    if (viewportRef.current) { viewportRef.current.editable = sceneReady && !busy && !loading && !status?.readOnly; }
+  }, [busy, loading, sceneReady, status]);
 
   // Closing the tab with edits made since the last save asks first.
   useEffect(() => {
@@ -235,11 +319,26 @@ export function MapPage() {
     return () => window.removeEventListener('beforeunload', onUnload);
   }, []);
 
+  const retryScene = async () => {
+    if (!clientRef.current.session || busyRef.current || reloadingRef.current > 0) { return; }
+    setBusyFlag(true);
+    try {
+      setModels(await clientRef.current.listModels());
+      await reload(!!sceneNs, true);
+      say('Map reload completed.');
+    } catch (error) {
+      setLoadWarnings([`Map reload failed: ${errText(error)}`]);
+      say(`Could not reload map: ${errText(error)}`, true);
+    }
+    finally { setBusyFlag(false); }
+  };
+
   // ------------------------------------------------------------------ edits
 
   const edit = useCallback(async (label: string, op: Record<string, unknown>): Promise<Record<string, unknown> | null> => {
     // One edit at a time, and none on a read-only session.
-    if (busyRef.current || statusRef.current?.readOnly) {
+    if (!sceneReadyRef.current) { say('Reload the map before editing; its scene is not ready.', true); return null; }
+    if (busyRef.current || reloadingRef.current > 0 || statusRef.current?.readOnly) {
       say(statusRef.current?.readOnly ? `${label}: this package is read-only.` : `${label}: wait for the previous change to finish.`, true);
       return null;
     }
@@ -275,9 +374,8 @@ export function MapPage() {
     const m = inst.matrix;
     const position = [m[12], m[13], m[14]];
     if (field === 'position') { position[axis] = v; }
-    const yaw = field === 'yaw' ? v : yawOf(m);
-    const scale = field === 'scale' ? Math.max(0.01, v) : scaleOf(m);
-    const op = field === 'position' ? placementOp(inst, { position }) : placementOp(inst, { position, yaw, scale });
+    const op = field === 'position' ? placementOp(inst, { position })
+      : placementOp(inst, { matrix: adjustPlacement(m, field === 'yaw' ? { yaw: v } : { scale: v }) });
     if (op) { await edit(`set ${field} of ${inst.model}`, op); }
   };
 
@@ -358,9 +456,7 @@ export function MapPage() {
       const m = inst.matrix;
       const position = [m[12], m[13], m[14]];
       if (field === 'offset') { position[axis] += v; return placementOp(inst, { position }); }
-      const yaw = yawOf(m) + (field === 'turn' ? v : 0);
-      const scale = field === 'scale' ? Math.max(0.01, v) : scaleOf(m);
-      return placementOp(inst, { position, yaw, scale });
+      return placementOp(inst, { matrix: adjustPlacement(m, field === 'turn' ? { yaw: yawOf(m) + v } : { scale: v }) });
     }).filter((o): o is Record<string, unknown> => !!o);
     const what = field === 'offset' ? `move ${'XYZ'[axis]} by ${v}` : field === 'turn' ? `turn by ${v}°` : `scale to ${v}`;
     await edit(`${what}: ${ops.length} instances`, ops.length === 1 ? ops[0] : { op: 'batch', ops });
@@ -383,10 +479,9 @@ export function MapPage() {
     else { say('Nothing under the selection to drop onto.'); }
   };
 
-  const place = async (position: [number, number, number]) => {
+  const place = async (transform: PlacementTransform) => {
     if (!placeModel) { setPropTab('place'); say('Pick a model in the Place tab first.', true); return; }
-    const yaw = randomYaw ? Math.round(Math.random() * 360) : placeYaw;
-    const raw = await edit(`place ${placeModel.name}`, { op: 'addClutter', model: placeModel.name, position, yaw, scale: placeScale }) as { newClutterIndex?: number } | null;
+    const raw = await edit(`place ${placeModel.name}`, { op: 'addClutter', model: placeModel.name, matrix: transform.matrix }) as { newClutterIndex?: number } | null;
     if (raw && typeof raw.newClutterIndex === 'number') {
       const i = instancesRef.current.findIndex(x => x.clutterIndex === raw.newClutterIndex);
       if (i >= 0) { viewportRef.current?.select([i]); }
@@ -394,7 +489,7 @@ export function MapPage() {
   };
 
   const history = async (undo: boolean) => {
-    if (!clientRef.current.session) { return; }
+    if (!clientRef.current.session || busyRef.current || reloadingRef.current > 0 || statusRef.current?.readOnly) { return; }
     setBusyFlag(true);
     try {
       const r = undo ? await clientRef.current.undo() : await clientRef.current.redo();
@@ -422,6 +517,7 @@ export function MapPage() {
   // ------------------------------------------------------------------ save
 
   const save = async (args: { mode: 'zdb' | 'pack'; outputPath?: string; packName?: string }) => {
+    if (!clientRef.current.session || busyRef.current || reloadingRef.current > 0) { return; }
     setBusyFlag(true);
     try {
       const r = await clientRef.current.save(args);
@@ -678,6 +774,8 @@ export function MapPage() {
     },
     {
       id: 'help', label: 'Help', items: [
+        { label: 'Keyboard shortcuts…', shortcut: '?', action: () => setShortcutsOpen(true) },
+        { separator: true, label: '' },
         { label: 'Fly: W A S D, Q / E down / up, Shift faster (viewport focused)' },
         { label: 'Orbit: middle drag or Alt+left drag · Pan: right drag · Zoom: wheel' },
         { label: 'Select: click, Shift adds, Ctrl removes, drag for box' },
@@ -692,14 +790,15 @@ export function MapPage() {
   const keyHandlerRef = useRef<(e: KeyboardEvent) => void>(() => undefined);
   keyHandlerRef.current = (e: KeyboardEvent) => {
     // Only the page in front takes keys, and none while a prompt or the file browser is open.
-    if (activePage() !== 'map' || modalOpen()) { return; }
+    if (activePage() !== 'map' || modalOpen() || shortcutsOpen) { return; }
     const target = e.target as HTMLElement;
     if (target && ['INPUT', 'SELECT', 'TEXTAREA'].includes(target.tagName)) { return; }
     const ctrl = e.ctrlKey || e.metaKey;
     const k = e.key.toLowerCase();
     let handled = true;
-    if (ctrl && k === 'z') { void history(true); }
+    if (e.key === '?') { setShortcutsOpen(true); }
     else if (ctrl && (k === 'y' || (e.shiftKey && k === 'z'))) { void history(false); }
+    else if (ctrl && k === 'z') { void history(true); }
     else if (ctrl && k === 's') { void saveCopy(); }
     else if (ctrl && k === 'o') { void openDialog(); }
     // Without a selection / clipboard the browser keeps Ctrl+C / Ctrl+V (copying the status text, say).
@@ -749,15 +848,55 @@ export function MapPage() {
       onHover: text => handlersRef.current.setHover(text),
       onTransformCommit: (items, kind) => void handlersRef.current.commitTransforms(items, kind),
       onPointMove: (name, position) => void handlersRef.current.edit(`move point ${name}`, { op: 'movePoint', name, position }),
-      onPlace: position => void handlersRef.current.place(position),
+      onPlace: transform => void handlersRef.current.place(transform),
       onOpenModel: index => handlersRef.current.openModel(index),
     });
-    vp.setLighting(false);
-    vp.setSnap(null, null, null);
+    vp.editable = false;
+    vp.onStats = setViewportStats;
+    vp.shading = initialPreferences.shading;
+    vp.setLighting(initialPreferences.baked);
+    vp.setBackfaces(initialPreferences.backfaces);
+    vp.showGrid = initialPreferences.grid;
+    vp.showAxes = initialPreferences.grid;
+    vp.gizmoLocal = initialPreferences.gizmoLocal;
+    if (initialPreferences.ortho) { vp.toggleOrtho(); }
+    vp.setSnap(initialPreferences.snap ? initialPreferences.snapMove : null,
+      initialPreferences.snap ? initialPreferences.snapRotate : null, initialPreferences.snap ? initialPreferences.snapScale : null);
     viewportRef.current = vp;
   }, []);
 
   useEffect(() => () => { viewportRef.current?.dispose(); viewportRef.current = null; }, []);
+
+  useEffect(() => {
+    viewportRef.current?.setPlacementOptions({ yaw: placeYaw, scale: placeScale, randomYaw, randomScale,
+      minScale: minPlaceScale, maxScale: maxPlaceScale, alignSurface });
+  }, [placeYaw, placeScale, randomYaw, randomScale, minPlaceScale, maxPlaceScale, alignSurface]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const vp = viewportRef.current;
+    vp?.setPlacementMesh(null);
+    if (!vp || !placeModel || !status) { return; }
+    const session = clientRef.current.session;
+    void clientRef.current.mesh(placeModel.archive, placeModel.name).then(wire => {
+      if (!cancelled && session === clientRef.current.session) { vp.setPlacementMesh(decodeMesh(wire as MeshWire)); }
+    }).catch(error => {
+      if (!cancelled) { say(`Could not preview ${placeModel.name}: ${errText(error)}`, true); }
+    });
+    return () => { cancelled = true; vp.setPlacementMesh(null); };
+  }, [placeModel, status?.path, status?.revision, say]);
+
+  useEffect(() => {
+    writeRenderSettings(renderSettings);
+    viewportRef.current?.setRenderSettings(renderSettings);
+    setViewportStats(null);
+  }, [renderSettings]);
+
+  useEffect(() => {
+    writeEditorPreferences({ shading, baked, grid, snap, snapMove, snapRotate, snapScale, gizmoLocal, ortho, backfaces,
+      placeYaw, placeScale, randomYaw, randomScale, minPlaceScale, maxPlaceScale, alignSurface });
+  }, [shading, baked, grid, snap, snapMove, snapRotate, snapScale, gizmoLocal, ortho, backfaces,
+    placeYaw, placeScale, randomYaw, randomScale, minPlaceScale, maxPlaceScale, alignSurface]);
 
   // ------------------------------------------------------------------ render
 
@@ -772,9 +911,10 @@ export function MapPage() {
   };
 
   return (
-    <div className="me-app has-header" onPointerDown={e => { if (!(e.target as HTMLElement).closest('.me-menu')) { setOpenMenu(null); } }}>
+    <div className="me-app mp-app has-header" onPointerDown={e => { if (!(e.target as HTMLElement).closest('.me-menu')) { setOpenMenu(null); } }}>
       <PageHeader icon="globe" title="Map Builder" subtitle="Props, clutter and spawn points of SOCOM II maps" />
       <MenuBar {...menuBarProps} />
+      {shortcutsOpen && <ShortcutReference onClose={() => setShortcutsOpen(false)} />}
 
       <div className="me-header">
         <div className="me-seg" title="Shading (Z cycles)">
@@ -805,6 +945,20 @@ export function MapPage() {
         </div>
       </div>
 
+      <div className="me-header mp-render-settings" aria-label="Rendering settings">
+        <label className="me-toggle">Resolution
+          <select aria-label="Render resolution" value={renderSettings.resolution} onChange={e => setRenderSettings(s => ({ ...s, resolution: Number(e.target.value) }))}>
+            <option value={1}>100%</option><option value={0.75}>75%</option><option value={0.5}>50%</option>
+          </select>
+        </label>
+        <label className="me-toggle">Textures
+          <select aria-label="Texture filtering" value={renderSettings.filtering} onChange={e => setRenderSettings(s => ({ ...s, filtering: e.target.value === 'pixel' ? 'pixel' : 'smooth' }))}>
+            <option value="smooth">Smooth</option><option value="pixel">Pixel</option>
+          </select>
+        </label>
+        <label className="me-toggle"><input type="checkbox" checked={renderSettings.showStats} onChange={e => setRenderSettings(s => ({ ...s, showStats: e.target.checked }))} /> Statistics</label>
+      </div>
+
       <div className="me-body no-assets">
         <aside className="me-assets" />
         <nav className="me-tools">
@@ -825,6 +979,11 @@ export function MapPage() {
             hasSession={!!status}
             progress={progress}
             busy={busy}
+            loading={loading}
+            warnings={loadWarnings}
+            connectionIssue={connectionIssue}
+            onRetry={() => void retryScene()}
+            stats={renderSettings.showStats ? viewportStats : null}
           />
         </section>
 
@@ -884,6 +1043,14 @@ export function MapPage() {
             setPlaceScale={setPlaceScale}
             randomYaw={randomYaw}
             setRandomYaw={setRandomYaw}
+            randomScale={randomScale}
+            setRandomScale={setRandomScale}
+            minPlaceScale={minPlaceScale}
+            setMinPlaceScale={setMinPlaceScale}
+            maxPlaceScale={maxPlaceScale}
+            setMaxPlaceScale={setMaxPlaceScale}
+            alignSurface={alignSurface}
+            setAlignSurface={setAlignSurface}
             onImport={() => void importFromPackage()}
           />
         </aside>

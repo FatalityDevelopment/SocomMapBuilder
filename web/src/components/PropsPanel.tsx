@@ -44,6 +44,14 @@ interface PropsPanelProps {
   setPlaceScale: (v: number) => void;
   randomYaw: boolean;
   setRandomYaw: (on: boolean) => void;
+  randomScale: boolean;
+  setRandomScale: (on: boolean) => void;
+  minPlaceScale: number;
+  setMinPlaceScale: (value: number) => void;
+  maxPlaceScale: number;
+  setMaxPlaceScale: (value: number) => void;
+  alignSurface: boolean;
+  setAlignSurface: (on: boolean) => void;
   // Import from package… (a model from another package into this one).
   onImport: () => void;
 }
@@ -207,7 +215,7 @@ function PlaceTab(p: PropsPanelProps) {
       <input className="me-search" type="text" placeholder="Filter models…" value={p.libQuery} onChange={e => p.setLibQuery(e.target.value)} />
       <div className="mp-lib">
         {p.library.map(m => (
-          <button key={m.archive + ':' + m.name} type="button" className={`me-row${p.placeModel?.name === m.name ? ' active' : ''}`}
+          <button key={m.archive + ':' + m.name} type="button" className={`me-row${p.placeModel?.name === m.name && p.placeModel?.archive === m.archive ? ' active' : ''}`}
             onClick={() => p.setPlaceModel(m)} title={m.archive}>
             <span className="me-row-name">{m.name}</span><span className="me-row-meta">{m.kind}</span>
           </button>
@@ -216,7 +224,13 @@ function PlaceTab(p: PropsPanelProps) {
       <label className="me-field me-field-wide">Yaw ° <NumField value={String(p.placeYaw)} step={15} onCommit={v => p.setPlaceYaw(+v || 0)} /></label>
       <label className="me-field me-field-wide">Scale <NumField value={String(p.placeScale)} step={0.1} min={0.01} onCommit={v => p.setPlaceScale(+v || 1)} /></label>
       <label className="me-toggle"><input type="checkbox" checked={p.randomYaw} onChange={e => p.setRandomYaw(e.target.checked)} /> Random yaw</label>
-      <div className="lm-muted me-note">With the Place tool (P), click the ground to add a clutter placement of the chosen model (addClutter).</div>
+      <label className="me-toggle"><input type="checkbox" checked={p.randomScale} onChange={e => p.setRandomScale(e.target.checked)} /> Random scale</label>
+      {p.randomScale && <>
+        <label className="me-field me-field-wide">Scale from <NumField value={String(p.minPlaceScale)} min={0.01} step={0.01} onCommit={v => p.setMinPlaceScale(Number(v))} /></label>
+        <label className="me-field me-field-wide">Scale to <NumField value={String(p.maxPlaceScale)} min={0.01} step={0.01} onCommit={v => p.setMaxPlaceScale(Number(v))} /></label>
+      </>}
+      <label className="me-toggle"><input type="checkbox" checked={p.alignSurface} onChange={e => p.setAlignSurface(e.target.checked)} /> Align to surface</label>
+      <div className="lm-muted me-note">P: preview the model, then click a surface to place it. The preview uses the next placement’s rotation and scale. Escape cancels. Unlock and show the Clutter layer to place.</div>
     </div>
   );
 }

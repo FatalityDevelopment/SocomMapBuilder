@@ -42,7 +42,7 @@ Open a game package and work across the map, its props and clutter, vehicles, ch
 
 ## Pages
 
-Use the activity bar to switch between tools. Each page retains its state, and the editors are connected: double-click a prop on the map to open it in the Model Editor, or right-click a model in the Asset Viewer to send it to the appropriate editor.
+Use the activity bar to switch between tools. Editors load on their first visit, then remain mounted so their sessions, cameras and selections survive switching. The editors are connected: double-click a prop on the map to open it in the Model Editor, or right-click a model in the Asset Viewer to send it to the appropriate editor.
 
 ### Map Builder
 
@@ -51,11 +51,15 @@ Use the activity bar to switch between tools. Each page retains its state, and t
 Inspect the assembled level with its world model, props, clutter, sky, textures, and baked lighting. Select and transform instances directly in the scene.
 
 - Move, rotate, scale, duplicate and delete props and clutter; drop them to the ground.
-- Place clutter on any surface with the Place tool; pick the model, yaw (or random yaw) and scale.
+- Place clutter on any surface with the Place tool. Preview the model before clicking, choose yaw and scale (or random yaw and a random scale range), and optionally align it to the surface. Escape cancels placement. The Clutter layer must be visible and unlocked.
+- Set render resolution to 100%, 75%, or 50%, choose smooth or pixel texture filtering, and enable FPS, draw-call, triangle, and resource statistics. These rendering preferences are remembered in your browser. Render pixel density is capped at 2×; 50% resolution uses one quarter of the pixels of 100%.
 - Move the AIMAPS spawn and waypoint points.
 - Edit a multi-selection at once (move by, turn by, set scale); lock layers so clicks and box drags skip them; move a single prop along its own axes (Local).
 - **Import from package…** (File menu or the Place tab): bring a prop, vehicle, weapon or character from another package, then place it.
 - Facade trees face the camera, as they do in game.
+- View style, grid, projection, snapping and placement preferences are remembered in your browser.
+- Open **Help → Keyboard shortcuts…** (or press `?`) to search the controls.
+- Loading warnings stay visible with a **Retry map loading** action. A failed package switch clears the old map, and scene-loading failures block editing until a reload succeeds.
 
 ### Model Editor
 
@@ -273,6 +277,15 @@ dotnet test tests/MapBuilder.Tests
 cd web
 npm test
 ```
+
+Browser regression checks exercise rendering, placement, layer visibility and locks, saved preferences, shortcuts, and failed-load recovery with synthetic fixtures. With the backend and Vite dev server running, run:
+
+```bash
+cd web
+npm run test:browser
+```
+
+The checks use system Chromium when available at `/usr/bin/chromium`. Otherwise install a Playwright browser with `npx playwright install chromium`, or set `CHROMIUM_PATH` to your Chromium executable. `MAP_BUILDER_URL` can select a different Vite development address. These checks require the Vite server because they also exercise viewport modules directly; they do not require game files or modify package files.
 
 ## Status and limits
 

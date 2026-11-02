@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MapInstanceWire } from './webview/model-editor/asset-client';
-import { layerOf, movable, placementOp, pointKindCounts, scaleOf, yawOf } from './mapModel';
+import { groupInstancesByLayer, layerOf, movable, placementOp, pointKindCounts, scaleOf, yawOf } from './mapModel';
 
 // Column-major, translation in 12..14 (as GEO and clutter store it): yaw about Y, uniform scale.
 function matrix(yawDeg: number, scale: number, x = 0, y = 0, z = 0): number[] {
@@ -57,5 +57,23 @@ describe('pointKindCounts', () => {
   it('counts points per kind', () => {
     const p = (kind: string) => ({ name: kind, team: 0, kind, x: 0, z: 0, cellX: 0, cellZ: 0 });
     expect(pointKindCounts([p('start'), p('waypoint'), p('start')])).toEqual([{ kind: 'start', count: 2 }, { kind: 'waypoint', count: 1 }]);
+  });
+});
+
+
+describe('render batches', () => {
+  it('keeps prop and clutter instances separate even when they share a model', () => {
+    const instances = [inst({}), inst({ kind: 'clutter', clutterIndex: 0, geoIndex: null }), inst({ geoIndex: 5 })];
+    expect(groupInstancesByLayer(instances)).toEqual([
+      { source: 'A_MDL.ZED:CRATE', layer: 'reference', indices: [0, 2] },
+      { source: 'A_MDL.ZED:CRATE', layer: 'clutter', indices: [1] },
+    ]);
+  });
+  it('keeps archive identities separate and skips unresolved models', () => {
+    expect(groupInstancesByLayer([inst({}), inst({ source: 'B_MDL.ZED:CRATE' }), inst({ source: null })]))
+      .toEqual([
+        { source: 'A_MDL.ZED:CRATE', layer: 'reference', indices: [0] },
+        { source: 'B_MDL.ZED:CRATE', layer: 'reference', indices: [1] },
+      ]);
   });
 });
