@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from '../../shared/Icon';
 import { openRequest, useSignals } from '../../shared';
+import { aiChange, samePath } from '../../shared/aiBridge';
 import { PageHeader } from '../../shared/PageHeader';
 import { AnimationEditorPageLogic } from './animation-editor-page';
 
@@ -19,6 +20,12 @@ export function AnimationEditorPage() {
   useEffect(() => {
     if (request?.page === 'animations') { void c.openPackage(request.path); }
   }, [request, c]);
+
+  // The AI (MCP) brought this page forward for another package: open it (edits to this one arrive by the poll).
+  const change = aiChange();
+  useEffect(() => {
+    if (change?.page === 'animations' && change.path && !samePath(c.status()?.path, change.path)) { void c.openPackage(change.path); }
+  }, [change, c]);
 
   const s = c.status();
   const cur = c.current();

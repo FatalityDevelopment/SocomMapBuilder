@@ -8,8 +8,22 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import type { ModelTexturePixels } from '../zipper-workbench/zed-model-renderer';
+import { effect, type EffectRef } from '../../shared/signals';
+import { viewBackdrop } from '../../shared/viewSettings';
 
 export type Shading = 'textured' | 'solid' | 'wireframe' | 'xray';
+// baked: the model's vertex colours as the game draws them (chunks without any are lit by the scene lights);
+// studio: every chunk lit by the scene lights (ambient + a key light on the camera), vertex colours ignored;
+// unlit: textures at full brightness.
+export type Lighting = 'baked' | 'studio' | 'unlit';
+export type Backdrop = 'dark' | 'blueprint';
+
+// The lighting switch the Map Builder and Model Editor show.
+export const LIGHTINGS: Array<{ id: Lighting; label: string; title: string }> = [
+  { id: 'baked', label: 'Baked', title: 'Baked vertex lighting, as the game draws it (models without it are scene-lit)' },
+  { id: 'studio', label: 'Studio', title: 'Scene lights (ambient + a key light from the camera) on everything; ignores baked colours' },
+  { id: 'unlit', label: 'Unlit', title: 'Textures at full brightness' },
+];
 export type ViewPreset = 'front' | 'back' | 'left' | 'right' | 'top' | 'bottom' | 'iso';
 
 export const SELECT_COLOR = 0xff9a1f;
@@ -53,13 +67,17 @@ export abstract class ViewportCore {
   private readonly axisScene = new THREE.Scene();
   private readonly axisCamera = new THREE.OrthographicCamera(-1.6, 1.6, 1.6, -1.6, 0.1, 10);
   private readonly flyKeys = new Set<string>();
+  private readonly backdropEffect: EffectRef;
 
   // Materials and textures.
   private textures = new Map<string, THREE.DataTexture>();
   protected texturePixels: Record<string, ModelTexturePixels> = {};
   private materials = new Map<string, THREE.Material>();
   protected shadingValue: Shading = 'textured';
-  bakedLighting = true;
+  lighting: Lighting = 'baked';
+  private backdropValue: Backdrop = 'dark';
+  private backdropTexture: THREE.CanvasTexture | null = null;
+  private readonly darkBackground = new THREE.Color(cssColor('--vscode-editor-background', '#232323')).multiplyScalar(1.15);
   backfaces = true;
   showGrid = true;
   showAxes = true;
@@ -72,7 +90,8 @@ export abstract class ViewportCore {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(window.devicePixelRatio || 1);
     this.renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
-    this.scene.background = new THREE.Color(cssColor('--vscode-editor-background', '#232323')).multiplyScalar(1.15);
+    this.scene.background = this.darkBackground;
+    ViewportCore.live.add(this);
     this.scene.add(this.helperGroup, this.pivot);
     this.scene.add(new THREE.HemisphereLight(0xffffff, 0x404040, 1.2));
     this.persp.add(this.light);
@@ -125,6 +144,8 @@ export abstract class ViewportCore {
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(canvas.parentElement ?? canvas);
     this.resize();
+    // The backdrop is one app-wide setting (the activity bar toggles it).
+    this.backdropEffect = effect(() => this.setBackdrop(viewBackdrop()));
     const loop = () => {
       this.frameId = requestAnimationFrame(loop);
       // Every page stays mounted: draw only the one on screen (a hidden page's canvas has no layout box).
@@ -151,6 +172,9 @@ export abstract class ViewportCore {
   protected abstract materialTargets(): Array<{ mesh: THREE.Mesh; spec: MaterialSpec }>;
 
   disposeCore(): void {
+    ViewportCore.live.delete(this);
+    this.backdropEffect.destroy();
+    this.backdropTexture?.dispose();
     cancelAnimationFrame(this.frameId);
     this.resizeObserver.disconnect();
     this.gizmo.dispose();
@@ -198,8 +222,9 @@ export abstract class ViewportCore {
     const t = spec.texture ? this.textureFor(spec.texture) : null;
     const vertexAlpha = !!spec.colors && spec.colors.some((v, i) => i % 4 === 3 && v < 128);
     const blended = !!t && (spec.materialBlend ?? t.pixels.alphaBlend ?? false) && (!!t.pixels.hasTransparency || vertexAlpha);
-    const lit = !!spec.lit && shading === 'textured';
-    const key = `${shading}|${this.bakedLighting}|${this.backfaces}|${spec.texture ?? ''}|${blended}|${lit}`;
+    // Scene-lit: characters always (the game lights them), everything in studio, and baked chunks that carry no colours.
+    const lit = shading === 'textured' && (!!spec.lit || this.lighting === 'studio' || (this.lighting === 'baked' && !spec.colors));
+    const key = `${shading}|${this.lighting}|${this.backfaces}|${spec.texture ?? ''}|${blended}|${lit}`;
     const hit = this.materials.get(key);
     if (hit) { return hit; }
     const side = this.backfaces ? THREE.DoubleSide : THREE.FrontSide;
@@ -226,7 +251,7 @@ export abstract class ViewportCore {
       mat = new THREE.MeshBasicMaterial({
         map: t?.tex ?? null,
         color: t ? 0xffffff : 0x9a9a9a,
-        vertexColors: this.bakedLighting,
+        vertexColors: this.lighting === 'baked',
         side,
         transparent: blended || xray,
         opacity: xray ? 0.45 : 1,
@@ -247,7 +272,34 @@ export abstract class ViewportCore {
   set shading(value: Shading) { this.shadingValue = value; this.refreshMaterials(); this.onShadingChanged(); }
   get shading(): Shading { return this.shadingValue; }
 
-  setLighting(baked: boolean): void { this.bakedLighting = baked; this.refreshMaterials(); }
+  setLighting(mode: Lighting): void { this.lighting = mode; this.refreshMaterials(); }
+
+  // The colour behind the content: the editor's dark grey, or a blueprint grid (easier to read dark models against).
+  get backdrop(): Backdrop { return this.backdropValue; }
+  setBackdrop(mode: Backdrop): void {
+    this.backdropValue = mode;
+    this.updateBackdrop();
+  }
+
+  private updateBackdrop(): void {
+    this.backdropTexture?.dispose();
+    this.backdropTexture = null;
+    if (this.backdropValue === 'dark') { this.scene.background = this.darkBackground; return; }
+    // Drawn at the canvas size (redrawn on resize) so the cells stay square.
+    const host = this.canvas.parentElement ?? this.canvas;
+    this.backdropTexture = blueprintTexture(Math.max(1, host.clientWidth), Math.max(1, host.clientHeight));
+    this.scene.background = this.backdropTexture;
+  }
+
+  // Every viewport alive, for the AI screenshot request (the one on screen answers).
+  static readonly live = new Set<ViewportCore>();
+
+  // The canvas as a PNG data URL: renders now so the drawing buffer still holds the frame when it is read.
+  capture(): string | null {
+    if (this.canvas.offsetParent === null) { return null; }
+    this.render();
+    return this.canvas.toDataURL('image/png');
+  }
   setBackfaces(on: boolean): void { this.backfaces = on; this.refreshMaterials(); }
 
   setSnap(translate: number | null, rotateDeg: number | null, scale: number | null): void {
@@ -364,6 +416,10 @@ export abstract class ViewportCore {
     this.ortho.top = half;
     this.ortho.bottom = -half;
     this.ortho.updateProjectionMatrix();
+    if (this.backdropValue === 'blueprint') {
+      const img = this.backdropTexture?.image as HTMLCanvasElement | undefined;
+      if (!img || img.width !== w || img.height !== h) { this.updateBackdrop(); }
+    }
   }
 
   private buildAxisGizmo(): void {
@@ -426,6 +482,8 @@ export function chunkGeometry(chunk: ChunkSource): THREE.BufferGeometry {
   geometry.setAttribute('color', new THREE.BufferAttribute(colorArray(chunk), 4));
   geometry.setAttribute('normal', new THREE.BufferAttribute(chunk.normals.slice(), 3));
   geometry.setIndex(new THREE.BufferAttribute(chunk.triangles, 1));
+  // Scene lighting needs normals; chunks stored without them (all zero) get ones from their faces.
+  if (!chunk.normals.some(v => v !== 0)) { geometry.computeVertexNormals(); }
   geometry.computeBoundingSphere();
   return geometry;
 }
@@ -459,6 +517,34 @@ export function labelSprite(text: string, color = '#ffffff', px = 40): THREE.Spr
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false }));
   sprite.userData['aspect'] = c.width / c.height;
   return sprite;
+}
+
+// A blueprint sheet: blue paper, a fine grid every 16 px, a heavier line every 5 cells, lighter towards the middle.
+export const BLUEPRINT = { paper: '#1f4a7a', edge: '#173a62', minor: 'rgba(190, 220, 255, 0.10)', major: 'rgba(205, 230, 255, 0.24)', cell: 16 };
+
+export function blueprintTexture(w: number, h: number): THREE.CanvasTexture {
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const ctx = c.getContext('2d')!;
+  const glow = ctx.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, Math.hypot(w, h) / 2);
+  glow.addColorStop(0, BLUEPRINT.paper);
+  glow.addColorStop(1, BLUEPRINT.edge);
+  ctx.fillStyle = glow;
+  ctx.fillRect(0, 0, w, h);
+  const cell = BLUEPRINT.cell;
+  for (const major of [false, true]) {
+    ctx.strokeStyle = major ? BLUEPRINT.major : BLUEPRINT.minor;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    const step = major ? cell * 5 : cell;
+    for (let x = 0.5; x < w; x += step) { ctx.moveTo(x, 0); ctx.lineTo(x, h); }
+    for (let y = 0.5; y < h; y += step) { ctx.moveTo(0, y); ctx.lineTo(w, y); }
+    ctx.stroke();
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.LinearSRGBColorSpace;
+  return tex;
 }
 
 export function niceStep(v: number): number {

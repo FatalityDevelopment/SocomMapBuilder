@@ -10,6 +10,7 @@ import { TextureCache } from './model-loader';
 import { decodeMesh, toModelMatrix, toModelPoint, type EditorChunk, type EditorMesh, type MeshWire } from './mesh-data';
 import { EditorViewport, type HoverInfo, type SelectMode, type Shading, type Tool, type ViewPreset, type VertexSelection } from './editor-viewport';
 import { UvEditor, type UvEdits } from './uv-editor';
+import type { Lighting } from '../zipper-core/viewport-core';
 
 export type PropTab = 'item' | 'material' | 'texture' | 'paint' | 'model';
 export type BottomTab = 'uv' | 'log';
@@ -76,8 +77,8 @@ export class ModelEditorPageLogic {
   readonly selectMode = signal<SelectMode>('chunk');
   readonly tool = signal<Tool>('select');
   readonly shading = signal<Shading>('textured');
-  // Unlit by default: much retail baked lighting is near black (M51 is a night map). Paint turns it on.
-  readonly baked = signal(false);
+  // Baked by default (the game's own lighting; models without it are scene-lit). Paint switches back to it.
+  readonly lighting = signal<Lighting>('baked');
   readonly grid = signal(true);
   readonly normals = signal(false);
   readonly snap = signal(false);
@@ -284,7 +285,7 @@ export class ModelEditorPageLogic {
       onCameraChange: () => undefined,
     });
     this.viewport.selectMode = this.selectMode();
-    this.viewport.setLighting(this.baked());
+    this.viewport.setLighting(this.lighting());
     this.uv = new UvEditor(uvCanvas, {
       onCommit: edits => void this.commitUv(edits),
       onSelectionChange: n => this.uvCount.set(n),
@@ -369,7 +370,7 @@ export class ModelEditorPageLogic {
     if (tool === 'paint') {
       this.propTab.set('paint');
       // Painting edits the baked lighting, so show it.
-      if (!this.baked()) { this.setBaked(true); }
+      if (this.lighting() !== 'baked') { this.setLighting('baked'); }
     }
   }
   setShading(s: Shading): void { this.shading.set(s); this.viewport.shading = s; }
@@ -377,7 +378,7 @@ export class ModelEditorPageLogic {
     const order: Shading[] = ['textured', 'solid', 'wireframe', 'xray'];
     this.setShading(order[(order.indexOf(this.shading()) + 1) % order.length]);
   }
-  setBaked(on: boolean): void { this.baked.set(on); this.viewport.setLighting(on); }
+  setLighting(mode: Lighting): void { this.lighting.set(mode); this.viewport.setLighting(mode); }
   toggleBackfaces(): void { this.backfaces = !this.backfaces; this.viewport.setBackfaces(this.backfaces); }
   applyHelpers(): void { this.viewport.setHelpers(this.grid(), true, this.normals()); }
   applySnap(): void { this.viewport?.setSnap(this.snap() ? this.snapMove() : null, this.snap() ? this.snapRotate() : null, this.snap() ? 0.1 : null); }
@@ -544,6 +545,35 @@ export class ModelEditorPageLogic {
       }
     } catch { /* retried next poll */ }
   }
+
+  // The AI (MCP) edited or showed something: open its package when it brought this page forward (open), select the
+  // model it named, and reload when this package is the one that changed.
+  async follow(path: string, model: { archive: string; name: string } | null | undefined, open: boolean): Promise<void> {
+    if (this.status()?.path.toLowerCase() !== path.toLowerCase()) {
+      if (open) { await this.openPackage(path, model ?? undefined); }
+      return;
+    }
+    const status = await this.client.status();
+    this.status.set(status);
+    this.textures.invalidate(status.revision);
+    this.models.set(await this.client.listModels());
+    const target = model ? this.models().find(m => m.archive.toLowerCase() === model.archive.toLowerCase() && m.name === model.name) : undefined;
+    const cur = this.current();
+    if (target && (!cur || cur.archive !== target.archive || cur.name !== target.name)) { await this.select(target); }
+    else if (cur) { await this.reload(true); }
+  }
+
+  // What ui_state reports for this page.
+  aiState(): unknown {
+    const s = this.status(), m = this.current();
+    return {
+      path: s?.path ?? null, session: s?.session ?? null, revision: s?.revision ?? null, unsaved: s?.dirty ?? [],
+      model: m ? { archive: m.archive, name: m.name, kind: m.kind } : null,
+      shading: this.shading(), lighting: this.lighting(), selectMode: this.selectMode(), tool: this.tool(),
+    };
+  }
+
+  frameAll(): void { this.viewport.frameAll(); }
 
   canImport(): boolean {
     const s = this.status();

@@ -180,6 +180,7 @@ The API can read and write any file your account can, so the server also only an
 | Frame selected / frame map | F / Home |
 | Views | Numpad 1 front · 3 right · 7 top · 5 orthographic |
 | Shading | Z cycles textured, solid, wire, X-ray |
+| Lighting / backdrop | Baked · Studio · Unlit in the header / image icon in the activity bar |
 | Undo / redo / save copy | Ctrl+Z / Ctrl+Y / Ctrl+S |
 | Asset Viewer | Double-click / Enter opens · Backspace up · right-click for actions |
 
@@ -198,7 +199,9 @@ web/  React 18 + TypeScript + three.js ──POST /api/command──▶ server/ 
 
 ```
 server/
-  Program.cs                      command registry, static web root
+  Program.cs                      command registry, static web root, /mcp and /api/events
+  Services/McpServer.cs           MCP tools (assets_*, ui_*) over the command registry
+  Services/UiBridge.cs            event stream to the pages, screenshot / state requests
   Services/AssetService*.cs       ASSET_* sessions, edits, undo, save
   Services/PackageFilesService.cs PACKAGE_EDIT (package files, archive records)
   Services/FileSystemService.cs   FS_* listings for the file browser
@@ -211,6 +214,31 @@ web/src/
   webview/zipper-workbench/       Asset Viewer
   shared/                         host (dialogs, file browser, import), signals, icons
 ```
+
+## View
+
+- **Lighting** (Map Builder and Model Editor header): **Baked** (default) draws the model's baked vertex colours as the game does, and lights models that have none with the scene lights; **Studio** lights everything with an ambient fill and a key light from the camera, ignoring baked colours (useful on night maps); **Unlit** shows textures at full brightness.
+- **Backdrop** (activity bar, image icon): dark or a blueprint grid, for every 3D view and the Asset Viewer's previews. Remembered in the browser.
+
+## AI (MCP server)
+
+The server is also a [Model Context Protocol](https://modelcontextprotocol.io) server at `http://127.0.0.1:8770/mcp` (Streamable HTTP). The repository's `.mcp.json` registers it for Claude Code; elsewhere:
+
+```bash
+claude mcp add --transport http mapbuilder http://127.0.0.1:8770/mcp
+```
+
+The AI works on the same asset sessions as the pages, so you watch it work: the **AI activity** panel (activity bar, robot icon) lists every call with the reason the AI gave, and with **Follow AI** on, edits bring their page forward: the Map Builder reloads and frames the moved prop or point, the Model Editor opens the edited model. Edits stay undoable (`Ctrl+Z` undoes the AI's too) and nothing is written until a save.
+
+| Tools | Do |
+|---|---|
+| `assets_open`, `assets_sessions`, `assets_status` | Open or join a package session |
+| `assets_list_models`, `assets_describe_model`, `assets_model_mesh`, `assets_list_textures`, `assets_list_palettes`, `assets_texture` (as an image), `assets_map_scene`, `assets_map_points`, `assets_list_animations`, `assets_animation`, `assets_weapons` | Read |
+| `assets_edit` (every `ASSET_EDIT` op), `assets_undo`, `assets_redo`, `assets_save` | Change and save |
+| `ui_screenshot`, `ui_state`, `ui_show`, `ui_focus`, `ui_view` | See and drive the app (screenshot of the 3D view, page / selection state, open a page or model, frame an item, shading / lighting / backdrop / camera) |
+| `mapbuilder_command` | Any backend command from the reference below |
+
+The pages listen on `GET /api/events` (Server-Sent Events) and answer screenshot / state requests on `POST /api/ui/reply`. `/mcp` refuses requests from other sites' pages (a foreign `Origin` or a non-JSON body).
 
 ## Command reference
 
