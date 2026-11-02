@@ -242,6 +242,7 @@ The AI works on the same asset sessions as the pages, so you watch it work: the 
 | `assets_list_models`, `assets_describe_model`, `assets_model_mesh`, `assets_list_textures`, `assets_list_palettes`, `assets_texture` (as an image), `assets_map_scene`, `assets_map_points`, `assets_list_animations`, `assets_animation`, `assets_weapons` | Read |
 | `assets_effects`, `assets_weapon_fx` | Read ZANIM effects and what firing a weapon plays |
 | `assets_edit` (every `ASSET_EDIT` op; `dryRun: true` previews one without changing anything), `assets_undo`, `assets_redo`, `assets_save`, `assets_close` | Change, save and close |
+| `assets_save_prefab`, `assets_list_prefabs`, `assets_delete_prefab` | Save placed props and clutter as a reusable group; `assets_edit {op: placePrefab}` places one in any map (one undo step) |
 | `assets_validate`, `assets_history` | Lint a map (missing models, broken transforms, duplicate points, long texture names, VRAM budget); list the undo / redo steps |
 | `assets_export`, `assets_entry` | Export a model to SOCOM 3 / CA; read or write out one of the package's files (with unsaved edits) |
 | `fs_places`, `fs_list` | Find packages on disk |
@@ -268,6 +269,7 @@ All commands are `POST /api/command` with a JSON body `{ "Command": ..., ...fiel
 | `ASSET_MAP_SCENE` / `ASSET_MAP_POINTS` | `AssetSession` | Map instances and AIMAPS points |
 | `ASSET_EDIT` | `AssetSession`, `AssetJson: {op, …}` | One edit (below); `batch` runs several as one undo step |
 | `ASSET_UNDO` / `ASSET_REDO` / `ASSET_SAVE` | `AssetSession` (+ `AssetJson` for save) | History and saving (`zdb` or `pack`) |
+| `ASSET_SAVE_PREFAB` / `ASSET_LIST_PREFABS` / `ASSET_DELETE_PREFAB` | `AssetSession`, `AssetJson: {name, geoIndices?, clutterIndices?, origin?, replace?}` / `AssetName?` | Prefab files in `%LOCALAPPDATA%\MapBuilder\prefabs` (or `MAPBUILDER_PREFABS`) |
 | `ASSET_HISTORY` / `ASSET_VALIDATE` | `AssetSession` (+ `AssetJson: {vramBudget?}` for validate) | The undo / redo steps; a map lint |
 | `PACKAGE_EDIT` | `InputPath`, `OutputPath`, `Data: [ops]`, `DryRun?` | Add / replace / remove package files and archive records (refused while an open session has unsaved edits on the file) |
 | `FS_PLACES` / `FS_LIST` | `InputPath` | Drives, common folders and folder listings |
@@ -280,6 +282,7 @@ Edit ops include `moveClutter`, `addClutter`, `deleteClutter`, `moveInstance`, `
 - `importTexture` `{sourceSession | source, name, sourceNamespace?, namespace?, newName?}`
 - `addTexture` `{name, pngBase64 | imagePath, namespace?, width?, height?, maxSize?, paletteId?}`
 - `addPalette` `{pngBase64 | imagePath, namespace?, is16?}`
+- `placePrefab` `{prefab, position, yaw?}`: every item of a saved prefab around the position, turned by yaw, as one batch (all or nothing)
 
 ## Format notes
 

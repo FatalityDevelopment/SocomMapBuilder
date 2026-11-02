@@ -27,7 +27,8 @@ namespace MapBuilder.Server.Services
             "Map Builder edits SOCOM II packages (.ZDB / .CDB). Start with assets_open (or assets_sessions to join the session the " +
             "user has open), read with assets_map_scene / assets_list_models / assets_describe_model, change with assets_edit " +
             "(undoable, in memory; dryRun previews an edit) and write with assets_save only when the user asks. assets_validate lints a map " +
-            "and assets_history lists what undo would take back. assets_edit placeInstance adds props and " +
+            "and assets_history lists what undo would take back. Prefabs (assets_save_prefab, assets_list_prefabs, assets_edit placePrefab) " +
+            "reuse groups of props across maps. assets_edit placeInstance adds props and " +
             "setPoint renames / retypes spawn points; fs_list finds packages; weapons_* builds weapons from a template archive; " +
             "package_* changes package files on disk. The user watches the app while you work: " +
             "every call's `reason` is shown in its AI activity panel, and edits make the page follow (Map Builder reloads and frames " +
@@ -188,6 +189,7 @@ namespace MapBuilder.Server.Services
         private static readonly HashSet<string> Destructive = new(StringComparer.Ordinal)
         {
             "assets_save", "assets_close", "assets_entry", "assets_export", "package_edit", "weapons_create", "mapbuilder_command",
+            "assets_delete_prefab",
         };
 
         private static readonly JsonElement EmptyObject = JsonDocument.Parse("{}").RootElement.Clone();
@@ -348,6 +350,13 @@ namespace MapBuilder.Server.Services
                 case "movePoint": return ("map", null, new { point = Str(op, "name") });
                 case "setPoint": return ("map", null, new { point = Str(op, "newName") ?? Str(op, "name") });
                 case "placeInstance": return ("map", null, new { geoIndex = R("newGeoIndex") });
+                case "placePrefab":
+                {
+                    JsonElement first = result.ValueKind == JsonValueKind.Object && result.TryGetProperty("results", out var pr) && pr.ValueKind == JsonValueKind.Array && pr.GetArrayLength() > 0 ? pr[0] : default;
+                    int? geo = first.ValueKind == JsonValueKind.Object && first.TryGetProperty("newGeoIndex", out var g) && g.ValueKind == JsonValueKind.Number ? g.GetInt32() : null;
+                    int? clutter = first.ValueKind == JsonValueKind.Object && first.TryGetProperty("newClutterIndex", out var c) && c.ValueKind == JsonValueKind.Number ? c.GetInt32() : null;
+                    return ("map", null, geo != null ? new { geoIndex = geo } : clutter != null ? new { clutterIndex = clutter } : null);
+                }
                 case "addAnimation":
                 case "deleteAnimation":
                 case "renameAnimation":
@@ -483,6 +492,36 @@ namespace MapBuilder.Server.Services
                     AssetJson = JsonSerializer.Serialize(new { vramBudget = a.TryGetProperty("vramBudget", out var vb) ? vb.GetInt64() : (long?)null }, Json),
                 }, d => d.TryGetProperty("counts", out var c) ? (c.EnumerateObject().Any() ? string.Join(", ", c.EnumerateObject().Select(x => $"{x.Value.GetInt32()} {x.Name}")) : "no problems") : null!));
 
+            AddSync("assets_list_prefabs", "List prefabs",
+                "The saved prefabs (groups of props and clutter placed together, shared by every package): name, description, item count and " +
+                "the models they need, or one prefab's items in full with name. Place one with assets_edit {op: placePrefab}; a map needs " +
+                "the prefab's models (import them first). Risk: read-only.",
+                true, Schema(Array.Empty<string>(), P("name", "string", "Optional prefab to read in full.")),
+                a => FromCommand(new CommandMessage { Command = "ASSET_LIST_PREFABS", AssetName = Str(a, "name") },
+                    d => d.TryGetProperty("prefabs", out var l) ? $"{l.GetArrayLength()} prefab(s)" : $"{d.GetProperty("items").GetArrayLength()} item(s)"));
+
+            AddSync("assets_save_prefab", "Save prefab",
+                "Save placed props (geoIndices) and clutter (clutterIndices) from a map as a reusable prefab, relative to origin (default: the " +
+                "items' centre on the ground). Read the indices with assets_map_scene. replace overwrites a prefab of the same name. " +
+                "Risk: writes a prefab file (not the package).",
+                false, Schema(new[] { "session", "name" }, session, P("name", "string", "Prefab name: letters, digits, spaces, _ . -"),
+                    A("geoIndices", "integer", "Placed references to include."), A("clutterIndices", "integer", "Clutter placements to include."),
+                    A("origin", "number", "Optional [x, y, z] the items are saved around.", minItems: 3, maxItems: 3),
+                    P("description", "string", "Optional description."), P("replace", "boolean", "Overwrite an existing prefab.")),
+                a =>
+                {
+                    var fields = new Dictionary<string, object?>();
+                    foreach (string k in new[] { "name", "geoIndices", "clutterIndices", "origin", "description", "replace" })
+                        if (a.TryGetProperty(k, out var v)) fields[k] = v;
+                    return FromCommand(new CommandMessage { Command = "ASSET_SAVE_PREFAB", AssetSession = Session(a), AssetJson = JsonSerializer.Serialize(fields, Json) },
+                        d => $"saved {d.GetProperty("name").GetString()} ({d.GetProperty("items").GetInt32()} items)");
+                });
+
+            AddSync("assets_delete_prefab", "Delete prefab",
+                "Delete a saved prefab file. Only when the user asks. Risk: deletes a prefab file.",
+                false, Schema(new[] { "name" }, P("name", "string", "The prefab.")),
+                a => FromCommand(new CommandMessage { Command = "ASSET_DELETE_PREFAB", AssetName = Str(a, "name") }, _ => "deleted"));
+
             AddSync("assets_history", "Edit history",
                 "A session's undo and redo steps (most recent first, with the archives each touched), its revision and unsaved archives: " +
                 "what assets_undo / assets_redo would take back. Risk: read-only.",
@@ -538,6 +577,7 @@ namespace MapBuilder.Server.Services
                 "- importTexture {source | sourceSession, name, sourceNamespace?, namespace?, newName?}\n" +
                 "- addTexture {name, pngBase64 | imagePath, namespace?, maxSize?} / addPalette {pngBase64 | imagePath, namespace?, is16?}\n" +
                 "- addAnimation / deleteAnimation / renameAnimation / setAnimation / setAnimationKey (package clips)\n" +
+                "- placePrefab {prefab, position, yaw?} (every item of a saved prefab around position as one undo step; see assets_list_prefabs)\n" +
                 "- batch {label?, ops:[…]} (one undo step)\n" +
                 "Positions are map units [x, y, z] (y is height; read nearby instances with assets_map_scene first); yaw is degrees about Y; " +
                 "omitted parts keep their values. Indices shift after add / delete, so re-read before chaining. The app follows the edit " +

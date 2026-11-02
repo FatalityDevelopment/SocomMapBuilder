@@ -70,6 +70,7 @@ namespace MapBuilder.Server.Services
             reg.Add(c => CaRoute(c, "ASSET_EDIT") ?? WithSession(c.AssetSession, "ASSET_EDIT", s => Edit(s, c.AssetJson)), "ASSET_EDIT");
             reg.Add(c => CaRoute(c, "ASSET_SAVE") ?? WithSession(c.AssetSession, "ASSET_SAVE", s => Save(s, c.AssetJson)), "ASSET_SAVE");
             reg.Add(c => WithSession(c.AssetSession, "ASSET_HISTORY", s => History(s)), "ASSET_HISTORY");
+            RegisterPrefabs(reg);
             reg.Add(c => WithSession(c.AssetSession, "ASSET_VALIDATE", s => Validate(s, c.AssetJson)), "ASSET_VALIDATE");
             reg.Add(c => CaRoute(c, "ASSET_EXPORT") ?? WithSession(c.AssetSession, "ASSET_EXPORT", s => ExportToCa(s, c.AssetArchive, c.AssetName, c.AssetJson)), "ASSET_EXPORT");
         }
@@ -96,6 +97,8 @@ namespace MapBuilder.Server.Services
             {
                 case "batch":
                     return Batch(s, a);
+                case "placePrefab":
+                    return PlacePrefab(s, a);
                 case "moveClutter":
                 {
                     int index = Int(a, "clutterIndex");
