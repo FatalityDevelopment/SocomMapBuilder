@@ -47,6 +47,16 @@ namespace MapBuilder.Tests.Fixtures
             return path;
         }
 
+        /// <summary>Rewrites TST_MDL.ZED without <paramref name="model"/> (before opening), so what places it dangles.</summary>
+        public void RemoveModel(string model)
+        {
+            string path = Path.Combine(Folder, "TST_MDL.ZED");
+            var c = ZedContainer.FromBytes(File.ReadAllBytes(path));
+            c.RemoveNode(model);
+            c.RootValue = (uint)c.NodeCount;
+            File.WriteAllBytes(path, c.ToBytes());
+        }
+
         public static float[] Translation(float x, float y, float z) =>
             new[] { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, x, y, z, 1f };
 

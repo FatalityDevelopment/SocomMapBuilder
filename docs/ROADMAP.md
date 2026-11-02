@@ -22,7 +22,7 @@ The goal: people **and AI over MCP** can add, edit and delete every SOCOM asset 
 
 ## In progress / next up
 
-- **Now:** Phase 2 (MCP authoring).
+- **Now:** the Phase 2 leftovers: the `oneOf` op schema, prefabs, the `weapons_create` dry run, the Problems list in the Map tab.
 - **Next:** a decodable synthetic mesh plus a TXR/PAL fixture, so the mesh, texture and import ops can be pinned.
 - Note for fixtures: a ZDB of **type 1** (header `0xC8`/`0x58`) is detected as SOCOM 3 / CA and opens read-only. SOCOM II packages are type 2.
 - Note for running tests while the app is open: `dotnet run` locks `server/bin/Debug`, so run `dotnet test tests/MapBuilder.Tests -c Release`.
@@ -67,14 +67,14 @@ The goal: people **and AI over MCP** can add, edit and delete every SOCOM asset 
 - [ ] Browser smoke: edit → undo → save-request flow. *Not done:* it needs the backend and the Vite dev server running; add it to `web/scripts/browser-smoke.cjs` next to `checkWorkflow`.
 
 ### Phase 2: MCP authoring
-- [ ] Typed schemas: `enum`, `items`, min/max, `additionalProperties:false`; `assets_edit.op` as `oneOf` from one op-spec table that also drives validation.
-- [ ] Strict argument parsing: wrong types and unknown properties are errors; `reason` is enforced.
-- [ ] `dryRun` for `assets_edit`, `package_edit` and `weapons_create`; `weapons_create` writes atomically.
-- [ ] Safe responses: valid JSON truncation with `nextOffset`; `offset` on `assets_map_scene`; capped image sizes.
-- [ ] Tool annotations: `destructiveHint`, `idempotentHint`; `assets_open` is not read-only.
-- [ ] `assets_validate` / `ASSET_VALIDATE` map lint (dangling refs, long texture names, out-of-bounds instances, duplicate point names, VRAM estimate), also shown in the Map tab.
-- [ ] Prefabs: `placePrefab` op, `ASSET_SAVE_PREFAB`, `assets_list_prefabs`; one placement is one undo step.
-- [ ] `assets_history`: undo/redo labels and revision.
+- [~] Typed schemas: new helpers `E` (enum), `N` (number/integer bounds) and `A` (typed array items, min/max items); `additionalProperties:false` on every tool. Enums cover the map scene kind, the save mode, the ui_show page and the ui_view shading/lighting/backdrop/view/frame. *Left over:* `assets_edit.op` is still a free-form object. The next step is a `oneOf` per op generated from one op-spec table that also drives AssetService's validation.
+- [x] Strict arguments: `McpServer.CheckArguments` runs before every tool and rejects unknown names, missing required values (a blank `reason` included), wrong types (an integer must be integral), enum misses, out-of-range numbers and bad array items. Tests: `AuthoringTests.Map_scene_arguments_are_checked` and `View_arguments_are_checked`. `web/scripts/browser-smoke.cjs` now passes `reason`.
+- [~] Dry run: `ASSET_EDIT {dryRun:true}` (batches too) runs the edit, then takes it back with the session's revision, dirty set and redo stack restored; `assets_edit` takes `dryRun`. `PACKAGE_EDIT` / `package_edit` take `DryRun` / `dryRun` and write nothing. Tests: `AuthoringTests.A_dry_run_*` and `Package_edit_dry_run_writes_nothing`. *Left over:* `weapons_create` dry run and making it atomic (it runs three commands).
+- [~] Safe responses: an over-long reply becomes valid JSON (`truncated`, `totalCharacters`, `hint`, `start`); `assets_map_scene` takes `offset` and answers `matched` / `offset` / `nextOffset` (test: `The_scene_pages_with_offset_and_next_offset`); `ui_screenshot maxSize` is limited to 64..2048. *Left over:* paging for `assets_model_mesh` arrays; no unit test for the truncation path.
+- [x] Tool annotations: `destructiveHint` (save, close, entry, export, package_edit, weapons_create, mapbuilder_command), `idempotentHint` (= read-only), `openWorldHint:false`; `assets_open` is no longer read-only. Test: `Tools_declare_closed_schemas_and_hints`.
+- [~] `ASSET_VALIDATE` / `assets_validate`: errors for missing models (props and clutter), non-finite transforms, duplicate point names and no map scene; warnings for zero scale, no AIMAPS / no start points, texture names over 15 characters and a `vramBudget` overrun; info for items outside the AI map. `ok` is false on any error. Tests: `A_sound_map_validates`, `Missing_models_are_errors`, `The_validate_tool_answers_the_report`. *Left over:* showing the report as a "Problems" list in the Map tab; a better VRAM model (it sums texdat sizes).
+- [ ] Prefabs: `placePrefab` op, `ASSET_SAVE_PREFAB`, `assets_list_prefabs`; one placement is one undo step. Build on `batch` (already atomic and one undo step) plus `dryRun`.
+- [x] `ASSET_HISTORY` / `assets_history`: undo and redo steps (most recent first, with the archives each touched), revision, dirty. Test: `History_lists_undo_and_redo_most_recent_first`.
 
 ## Known issues found (2026-11-02 review)
 
@@ -133,4 +133,4 @@ MCP (`server/Services/McpServer.cs`):
 
 ## Completed log
 
-- 2026-11-02: tracker created.
+- 2026-11-02: tracker created. Phase 1 done except the mesh/texture/import/animation tests (they need a decodable mesh fixture), the loose-folder pack export and the browser edit flow. Phase 2: strict arguments, dry run, history, validate, paging and annotations done; the op schema, prefabs and the weapons dry run are left. 101 server tests and 36 web tests pass.

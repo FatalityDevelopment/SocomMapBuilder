@@ -69,6 +69,8 @@ namespace MapBuilder.Server.Services
             reg.Add(c => CaRoute(c, "ASSET_REDO") ?? WithSession(c.AssetSession, "ASSET_REDO", s => UndoRedo(s, undo: false)), "ASSET_REDO");
             reg.Add(c => CaRoute(c, "ASSET_EDIT") ?? WithSession(c.AssetSession, "ASSET_EDIT", s => Edit(s, c.AssetJson)), "ASSET_EDIT");
             reg.Add(c => CaRoute(c, "ASSET_SAVE") ?? WithSession(c.AssetSession, "ASSET_SAVE", s => Save(s, c.AssetJson)), "ASSET_SAVE");
+            reg.Add(c => WithSession(c.AssetSession, "ASSET_HISTORY", s => History(s)), "ASSET_HISTORY");
+            reg.Add(c => WithSession(c.AssetSession, "ASSET_VALIDATE", s => Validate(s, c.AssetJson)), "ASSET_VALIDATE");
             reg.Add(c => CaRoute(c, "ASSET_EXPORT") ?? WithSession(c.AssetSession, "ASSET_EXPORT", s => ExportToCa(s, c.AssetArchive, c.AssetName, c.AssetJson)), "ASSET_EXPORT");
         }
 
@@ -88,6 +90,7 @@ namespace MapBuilder.Server.Services
             JsonElement a = doc.RootElement;
             string op = Str(a, "op") ?? throw new ArgumentException("\"op\" is required");
             ZipperPackage pkg = s.Package;
+            if (a.TryGetProperty("dryRun", out var dry) && dry.ValueKind == JsonValueKind.True) return DryRun(s, a);
 
             switch (op)
             {
@@ -518,6 +521,122 @@ namespace MapBuilder.Server.Services
             string label = Str(a, "label") ?? string.Join("; ", labels);
             if (merged.Count > 0) s.Undo.Push((label, merged));
             return new { revision = s.Revision, description = label, results };
+        }
+
+        /// <summary>
+        /// Runs an edit (a batch too) and takes it back: the answer says what it would do (the archives it changes,
+        /// the indices it would add) while the session, its history and its revision stay as they were.
+        /// </summary>
+        private static object DryRun(AssetSession s, JsonElement a)
+        {
+            var node = System.Text.Json.Nodes.JsonNode.Parse(a.GetRawText())!.AsObject();
+            node.Remove("dryRun");
+            int depth = s.Undo.Count, revision = s.Revision;
+            var redo = s.Redo.Reverse().ToList();
+            var dirty = s.Dirty.ToList();
+            object result;
+            try { result = Edit(s, node.ToJsonString()); }
+            finally
+            {
+                while (s.Undo.Count > depth) UndoRedo(s, undo: true);
+                s.Redo.Clear();
+                foreach (var entry in redo) s.Redo.Push(entry);
+                s.Dirty.Clear();
+                s.Dirty.UnionWith(dirty);
+                s.Revision = revision;
+            }
+            return new { dryRun = true, wouldDo = result };
+        }
+
+        /// <summary>The undo and redo steps (most recent first) and the revision.</summary>
+        private static object History(AssetSession s) => new
+        {
+            revision = s.Revision,
+            undo = s.Undo.Select(u => new { description = u.Description, archives = u.Before.Keys.OrderBy(k => k).ToList() }).ToList(),
+            redo = s.Redo.Select(u => new { description = u.Description, archives = u.Before.Keys.OrderBy(k => k).ToList() }).ToList(),
+            dirty = s.Dirty.OrderBy(x => x).ToList(),
+        };
+
+        private sealed record ValidateArgs(long? VramBudget);
+
+        /// <summary>
+        /// A map lint: what would break or look wrong in game. Problems are {severity: error | warning | info, code,
+        /// message, and the geoIndex / clutterIndex / point / texture it is about}.
+        /// </summary>
+        private static object Validate(AssetSession s, string? json)
+        {
+            var args = Parse<ValidateArgs>(json) ?? new ValidateArgs(null);
+            var problems = new List<Dictionary<string, object?>>();
+            void Add(string severity, string code, string message, params (string Key, object? Value)[] about)
+            {
+                var p = new Dictionary<string, object?> { ["severity"] = severity, ["code"] = code, ["message"] = message };
+                foreach (var (k, v) in about) p[k] = v;
+                problems.Add(p);
+            }
+
+            // Scene and clutter: references to models the package does not have, and broken transforms.
+            var map = s.Package.MapScene();
+            if (map == null) Add("error", "no-map-scene", "No GEO archive has a worldmodel, so the package is not a map");
+            Func<string, bool> resolves = n => s.Package.ResolveModel(n) != null;
+            var instances = map == null ? new List<SceneInstances.Instance>() : SceneInstances.Collect(map.Value.Scene.MapRoot, resolves);
+            if (s.Package.Entry(PackageEdits.ClutterLeaf) is { } clutter)
+                instances.AddRange(SceneInstances.FromClutter(ClutterFile.Parse(s.Package.Container(clutter.Leaf)), resolves));
+            foreach (var i in instances)
+            {
+                (string, object?) at = i.ClutterIndex >= 0 ? ("clutterIndex", i.ClutterIndex) : ("geoIndex", i.Node?.Index);
+                if (i.Kind is "reference" or "clutter" && !i.Resolved)
+                    Add("error", "missing-model", $"{i.InstanceName} places {i.ModelName}, which the package does not have", at);
+                if (!i.Matrix.All(float.IsFinite))
+                    Add("error", "bad-transform", $"{i.InstanceName} has a non-finite transform", at);
+                else if (MathF.Sqrt(i.Matrix[0] * i.Matrix[0] + i.Matrix[1] * i.Matrix[1] + i.Matrix[2] * i.Matrix[2]) < 1e-4f)
+                    Add("warning", "zero-scale", $"{i.InstanceName} has (almost) zero scale", at);
+            }
+
+            // AIMAPS: duplicate names, and placed items outside the AI map (players cannot reach them).
+            var mps = s.Package.Entries.FirstOrDefault(e => e.Leaf.EndsWith(".MPS", StringComparison.OrdinalIgnoreCase));
+            if (mps == null) Add("warning", "no-aimaps", "The package has no AIMAPS.MPS (no spawn points)");
+            else
+            {
+                var grid = MpsFile.Parse(mps.Data).Maps.FirstOrDefault();
+                var points = MapPoints.Parse(mps.Data, grid);
+                foreach (var g in points.GroupBy(p => p.Name, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1))
+                    Add("error", "duplicate-point", $"{g.Count()} points are named {g.Key}", ("point", g.Key));
+                if (!points.Any(p => p.Kind == "start")) Add("warning", "no-start", "AIMAPS has no start points");
+                if (grid != null)
+                    foreach (var i in instances.Where(i => i.Kind is "reference" or "clutter" && i.Matrix.All(float.IsFinite)))
+                        if (i.Matrix[12] < grid.MinX || i.Matrix[12] > grid.MaxX || i.Matrix[14] < grid.MinZ || i.Matrix[14] > grid.MaxZ)
+                            Add("info", "outside-ai-map", $"{i.InstanceName} at ({i.Matrix[12]:0.#}, {i.Matrix[14]:0.#}) is outside the AI map",
+                                i.ClutterIndex >= 0 ? ("clutterIndex", i.ClutterIndex) : ("geoIndex", i.Node?.Index));
+            }
+
+            // Textures: names retail models cannot hold, and the total the map asks VRAM for.
+            long textureBytes = 0;
+            int textures = 0;
+            foreach (var e in s.Package.Entries.Where(e => e.Kind == "txr"))
+            {
+                IReadOnlyList<ZedNode> nodes;
+                try { nodes = s.Package.Container(e.Leaf).Nodes; } catch (InvalidDataException) { continue; }
+                for (int i = 0; i + 1 < nodes.Count; i++)
+                {
+                    if (!nodes[i].Name.EndsWith(".tif", StringComparison.OrdinalIgnoreCase) || nodes[i + 1].Name != "texdat") continue;
+                    textures++;
+                    textureBytes += nodes[i + 1].Data.Length;
+                    if (nodes[i].Name.Length > 15)
+                        Add("warning", "long-texture-name", $"{nodes[i].Name} is longer than 15 characters: retail models cannot name it", ("texture", nodes[i].Name));
+                }
+            }
+            if (args.VramBudget is long budget && textureBytes > budget)
+                Add("warning", "vram-budget", $"Textures take {textureBytes:N0} bytes, over the {budget:N0} budget");
+
+            return new
+            {
+                ok = problems.All(p => (string)p["severity"]! != "error"),
+                counts = problems.GroupBy(p => (string)p["severity"]!).ToDictionary(g => g.Key, g => g.Count()),
+                instances = instances.Count,
+                textures,
+                textureBytes,
+                problems,
+            };
         }
 
         // ------------------------------------------------------------------ animations
@@ -1345,11 +1464,12 @@ namespace MapBuilder.Server.Services
             };
         }
 
-        private sealed record SceneFilter(string? Kind, string? Query, int? Limit, bool? IncludeUnresolved);
+        private sealed record SceneFilter(string? Kind, string? Query, int? Limit, bool? IncludeUnresolved, int? Offset = null);
 
         private static object MapScene(AssetSession s, string? json)
         {
             var f = Parse<SceneFilter>(json) ?? new SceneFilter(null, null, null, null);
+            int offset = Math.Max(0, f.Offset ?? 0), limit = Math.Max(0, f.Limit ?? 500);
             var map = s.Package.MapScene() ?? throw new InvalidOperationException("The package has no map scene (no GEO with a worldmodel)");
             Func<string, bool> resolves = n => s.Package.ResolveModel(n) != null;
             var instances = SceneInstances.Collect(map.Scene.MapRoot, resolves);
@@ -1357,11 +1477,12 @@ namespace MapBuilder.Server.Services
                 instances.AddRange(SceneInstances.FromClutter(ClutterFile.Parse(s.Package.Container(clutter.Leaf)), resolves));
 
             var counts = instances.GroupBy(i => i.Kind).ToDictionary(g => g.Key, g => g.Count());
-            var selected = instances.Where(i =>
+            var matching = instances.Where(i =>
                     (f.IncludeUnresolved == true || i.Resolved) &&
                     (f.Kind == null || i.Kind.Equals(f.Kind, StringComparison.OrdinalIgnoreCase)) &&
                     (f.Query == null || i.ModelName.Contains(f.Query, StringComparison.OrdinalIgnoreCase) || i.Path.Contains(f.Query, StringComparison.OrdinalIgnoreCase)))
-                .Take(f.Limit ?? 500)
+                .ToList();
+            var selected = matching.Skip(offset).Take(limit)
                 .Select(i =>
                 {
                     var m = s.Package.ResolveModel(i.ModelName);
@@ -1379,7 +1500,8 @@ namespace MapBuilder.Server.Services
                         source = m == null ? null : $"{m.Archive}:{m.Name}",
                     };
                 }).ToList();
-            return new { sceneNamespace = map.Namespace, counts, returned = selected.Count, instances = selected };
+            int? nextOffset = offset + selected.Count < matching.Count ? offset + selected.Count : null;
+            return new { sceneNamespace = map.Namespace, counts, matched = matching.Count, offset, returned = selected.Count, nextOffset, instances = selected };
         }
 
         /// <summary>AIMAPS.MPS points (starts, waypoints) with world X / Z from the first AI map's grid.</summary>

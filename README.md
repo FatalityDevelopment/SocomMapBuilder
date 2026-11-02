@@ -241,13 +241,16 @@ The AI works on the same asset sessions as the pages, so you watch it work: the 
 | `assets_open`, `assets_sessions`, `assets_status` | Open or join a package session |
 | `assets_list_models`, `assets_describe_model`, `assets_model_mesh`, `assets_list_textures`, `assets_list_palettes`, `assets_texture` (as an image), `assets_map_scene`, `assets_map_points`, `assets_list_animations`, `assets_animation`, `assets_weapons` | Read |
 | `assets_effects`, `assets_weapon_fx` | Read ZANIM effects and what firing a weapon plays |
-| `assets_edit` (every `ASSET_EDIT` op), `assets_undo`, `assets_redo`, `assets_save`, `assets_close` | Change, save and close |
+| `assets_edit` (every `ASSET_EDIT` op; `dryRun: true` previews one without changing anything), `assets_undo`, `assets_redo`, `assets_save`, `assets_close` | Change, save and close |
+| `assets_validate`, `assets_history` | Lint a map (missing models, broken transforms, duplicate points, long texture names, VRAM budget); list the undo / redo steps |
 | `assets_export`, `assets_entry` | Export a model to SOCOM 3 / CA; read or write out one of the package's files (with unsaved edits) |
 | `fs_places`, `fs_list` | Find packages on disk |
 | `package_inspect`, `package_edit` | List and change the files of a package or archive on disk (no session) |
 | `weapons_list`, `weapons_template`, `weapons_texture`, `weapons_create` | Build a new weapon from a template in a weapon archive (model edits, a texture from an image) |
 | `ui_screenshot`, `ui_state`, `ui_show`, `ui_focus`, `ui_view` | See and drive the app (screenshot of the 3D view, page / selection state, open a page or model, frame an item, shading / lighting / backdrop / camera preset, orbit and zoom) |
 | `mapbuilder_command` | Any backend command from the reference below |
+
+Tool arguments are checked against each tool's schema before it runs: unknown names, wrong types, values outside an `enum` or range, and a missing `reason` are errors. `assets_map_scene` pages with `offset` / `nextOffset`, and a reply too long for the model's context comes back as valid JSON with `truncated: true`.
 
 Claude Code finds the tools when a session starts, so start Map Builder (`dotnet run`) before opening the Claude session; a session started without it sees no `mapbuilder` tools until it is restarted. Claude Code also asks once to approve the project's `.mcp.json` server.
 
@@ -265,7 +268,8 @@ All commands are `POST /api/command` with a JSON body `{ "Command": ..., ...fiel
 | `ASSET_MAP_SCENE` / `ASSET_MAP_POINTS` | `AssetSession` | Map instances and AIMAPS points |
 | `ASSET_EDIT` | `AssetSession`, `AssetJson: {op, …}` | One edit (below); `batch` runs several as one undo step |
 | `ASSET_UNDO` / `ASSET_REDO` / `ASSET_SAVE` | `AssetSession` (+ `AssetJson` for save) | History and saving (`zdb` or `pack`) |
-| `PACKAGE_EDIT` | `InputPath`, `OutputPath`, `Data: [ops]` | Add / replace / remove package files and archive records |
+| `ASSET_HISTORY` / `ASSET_VALIDATE` | `AssetSession` (+ `AssetJson: {vramBudget?}` for validate) | The undo / redo steps; a map lint |
+| `PACKAGE_EDIT` | `InputPath`, `OutputPath`, `Data: [ops]`, `DryRun?` | Add / replace / remove package files and archive records (refused while an open session has unsaved edits on the file) |
 | `FS_PLACES` / `FS_LIST` | `InputPath` | Drives, common folders and folder listings |
 
 Edit ops include `moveClutter`, `addClutter`, `deleteClutter`, `moveInstance`, `duplicateInstance`, `placeInstance`, `deleteInstance`, `movePoint`, `setPoint`, `setVertices`, `transformVertices`, `addMesh`, `deleteFaces`, `duplicateFaces`, `retexture`, `replaceTexture`, `tintVertexColors`, the animation ops, and:
