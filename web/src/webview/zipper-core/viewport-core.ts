@@ -1,6 +1,7 @@
 import { DEFAULT_RENDER_SETTINGS, normalizeRenderSettings, renderPixelRatio, type RenderSettings } from '../../viewport/renderSettings';
 // Shared 3D editor viewport for the Model and Map editors: renderer, perspective / orthographic cameras, orbit
 // controls (middle drag or Alt + left orbits, right drag pans, wheel zooms), WASD fly (with the canvas focused),
+// keyboard orbit (arrows held, numpad 4 / 6 / 8 / 2 / 9 steps, numpad + / − zoom, on the page in front),
 // a transform gizmo, grid / axes, the corner orientation gizmo, view presets and framing, and the GS material rules
 // (texel alpha x vertex alpha, blended when the section material blends and something is translucent).
 // Subclasses own the content, selection and tools.
@@ -11,6 +12,8 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 import type { ModelTexturePixels } from '../zipper-workbench/zed-model-renderer';
 import { effect, type EffectRef } from '../../shared/signals';
 import { viewBackdrop } from '../../shared/viewSettings';
+import { modalOpen } from '../../shared/host';
+import { ORBIT_TAP, heldOrbitRate, matchCameraKey, orbitPosition, zoomPosition } from '../../viewport/cameraKeys';
 
 export interface ViewportStats { fps: number; calls: number; triangles: number; geometries: number; textures: number }
 
@@ -75,6 +78,10 @@ export abstract class ViewportCore {
   private readonly axisCamera = new THREE.OrthographicCamera(-1.6, 1.6, 1.6, -1.6, 0.1, 10);
   protected readonly listenerAbort = new AbortController();
   private readonly flyKeys = new Set<string>();
+  // Arrow keys held for keyboard orbit ('left', 'right', 'up', 'down'; 'shift' for faster).
+  private readonly orbitKeys = new Set<string>();
+  // Arrows pressed since the last frame that orbited.
+  private readonly orbitTaps = new Set<string>();
   private readonly backdropEffect: EffectRef;
 
   // Materials and textures.
@@ -149,6 +156,34 @@ export abstract class ViewportCore {
     canvas.addEventListener('blur', () => this.flyKeys.clear(), { signal: this.listenerAbort.signal });
     canvas.addEventListener('contextmenu', e => e.preventDefault(), { signal: this.listenerAbort.signal });
 
+    // Keyboard orbit / zoom on the window, for the view on screen only (every page stays mounted), and not while
+    // typing in a field or with a prompt open.
+    window.addEventListener('keydown', e => {
+      if (!this.visible || modalOpen() || isTyping(e.target)) { return; }
+      const action = matchCameraKey(e);
+      if (!action) { return; }
+      if (action.kind === 'hold') {
+        if (!this.orbitKeys.has(action.key)) { this.orbitTaps.add(action.key); }
+        this.orbitKeys.add(action.key);
+        if (e.shiftKey) { this.orbitKeys.add('shift'); }
+      } else if (action.kind === 'orbit') { this.orbitBy(action.yaw, action.pitch); }
+      else { this.zoomBy(action.factor); }
+      e.preventDefault();
+    }, { signal: this.listenerAbort.signal });
+    window.addEventListener('keyup', e => {
+      const action = matchCameraKey({ key: e.key, code: e.code, ctrlKey: false, metaKey: false, altKey: false });
+      if (action?.kind === 'hold') {
+        // A tap released before any frame turned the view still turns it one step.
+        if (this.orbitTaps.delete(action.key)) {
+          const tap = heldOrbitRate(new Set([action.key]), false);
+          this.orbitBy(Math.sign(tap.yaw) * ORBIT_TAP, Math.sign(tap.pitch) * ORBIT_TAP);
+        }
+        this.orbitKeys.delete(action.key);
+      }
+      if (e.key === 'Shift') { this.orbitKeys.delete('shift'); }
+    }, { signal: this.listenerAbort.signal });
+    window.addEventListener('blur', () => { this.orbitKeys.clear(); this.orbitTaps.clear(); }, { signal: this.listenerAbort.signal });
+
     this.buildAxisGizmo();
     this.resizeObserver = new ResizeObserver(() => this.resize());
     this.resizeObserver.observe(canvas.parentElement ?? canvas);
@@ -162,6 +197,7 @@ export abstract class ViewportCore {
       const now = performance.now();
       const dt = Math.min(0.1, (now - this.lastFrame) / 1000);
       this.stepFly(dt);
+      this.stepOrbit(dt);
       this.onFrame(dt);
       this.lastFrame = now;
       this.render();
@@ -232,7 +268,7 @@ export abstract class ViewportCore {
       tex.magFilter = this.renderSettings.filtering === 'pixel' ? THREE.NearestFilter : THREE.LinearFilter;
       tex.minFilter = this.renderSettings.filtering === 'pixel' ? THREE.NearestFilter : THREE.LinearMipmapLinearFilter;
       tex.generateMipmaps = true;
-      tex.anisotropy = this.renderSettings.filtering === 'pixel' ? 1 : Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
+      tex.anisotropy = this.renderSettings.filtering === 'pixel' ? 1 : this.renderer.capabilities.getMaxAnisotropy();
       tex.wrapS = pixels.wrapS === 'clamp' ? THREE.ClampToEdgeWrapping : THREE.RepeatWrapping;
       tex.wrapT = pixels.wrapT === 'clamp' ? THREE.ClampToEdgeWrapping : THREE.RepeatWrapping;
       tex.needsUpdate = true;
@@ -336,7 +372,7 @@ export abstract class ViewportCore {
         const pixel = this.renderSettings.filtering === 'pixel';
         texture.magFilter = pixel ? THREE.NearestFilter : THREE.LinearFilter;
         texture.minFilter = pixel ? THREE.NearestFilter : THREE.LinearMipmapLinearFilter;
-        texture.anisotropy = pixel ? 1 : Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
+        texture.anisotropy = pixel ? 1 : this.renderer.capabilities.getMaxAnisotropy();
         texture.needsUpdate = true;
       }
     }
@@ -370,6 +406,8 @@ export abstract class ViewportCore {
   // ------------------------------------------------------------------ camera
 
   get isOrtho(): boolean { return this.camera === this.ortho; }
+  // On screen: every page stays mounted, a hidden page's canvas has no layout box.
+  get visible(): boolean { return this.canvas.offsetParent !== null; }
   get viewLabel(): string { return this.isOrtho ? 'Orthographic' : 'Perspective'; }
 
   toggleOrtho(): void {
@@ -419,6 +457,26 @@ export abstract class ViewportCore {
     this.camera.updateMatrixWorld();
     this.raycaster.setFromCamera(ndc, this.camera);
     return this.raycaster;
+  }
+
+  // Orbits the camera about the orbit target: yaw turns about world Y, pitch tilts (degrees).
+  orbitBy(yawDeg: number, pitchDeg: number): void {
+    this.camera.position.copy(orbitPosition(this.camera.position, this.controls.target, yawDeg, pitchDeg));
+    this.camera.lookAt(this.controls.target);
+    this.controls.update();
+  }
+
+  // Moves the camera toward (factor < 1) or away from (> 1) the orbit target; the orthographic view follows it.
+  zoomBy(factor: number): void {
+    this.camera.position.copy(zoomPosition(this.camera.position, this.controls.target, factor, Math.max(0.05, this.extent / 2000)));
+    this.controls.update();
+  }
+
+  private stepOrbit(dt: number): void {
+    if (this.orbitKeys.size === 0 || dt <= 0) { return; }
+    const { yaw, pitch } = heldOrbitRate(this.orbitKeys, this.orbitKeys.has('shift'));
+    if (yaw !== 0 || pitch !== 0) { this.orbitBy(yaw * dt, pitch * dt); }
+    this.orbitTaps.clear();
   }
 
   private stepFly(dt: number): void {
@@ -623,6 +681,12 @@ export function disposeObjectResources(root: THREE.Object3D): void {
   geometries.forEach(g => g.dispose());
   materials.forEach(m => m.dispose());
   textures.forEach(t => t.dispose());
+}
+
+// Whether a key event goes to a text field (or a select), where the arrows belong to the field.
+function isTyping(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null;
+  return !!el && (['INPUT', 'SELECT', 'TEXTAREA'].includes(el.tagName) || el.isContentEditable);
 }
 
 export function billboardYaw(axis: 'x' | 'z', camera: THREE.Camera, position: THREE.Vector3): number {

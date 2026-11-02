@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from '../../shared/Icon';
 import { activePage, openRequest, useSignals } from '../../shared';
-import { aiChange, aiView, provideAiState } from '../../shared/aiBridge';
+import { aiChange, aiView, applyAiCamera, provideAiState } from '../../shared/aiBridge';
 import { PageHeader } from '../../shared/PageHeader';
 import { ModelEditorPageLogic } from './model-editor-page';
 import { LIGHTINGS } from '../zipper-core/viewport-core';
@@ -37,6 +37,7 @@ export function ModelEditorPage() {
     if (viewRequest.lighting) { c.setLighting(viewRequest.lighting); }
     if (viewRequest.view) { c.view(viewRequest.view); }
     if (viewRequest.frame === 'selected') { c.frameSelected(); } else if (viewRequest.frame === 'all') { c.frameAll(); }
+    applyAiCamera(viewRequest);
   }, [viewRequest, c]);
   useEffect(() => provideAiState('models', () => c.aiState()), [c]);
 
