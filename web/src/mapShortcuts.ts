@@ -10,8 +10,7 @@ const key = (label: string, ctrl: boolean | undefined, match: Shortcut['match'])
 
 // Order matters: the handler takes the first match, Ctrl combinations first (W A S D Q E fly, so tools use other keys).
 export const SHORTCUTS = {
-  // Ctrl+Shift+Z matches undo first, as it always has, so redo is Ctrl+Y in practice.
-  undo: key('Ctrl+Z', true, (_, k) => k === 'z'),
+  undo: key('Ctrl+Z', true, (e, k) => k === 'z' && !e.shiftKey),
   redo: key('Ctrl+Y', true, (e, k) => k === 'y' || (e.shiftKey && k === 'z')),
   save: key('Ctrl+S', true, (_, k) => k === 's'),
   open: key('Ctrl+O', true, (_, k) => k === 'o'),
@@ -33,6 +32,7 @@ export const SHORTCUTS = {
   toolScale: key('T', false, (_, k) => k === 't'),
   toolPlace: key('P', false, (_, k) => k === 'p'),
   shading: key('Z', false, (_, k) => k === 'z'),
+  help: key('?', false, e => e.key === '?'),
   escape: key('Esc', false, e => e.key === 'Escape'),
 } satisfies Record<string, Shortcut>;
 

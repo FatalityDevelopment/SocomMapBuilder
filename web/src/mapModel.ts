@@ -47,3 +47,18 @@ export function pointKindCounts(points: MapPointWire[]): Array<{ kind: string; c
   for (const p of points) { by.set(p.kind, (by.get(p.kind) ?? 0) + 1); }
   return [...by].map(([kind, count]) => ({ kind, count }));
 }
+
+// A model can occur as both a prop and clutter. Each draw batch needs one layer so visibility stays independent.
+export function groupInstancesByLayer(instances: MapInstanceWire[]): Array<{ source: string; layer: MapLayer; indices: number[] }> {
+  const sources = new Map<string, Map<MapLayer, number[]>>();
+  instances.forEach((instance, index) => {
+    if (!instance.source) { return; }
+    const layers = sources.get(instance.source) ?? new Map<MapLayer, number[]>();
+    const layer = layerOf(instance);
+    const indices = layers.get(layer) ?? [];
+    indices.push(index);
+    layers.set(layer, indices);
+    sources.set(instance.source, layers);
+  });
+  return [...sources].flatMap(([source, layers]) => [...layers].map(([layer, indices]) => ({ source, layer, indices })));
+}

@@ -1,8 +1,14 @@
+import { readEditorPreferences, writeEditorPreferences } from './viewport/editorPreferences';
+import { ShortcutReference } from './components/ShortcutReference';
+import { readRenderSettings, writeRenderSettings } from './viewport/renderSettings';
+import type { ViewportStats } from './webview/zipper-core/viewport-core';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ModelSummary } from './webview/model-editor/asset-client';
+import { decodeMesh, type MeshWire } from './webview/model-editor/mesh-data';
 import { MapViewport, type MapLayer, type MapTool } from './viewport/mapViewport';
 import { LIGHTINGS, type Lighting, type Shading, type ViewPreset } from './webview/zipper-core/viewport-core';
-import { LAYERS, layerOf, movable, pointKindCounts, type ModelGroup } from './mapModel';
+import { LAYERS, errText, layerOf, movable, pointKindCounts, type ModelGroup } from './mapModel';
+
 import { MenuBar, type Menu } from './components/MenuBar';
 import { PageHeader } from './shared/PageHeader';
 import { Outliner } from './components/Outliner';
@@ -13,8 +19,8 @@ import { activePage, host } from './shared';
 import { aiView, provideAiState } from './shared/aiBridge';
 import { SHORTCUTS, TOOLS } from './mapShortcuts';
 import { useMapKeys } from './useMapKeys';
-import { useMapEdits } from './useMapEdits';
 import { useMapSession } from './useMapSession';
+import { useMapEdits } from './useMapEdits';
 
 const SHADINGS: Array<{ id: Shading; label: string }> = [
   { id: 'textured', label: 'Textured' },
@@ -26,30 +32,34 @@ const SHADINGS: Array<{ id: Shading; label: string }> = [
 const SHADING_ORDER: Shading[] = ['textured', 'solid', 'wireframe', 'xray'];
 
 export function MapPage() {
+  const [initialPreferences] = useState(readEditorPreferences);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const viewportRef = useRef<MapViewport | null>(null);
-  // After each load: a new map sets the fly speed from its size, and the selection follows the viewport's.
   const mapSession = useMapSession(viewportRef, (vp, keepCamera) => {
     if (!keepCamera) { setFlySpeedState(Math.round(vp.flySpeed)); }
     syncSelection();
-  });
-  const { client, instancesRef, statusRef, status, setStatus, sceneNs, counts, instances, points, models, setModels, busy, progress, message, messageIsError, say,
-    reload, edit, history, saveCopy, exportPack, openDialog } = mapSession;
+  }, () => { setPlaceModel(null); setSelection([]); setSelectedPoint(null); });
+  const { client, instancesRef, statusRef, status, setStatus, sceneNs, counts, instances, points, models, setModels,
+    busy, progress, loading, loadWarnings, connectionIssue, message, messageIsError, say,
+    retryScene, edit, history, saveCopy, exportPack, openDialog } = mapSession;
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [query, setQuery] = useState('');
   const [libQuery, setLibQuery] = useState('');
   const [propTab, setPropTab] = useState<PropTab>('item');
   const [tool, setToolState] = useState<MapTool>('select');
-  const [shading, setShadingState] = useState<Shading>('textured');
-  const [lighting, setLightingState] = useState<Lighting>('baked');
-  const [grid, setGrid] = useState(true);
-  const [snap, setSnap] = useState(false);
-  const [snapMove, setSnapMove] = useState(10);
-  const [snapRotate, setSnapRotate] = useState(15);
-  const [snapScale, setSnapScale] = useState(0.1);
-  const [gizmoLocal, setGizmoLocal] = useState(false);
+  const [shading, setShadingState] = useState<Shading>(initialPreferences.shading);
+  const [lighting, setLightingState] = useState<Lighting>(initialPreferences.lighting);
+  const [grid, setGrid] = useState(initialPreferences.grid);
+  const [snap, setSnap] = useState(initialPreferences.snap);
+  const [snapMove, setSnapMove] = useState(initialPreferences.snapMove);
+  const [snapRotate, setSnapRotate] = useState(initialPreferences.snapRotate);
+  const [snapScale, setSnapScale] = useState(initialPreferences.snapScale);
+  const [gizmoLocal, setGizmoLocal] = useState(initialPreferences.gizmoLocal);
   const [locked, setLocked] = useState<Set<MapLayer>>(() => new Set());
-  const [ortho, setOrtho] = useState(false);
-  const [backfaces, setBackfaces] = useState(true);
+  const [ortho, setOrtho] = useState(initialPreferences.ortho);
+  const [backfaces, setBackfaces] = useState(initialPreferences.backfaces);
+  const [renderSettings, setRenderSettings] = useState(readRenderSettings);
+  const [viewportStats, setViewportStats] = useState<ViewportStats | null>(null);
   const [flySpeed, setFlySpeedState] = useState(100);
   const [hover, setHover] = useState<string | null>(null);
   const [selection, setSelection] = useState<number[]>([]);
@@ -57,16 +67,21 @@ export function MapPage() {
   const [openNodes, setOpenNodes] = useState<Set<string>>(() => new Set(['L:reference', 'L:clutter']));
   const [hidden, setHidden] = useState<{ layers: Set<MapLayer>; models: Set<string> }>(() => ({ layers: new Set<MapLayer>(['sky']), models: new Set<string>() }));
   const [placeModel, setPlaceModel] = useState<ModelSummary | null>(null);
-  const [placeYaw, setPlaceYaw] = useState(0);
-  const [placeScale, setPlaceScale] = useState(1);
-  const [randomYaw, setRandomYaw] = useState(false);
+  const [placeYaw, setPlaceYaw] = useState(initialPreferences.placeYaw);
+  const [placeScale, setPlaceScale] = useState(initialPreferences.placeScale);
+  const [randomYaw, setRandomYaw] = useState(initialPreferences.randomYaw);
+  const [randomScale, setRandomScale] = useState(initialPreferences.randomScale);
+  const [minPlaceScale, setMinPlaceScale] = useState(initialPreferences.minPlaceScale);
+  const [maxPlaceScale, setMaxPlaceScale] = useState(initialPreferences.maxPlaceScale);
+  const [alignSurface, setAlignSurface] = useState(initialPreferences.alignSurface);
 
   const dirtyCount = status?.dirty.length ?? 0;
   const single = selection.length === 1 ? instances[selection[0]] ?? null : null;
   const movableCount = selection.filter(i => movable(instances[i])).length;
 
-  const { commitTransforms, setField, movePointField, deleteSelection, duplicateSelection, copySelection, paste, editSelection, dropToGround, place, clipboardRef } =
-    useMapEdits(mapSession, viewportRef, selection, next => setTool(next), setPropTab, { model: placeModel, yaw: placeYaw, scale: placeScale, randomYaw });
+  const { commitTransforms, setField, movePointField, deleteSelection, duplicateSelection, copySelection, paste,
+    editSelection, dropToGround, place, clipboardRef } = useMapEdits(mapSession, viewportRef, selection,
+      next => setTool(next), setPropTab, { model: placeModel });
 
   // A prop's model in the Model Editor: the same package (and session) with that model selected.
   const openModel = (index: number) => {
@@ -78,7 +93,7 @@ export function MapPage() {
     say(`Opening ${inst.model} in the Model Editor…`);
   };
 
-  // Copies a model from another package (importModel) and makes it the one the Place tool drops.
+  // Copies a model from another package and selects it for placement.
   const importFromPackage = async () => {
     const session = client.session;
     if (!session || status?.readOnly) { return; }
@@ -259,7 +274,7 @@ export function MapPage() {
     {
       id: 'file', label: 'File', items: [
         { label: 'Open package…', shortcut: SHORTCUTS.open.label, action: () => void openDialog() },
-        { label: 'Reload', action: () => void reload(true, true), disabled: () => !status },
+        { label: 'Reload', action: () => void retryScene(), disabled: () => !status || busy || loading },
         { label: 'Import from package…', action: () => void importFromPackage(), disabled: () => !status || !!status.readOnly || busy },
         { separator: true, label: '' },
         { label: 'Save copy…', shortcut: SHORTCUTS.save.label, action: () => void saveCopy(), disabled: () => !dirtyCount },
@@ -304,6 +319,8 @@ export function MapPage() {
     },
     {
       id: 'help', label: 'Help', items: [
+        { label: 'Keyboard shortcuts…', shortcut: SHORTCUTS.help.label, action: () => setShortcutsOpen(true) },
+        { separator: true, label: '' },
         { label: 'Fly: W A S D, Q / E down / up, Shift faster (viewport focused)' },
         { label: 'Orbit: middle drag or Alt+left drag · Pan: right drag · Zoom: wheel' },
         { label: 'Select: click, Shift adds, Ctrl removes, drag for box' },
@@ -316,6 +333,7 @@ export function MapPage() {
 
   // What each shortcut does (SHORTCUTS has the keys).
   useMapKeys({
+    help: () => setShortcutsOpen(true),
     undo: () => void history(true),
     redo: () => void history(false),
     save: () => void saveCopy(),
@@ -340,7 +358,7 @@ export function MapPage() {
     toolPlace: () => setTool('place'),
     shading: cycleShading,
     escape: () => { setOpenMenu(null); if (tool !== 'select') { setTool('select'); } else { clearSelection(); } },
-  });
+  }, !shortcutsOpen);
 
   // ------------------------------------------------------------------ viewport wiring
 
@@ -358,16 +376,56 @@ export function MapPage() {
       onHover: text => handlersRef.current.setHover(text),
       onTransformCommit: (items, kind) => void handlersRef.current.commitTransforms(items, kind),
       onPointMove: (name, position) => void handlersRef.current.edit(`move point ${name}`, { op: 'movePoint', name, position }),
-      onPlace: position => void handlersRef.current.place(position),
+      onPlace: transform => void handlersRef.current.place(transform),
       onOpenModel: index => handlersRef.current.openModel(index),
     });
-    vp.setLighting('baked');
-    vp.setSnap(null, null, null);
+    vp.editable = false;
+    vp.onStats = setViewportStats;
+    vp.shading = initialPreferences.shading;
+    vp.setLighting(initialPreferences.lighting);
+    vp.setBackfaces(initialPreferences.backfaces);
+    vp.showGrid = initialPreferences.grid;
+    vp.showAxes = initialPreferences.grid;
+    vp.gizmoLocal = initialPreferences.gizmoLocal;
+    if (initialPreferences.ortho) { vp.toggleOrtho(); }
+    vp.setSnap(initialPreferences.snap ? initialPreferences.snapMove : null,
+      initialPreferences.snap ? initialPreferences.snapRotate : null, initialPreferences.snap ? initialPreferences.snapScale : null);
+
     viewportRef.current = vp;
   }, []);
 
   useEffect(() => () => { viewportRef.current?.dispose(); viewportRef.current = null; }, []);
 
+  useEffect(() => {
+    viewportRef.current?.setPlacementOptions({ yaw: placeYaw, scale: placeScale, randomYaw, randomScale,
+      minScale: minPlaceScale, maxScale: maxPlaceScale, alignSurface });
+  }, [placeYaw, placeScale, randomYaw, randomScale, minPlaceScale, maxPlaceScale, alignSurface]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const vp = viewportRef.current;
+    vp?.setPlacementMesh(null);
+    if (!vp || !placeModel || !status) { return; }
+    const session = client.session;
+    void client.mesh(placeModel.archive, placeModel.name).then(wire => {
+      if (!cancelled && session === client.session) { vp.setPlacementMesh(decodeMesh(wire as MeshWire)); }
+    }).catch(error => {
+      if (!cancelled) { say(`Could not preview ${placeModel.name}: ${errText(error)}`, true); }
+    });
+    return () => { cancelled = true; vp.setPlacementMesh(null); };
+  }, [placeModel, status?.path, status?.revision, say]);
+
+  useEffect(() => {
+    writeRenderSettings(renderSettings);
+    viewportRef.current?.setRenderSettings(renderSettings);
+    setViewportStats(null);
+  }, [renderSettings]);
+
+  useEffect(() => {
+    writeEditorPreferences({ shading, lighting, grid, snap, snapMove, snapRotate, snapScale, gizmoLocal, ortho, backfaces,
+      placeYaw, placeScale, randomYaw, randomScale, minPlaceScale, maxPlaceScale, alignSurface });
+  }, [shading, lighting, grid, snap, snapMove, snapRotate, snapScale, gizmoLocal, ortho, backfaces,
+    placeYaw, placeScale, randomYaw, randomScale, minPlaceScale, maxPlaceScale, alignSurface]);
   // ------------------------------------------------------------------ AI (MCP)
 
   // ui_view on this page: shading, lighting, camera preset, framing.
@@ -399,6 +457,7 @@ export function MapPage() {
   });
   useEffect(() => provideAiState('map', () => aiStateRef.current()), []);
 
+
   // ------------------------------------------------------------------ render
 
   const viewLabel = ortho ? 'Orthographic' : 'Perspective';
@@ -412,9 +471,10 @@ export function MapPage() {
   };
 
   return (
-    <div className="me-app has-header" onPointerDown={e => { if (!(e.target as HTMLElement).closest('.me-menu')) { setOpenMenu(null); } }}>
+    <div className="me-app mp-app has-header" onPointerDown={e => { if (!(e.target as HTMLElement).closest('.me-menu')) { setOpenMenu(null); } }}>
       <PageHeader icon="globe" title="Map Builder" subtitle="Props, clutter and spawn points of SOCOM II maps" />
       <MenuBar {...menuBarProps} />
+      {shortcutsOpen && <ShortcutReference onClose={() => setShortcutsOpen(false)} />}
 
       <div className="me-header">
         <div className="me-seg" title={`Shading (${SHORTCUTS.shading.label} cycles)`}>
@@ -449,6 +509,20 @@ export function MapPage() {
         </div>
       </div>
 
+      <div className="me-header mp-render-settings" aria-label="Rendering settings">
+        <label className="me-toggle">Resolution
+          <select aria-label="Render resolution" value={renderSettings.resolution} onChange={e => setRenderSettings(s => ({ ...s, resolution: Number(e.target.value) }))}>
+            <option value={1}>100%</option><option value={0.75}>75%</option><option value={0.5}>50%</option>
+          </select>
+        </label>
+        <label className="me-toggle">Textures
+          <select aria-label="Texture filtering" value={renderSettings.filtering} onChange={e => setRenderSettings(s => ({ ...s, filtering: e.target.value === 'pixel' ? 'pixel' : 'smooth' }))}>
+            <option value="smooth">Smooth</option><option value="pixel">Pixel</option>
+          </select>
+        </label>
+        <label className="me-toggle"><input type="checkbox" checked={renderSettings.showStats} onChange={e => setRenderSettings(s => ({ ...s, showStats: e.target.checked }))} /> Statistics</label>
+      </div>
+
       <div className="me-body no-assets">
         <aside className="me-assets" />
         <nav className="me-tools">
@@ -469,6 +543,11 @@ export function MapPage() {
             hasSession={!!status}
             progress={progress}
             busy={busy}
+            loading={loading}
+            warnings={loadWarnings}
+            connectionIssue={connectionIssue}
+            onRetry={() => void retryScene()}
+            stats={renderSettings.showStats ? viewportStats : null}
           />
         </section>
 
@@ -528,6 +607,14 @@ export function MapPage() {
             setPlaceScale={setPlaceScale}
             randomYaw={randomYaw}
             setRandomYaw={setRandomYaw}
+            randomScale={randomScale}
+            setRandomScale={setRandomScale}
+            minPlaceScale={minPlaceScale}
+            setMinPlaceScale={setMinPlaceScale}
+            maxPlaceScale={maxPlaceScale}
+            setMaxPlaceScale={setMaxPlaceScale}
+            alignSurface={alignSurface}
+            setAlignSurface={setAlignSurface}
             onImport={() => void importFromPackage()}
           />
         </aside>

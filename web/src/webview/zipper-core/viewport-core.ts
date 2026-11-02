@@ -1,3 +1,4 @@
+import { DEFAULT_RENDER_SETTINGS, normalizeRenderSettings, renderPixelRatio, type RenderSettings } from '../../viewport/renderSettings';
 // Shared 3D editor viewport for the Model and Map editors: renderer, perspective / orthographic cameras, orbit
 // controls (middle drag or Alt + left orbits, right drag pans, wheel zooms), WASD fly (with the canvas focused),
 // a transform gizmo, grid / axes, the corner orientation gizmo, view presets and framing, and the GS material rules
@@ -10,6 +11,8 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 import type { ModelTexturePixels } from '../zipper-workbench/zed-model-renderer';
 import { effect, type EffectRef } from '../../shared/signals';
 import { viewBackdrop } from '../../shared/viewSettings';
+
+export interface ViewportStats { fps: number; calls: number; triangles: number; geometries: number; textures: number }
 
 export type Shading = 'textured' | 'solid' | 'wireframe' | 'xray';
 // baked: the model's vertex colours as the game draws them (chunks without any are lit by the scene lights);
@@ -62,10 +65,15 @@ export abstract class ViewportCore {
   protected orbitWithAlt = false;
   private readonly light = new THREE.DirectionalLight(0xffffff, 1.6);
   private frameId = 0;
+  private renderSettings: RenderSettings = { ...DEFAULT_RENDER_SETTINGS };
+  onStats?: (stats: ViewportStats) => void;
+  private statsStarted = performance.now();
+  private statsFrames = 0;
   private lastFrame = performance.now();
   private readonly resizeObserver: ResizeObserver;
   private readonly axisScene = new THREE.Scene();
   private readonly axisCamera = new THREE.OrthographicCamera(-1.6, 1.6, 1.6, -1.6, 0.1, 10);
+  protected readonly listenerAbort = new AbortController();
   private readonly flyKeys = new Set<string>();
   private readonly backdropEffect: EffectRef;
 
@@ -88,7 +96,8 @@ export abstract class ViewportCore {
 
   constructor(protected readonly canvas: HTMLCanvasElement, private readonly onCameraChange?: () => void) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-    this.renderer.setPixelRatio(window.devicePixelRatio || 1);
+    this.renderer.setPixelRatio(renderPixelRatio(window.devicePixelRatio || 1, 1));
+    this.renderer.info.autoReset = false;
     this.renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
     this.scene.background = this.darkBackground;
     ViewportCore.live.add(this);
@@ -105,7 +114,7 @@ export abstract class ViewportCore {
       this.orbitWithAlt = e.button === 0 && e.altKey;
       this.controls.mouseButtons.LEFT = (this.orbitWithAlt ? THREE.MOUSE.ROTATE : -1) as THREE.MOUSE;
       canvas.focus();
-    }, { capture: true });
+    }, { capture: true, signal: this.listenerAbort.signal });
 
     this.controls = new OrbitControls(this.persp, canvas);
     this.controls.mouseButtons = { LEFT: -1 as THREE.MOUSE, MIDDLE: THREE.MOUSE.ROTATE, RIGHT: THREE.MOUSE.PAN };
@@ -135,10 +144,10 @@ export abstract class ViewportCore {
         e.stopPropagation();
         e.preventDefault();
       }
-    });
-    canvas.addEventListener('keyup', e => { this.flyKeys.delete(e.key.toLowerCase()); if (!e.shiftKey) { this.flyKeys.delete('shift'); } });
-    canvas.addEventListener('blur', () => this.flyKeys.clear());
-    canvas.addEventListener('contextmenu', e => e.preventDefault());
+    }, { signal: this.listenerAbort.signal });
+    canvas.addEventListener('keyup', e => { this.flyKeys.delete(e.key.toLowerCase()); if (!e.shiftKey) { this.flyKeys.delete('shift'); } }, { signal: this.listenerAbort.signal });
+    canvas.addEventListener('blur', () => this.flyKeys.clear(), { signal: this.listenerAbort.signal });
+    canvas.addEventListener('contextmenu', e => e.preventDefault(), { signal: this.listenerAbort.signal });
 
     this.buildAxisGizmo();
     this.resizeObserver = new ResizeObserver(() => this.resize());
@@ -149,13 +158,24 @@ export abstract class ViewportCore {
     const loop = () => {
       this.frameId = requestAnimationFrame(loop);
       // Every page stays mounted: draw only the one on screen (a hidden page's canvas has no layout box).
-      if (document.hidden || this.canvas.offsetParent === null) { this.lastFrame = performance.now(); return; }
+      if (document.hidden || this.canvas.offsetParent === null) { this.lastFrame = performance.now(); this.statsStarted = this.lastFrame; this.statsFrames = 0; return; }
       const now = performance.now();
       const dt = Math.min(0.1, (now - this.lastFrame) / 1000);
       this.stepFly(dt);
       this.onFrame(dt);
       this.lastFrame = now;
       this.render();
+      if (this.renderSettings.showStats) {
+        this.statsFrames++;
+        const elapsed = now - this.statsStarted;
+        if (elapsed >= 1000) {
+          const info = this.renderer.info;
+          this.onStats?.({ fps: Math.round(this.statsFrames * 1000 / elapsed), calls: info.render.calls,
+            triangles: info.render.triangles, geometries: info.memory.geometries, textures: info.memory.textures });
+          this.statsStarted = now;
+          this.statsFrames = 0;
+        }
+      } else { this.statsStarted = now; this.statsFrames = 0; }
     };
     loop();
   }
@@ -172,10 +192,14 @@ export abstract class ViewportCore {
   protected abstract materialTargets(): Array<{ mesh: THREE.Mesh; spec: MaterialSpec }>;
 
   disposeCore(): void {
+    this.listenerAbort.abort();
     ViewportCore.live.delete(this);
     this.backdropEffect.destroy();
     this.backdropTexture?.dispose();
+
     cancelAnimationFrame(this.frameId);
+    this.clearHelpers();
+    disposeObjectResources(this.axisScene);
     this.resizeObserver.disconnect();
     this.gizmo.dispose();
     this.controls.dispose();
@@ -205,10 +229,10 @@ export abstract class ViewportCore {
       tex = new THREE.DataTexture(pixels.rgba, pixels.width, pixels.height, THREE.RGBAFormat);
       tex.flipY = false;
       tex.colorSpace = THREE.LinearSRGBColorSpace;
-      tex.magFilter = THREE.LinearFilter;
-      tex.minFilter = THREE.LinearMipmapLinearFilter;
+      tex.magFilter = this.renderSettings.filtering === 'pixel' ? THREE.NearestFilter : THREE.LinearFilter;
+      tex.minFilter = this.renderSettings.filtering === 'pixel' ? THREE.NearestFilter : THREE.LinearMipmapLinearFilter;
       tex.generateMipmaps = true;
-      tex.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
+      tex.anisotropy = this.renderSettings.filtering === 'pixel' ? 1 : Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
       tex.wrapS = pixels.wrapS === 'clamp' ? THREE.ClampToEdgeWrapping : THREE.RepeatWrapping;
       tex.wrapT = pixels.wrapT === 'clamp' ? THREE.ClampToEdgeWrapping : THREE.RepeatWrapping;
       tex.needsUpdate = true;
@@ -302,6 +326,23 @@ export abstract class ViewportCore {
   }
   setBackfaces(on: boolean): void { this.backfaces = on; this.refreshMaterials(); }
 
+  setRenderSettings(settings: RenderSettings): void {
+    const previous = this.renderSettings;
+    this.renderSettings = normalizeRenderSettings(settings);
+    this.statsStarted = performance.now();
+    this.statsFrames = 0;
+    if (previous.filtering !== this.renderSettings.filtering) {
+      for (const texture of this.textures.values()) {
+        const pixel = this.renderSettings.filtering === 'pixel';
+        texture.magFilter = pixel ? THREE.NearestFilter : THREE.LinearFilter;
+        texture.minFilter = pixel ? THREE.NearestFilter : THREE.LinearMipmapLinearFilter;
+        texture.anisotropy = pixel ? 1 : Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
+        texture.needsUpdate = true;
+      }
+    }
+    this.resize();
+  }
+
   setSnap(translate: number | null, rotateDeg: number | null, scale: number | null): void {
     this.gizmo.setTranslationSnap(translate);
     this.gizmo.setRotationSnap(rotateDeg === null ? null : THREE.MathUtils.degToRad(rotateDeg));
@@ -322,10 +363,7 @@ export abstract class ViewportCore {
   }
 
   protected clearHelpers(): void {
-    this.helperGroup.traverse(o => {
-      const g = (o as THREE.Mesh).geometry;
-      if (g) { g.dispose(); }
-    });
+    disposeObjectResources(this.helperGroup);
     this.helperGroup.clear();
   }
 
@@ -378,6 +416,7 @@ export abstract class ViewportCore {
   protected rayFrom(clientX: number, clientY: number): THREE.Raycaster {
     const rect = this.canvas.getBoundingClientRect();
     const ndc = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
+    this.camera.updateMatrixWorld();
     this.raycaster.setFromCamera(ndc, this.camera);
     return this.raycaster;
   }
@@ -406,6 +445,8 @@ export abstract class ViewportCore {
     const host = this.canvas.parentElement ?? this.canvas;
     const w = Math.max(1, host.clientWidth);
     const h = Math.max(1, host.clientHeight);
+    const pixelRatio = renderPixelRatio(window.devicePixelRatio || 1, this.renderSettings.resolution);
+    if (this.renderer.getPixelRatio() !== pixelRatio) { this.renderer.setPixelRatio(pixelRatio); }
     this.renderer.setSize(w, h, false);
     this.persp.aspect = w / h;
     this.persp.updateProjectionMatrix();
@@ -439,6 +480,7 @@ export abstract class ViewportCore {
   }
 
   private render(): void {
+    this.renderer.info.reset();
     if (this.isOrtho) {
       // Keep ortho zoom tied to the orbit distance.
       const host = this.canvas.parentElement ?? this.canvas;
@@ -561,4 +603,31 @@ export function isIdentity(m: THREE.Matrix4): boolean {
 export function cssColor(name: string, fallback: string): string {
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   return v || fallback;
+}
+
+// Only use for groups that own their resources (not shared content materials).
+export function disposeObjectResources(root: THREE.Object3D): void {
+  const geometries = new Set<THREE.BufferGeometry>();
+  const materials = new Set<THREE.Material>();
+  const textures = new Set<THREE.Texture>();
+  root.traverse(object => {
+    const mesh = object as THREE.Mesh;
+    if (mesh.geometry) { geometries.add(mesh.geometry); }
+    const list = Array.isArray(mesh.material) ? mesh.material : mesh.material ? [mesh.material] : [];
+    for (const material of list) {
+      materials.add(material);
+      const map = (material as THREE.MeshBasicMaterial).map;
+      if (map) { textures.add(map); }
+    }
+  });
+  geometries.forEach(g => g.dispose());
+  materials.forEach(m => m.dispose());
+  textures.forEach(t => t.dispose());
+}
+
+export function billboardYaw(axis: 'x' | 'z', camera: THREE.Camera, position: THREE.Vector3): number {
+  const direction = camera instanceof THREE.OrthographicCamera
+    ? camera.getWorldDirection(new THREE.Vector3()).negate()
+    : camera.position.clone().sub(position);
+  return axis === 'z' ? Math.atan2(direction.x, direction.z) : Math.atan2(-direction.z, direction.x);
 }

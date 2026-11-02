@@ -11,3 +11,25 @@ app-map-editor-page { display: block; height: 100vh; }
 .mp-place { display: flex; flex-direction: column; gap: 6px; }
 .mp-lib { max-height: 260px; overflow: auto; border: 1px solid var(--me-border); border-radius: 4px; padding: 2px; }
 .mp-progress { position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%); padding: 2px 10px; border-radius: 3px; background: rgba(0, 0, 0, 0.6); font-size: 11px; }
+
+.mp-render-settings { flex-wrap: wrap; gap: 12px; }
+.mp-render-settings select { margin-left: 6px; color: inherit; background: var(--me-panel, #252526); border: 1px solid var(--me-border); border-radius: 3px; padding: 2px 4px; }
+.mp-vp-stats { position: absolute; left: 10px; bottom: 10px; pointer-events: none; padding: 4px 7px; border-radius: 3px; background: rgba(0, 0, 0, 0.65); color: #fff; font-size: 11px; font-variant-numeric: tabular-nums; }
+
+.me-app.mp-app.has-header { grid-template-rows: auto 28px 34px auto minmax(0, 1fr) 22px; }
+.mp-render-settings { min-height: 30px; padding-top: 4px; padding-bottom: 4px; }
+
+.mp-shortcuts { width: min(760px, calc(100vw - 48px)); max-height: calc(100vh - 64px); box-sizing: border-box; border: 1px solid var(--me-border, #555); border-radius: 8px; padding: 18px; background: var(--me-panel, #252526); color: var(--vscode-foreground, #ccc); }
+.mp-shortcuts::backdrop { background: rgba(0, 0, 0, 0.6); }
+.mp-shortcut-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.mp-shortcut-heading h2 { margin: 0; font-size: 17px; }
+.mp-shortcuts > input { width: 100%; box-sizing: border-box; }
+.mp-shortcut-list { max-height: 55vh; overflow: auto; }
+.mp-shortcut-list table { width: 100%; border-collapse: collapse; text-align: left; font-size: 12px; }
+.mp-shortcut-list th, .mp-shortcut-list td { padding: 9px 8px; border-bottom: 1px solid var(--me-border, #444); }
+.mp-shortcut-list kbd { font: inherit; color: var(--vscode-foreground, #eee); }
+.mp-load-notice { position: absolute; top: 72px; left: 10px; max-width: min(560px, calc(100% - 30px)); max-height: 35%; overflow: auto; padding: 8px 10px; border: 1px solid #b38a40; border-radius: 4px; color: #ffe5ad; background: rgba(35, 29, 20, 0.96); font-size: 12px; overflow-wrap: anywhere; }
+.mp-load-notice p { margin: 0 0 6px; }
+.mp-load-notice summary { cursor: pointer; }
+.mp-load-notice button { margin-top: 6px; }
+.mp-load-notice ul { padding-left: 18px; }

@@ -7,7 +7,7 @@
 
 import * as THREE from 'three';
 import type { ModelTexturePixels } from '../zipper-workbench/zed-model-renderer';
-import { SELECT_COLOR, ViewportCore, chunkGeometry, isIdentity, type MaterialSpec } from '../zipper-core/viewport-core';
+import { SELECT_COLOR, ViewportCore, chunkGeometry, disposeObjectResources, isIdentity, type MaterialSpec } from '../zipper-core/viewport-core';
 import type { EditorChunk, EditorMesh } from './mesh-data';
 
 export type { Shading, ViewPreset } from '../zipper-core/viewport-core';
@@ -88,12 +88,16 @@ export class EditorViewport extends ViewportCore {
     canvas.addEventListener('pointerdown', this.onPointerDown);
     canvas.addEventListener('pointermove', this.onPointerMove);
     window.addEventListener('pointerup', this.onPointerUp);
-    canvas.addEventListener('pointerleave', () => { this.brush.visible = false; this.callbacks.onHover?.(null); });
+    canvas.addEventListener('pointerleave', () => { this.brush.visible = false; this.callbacks.onHover?.(null); }, { signal: this.listenerAbort.signal });
   }
 
   dispose(): void {
     window.removeEventListener('pointerup', this.onPointerUp);
+    this.canvas.removeEventListener('pointerdown', this.onPointerDown);
+    this.canvas.removeEventListener('pointermove', this.onPointerMove);
+    this.boxEl.remove();
     this.clearModel();
+    disposeObjectResources(this.brush);
     this.disposeCore();
   }
 
@@ -465,10 +469,7 @@ export class EditorViewport extends ViewportCore {
   // ------------------------------------------------------------------ overlays
 
   private clearOverlays(): void {
-    this.overlayGroup.traverse(o => {
-      const g = (o as THREE.Mesh).geometry;
-      if (g) { g.dispose(); }
-    });
+    disposeObjectResources(this.overlayGroup);
     this.overlayGroup.clear();
   }
 

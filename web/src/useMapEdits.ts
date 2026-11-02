@@ -1,3 +1,4 @@
+import { adjustPlacement, type PlacementTransform } from './viewport/placement';
 // The Map Builder's placement edits: transform commits, Item-tab fields, delete / duplicate / copy / paste, drop to
 // ground and the Place tool. Each one is a single session edit (a batch for several instances).
 
@@ -5,16 +6,16 @@ import { useRef, type MutableRefObject } from 'react';
 import type { ModelSummary } from './webview/model-editor/asset-client';
 import type { MapTool, MapViewport } from './viewport/mapViewport';
 import type { PropTab } from './components/PropsPanel';
-import { movable, placementOp, scaleOf, yawOf } from './mapModel';
+import { movable, placementOp, yawOf } from './mapModel';
 import { SHORTCUTS } from './mapShortcuts';
 import type { useMapSession } from './useMapSession';
 
-export interface PlaceSettings { model: ModelSummary | null; yaw: number; scale: number; randomYaw: boolean }
+export interface PlaceSettings { model: ModelSummary | null }
 
 export function useMapEdits(session: ReturnType<typeof useMapSession>, viewportRef: MutableRefObject<MapViewport | null>, selection: number[],
   setTool: (tool: MapTool) => void, setPropTab: (tab: PropTab) => void, placeSettings: PlaceSettings) {
   const { instances, instancesRef, pointsRef, edit, say } = session;
-  const { model: placeModel, yaw: placeYaw, scale: placeScale, randomYaw } = placeSettings;
+  const { model: placeModel } = placeSettings;
   // Copied clutter placements (model + matrix); they paste into this package or another one that has the model.
   const clipboardRef = useRef<Array<{ model: string; matrix: number[] }>>([]);
 
@@ -33,9 +34,8 @@ export function useMapEdits(session: ReturnType<typeof useMapSession>, viewportR
     const m = inst.matrix;
     const position = [m[12], m[13], m[14]];
     if (field === 'position') { position[axis] = v; }
-    const yaw = field === 'yaw' ? v : yawOf(m);
-    const scale = field === 'scale' ? Math.max(0.01, v) : scaleOf(m);
-    const op = field === 'position' ? placementOp(inst, { position }) : placementOp(inst, { position, yaw, scale });
+    const op = field === 'position' ? placementOp(inst, { position })
+      : placementOp(inst, { matrix: adjustPlacement(m, field === 'yaw' ? { yaw: v } : { scale: v }) });
     if (op) { await edit(`set ${field} of ${inst.model}`, op); }
   };
 
@@ -116,9 +116,7 @@ export function useMapEdits(session: ReturnType<typeof useMapSession>, viewportR
       const m = inst.matrix;
       const position = [m[12], m[13], m[14]];
       if (field === 'offset') { position[axis] += v; return placementOp(inst, { position }); }
-      const yaw = yawOf(m) + (field === 'turn' ? v : 0);
-      const scale = field === 'scale' ? Math.max(0.01, v) : scaleOf(m);
-      return placementOp(inst, { position, yaw, scale });
+      return placementOp(inst, { matrix: adjustPlacement(m, field === 'turn' ? { yaw: yawOf(m) + v } : { scale: v }) });
     }).filter((o): o is Record<string, unknown> => !!o);
     const what = field === 'offset' ? `move ${'XYZ'[axis]} by ${v}` : field === 'turn' ? `turn by ${v}°` : `scale to ${v}`;
     await edit(`${what}: ${ops.length} instances`, ops.length === 1 ? ops[0] : { op: 'batch', ops });
@@ -141,10 +139,9 @@ export function useMapEdits(session: ReturnType<typeof useMapSession>, viewportR
     else { say('Nothing under the selection to drop onto.'); }
   };
 
-  const place = async (position: [number, number, number]) => {
+  const place = async (transform: PlacementTransform) => {
     if (!placeModel) { setPropTab('place'); say('Pick a model in the Place tab first.', true); return; }
-    const yaw = randomYaw ? Math.round(Math.random() * 360) : placeYaw;
-    const raw = await edit(`place ${placeModel.name}`, { op: 'addClutter', model: placeModel.name, position, yaw, scale: placeScale }) as { newClutterIndex?: number } | null;
+    const raw = await edit(`place ${placeModel.name}`, { op: 'addClutter', model: placeModel.name, matrix: transform.matrix }) as { newClutterIndex?: number } | null;
     if (raw && typeof raw.newClutterIndex === 'number') {
       const i = instancesRef.current.findIndex(x => x.clutterIndex === raw.newClutterIndex);
       if (i >= 0) { viewportRef.current?.select([i]); }

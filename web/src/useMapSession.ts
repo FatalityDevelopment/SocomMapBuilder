@@ -11,8 +11,13 @@ import { errText } from './mapModel';
 import { host, openRequest, useSignals } from './shared';
 import { aiChange, samePath, type AiFocus } from './shared/aiBridge';
 
-// onLoaded runs after each scene load (camera kept or not); it is read through a ref, so it may change every render.
-export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>, onLoaded: (vp: MapViewport, keepCamera: boolean) => void) {
+// Callbacks are read through refs, so the page can mirror selection without coupling session logic to its UI.
+export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
+  onLoaded: (vp: MapViewport, keepCamera: boolean) => void, onOpened: () => void = () => {}) {
+  const onLoadedRef = useRef(onLoaded);
+  const onOpenedRef = useRef(onOpened);
+  onLoadedRef.current = onLoaded;
+  onOpenedRef.current = onOpened;
   const clientRef = useRef(new AssetClient());
   const texturesRef = useRef(new TextureCache(clientRef.current));
   const meshCacheRef = useRef(new Map<string, MapModel>());
@@ -21,9 +26,10 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
   const pointsRef = useRef<MapPointWire[]>([]);
   const statusRef = useRef<SessionStatus | null>(null);
   const busyRef = useRef(false);
+  const operationRevisionRef = useRef(0);
   const reloadingRef = useRef(0);
-  const onLoadedRef = useRef(onLoaded);
-  onLoadedRef.current = onLoaded;
+  const pollingRef = useRef(false);
+  const sceneReadyRef = useRef(false);
 
   const [status, setStatusState] = useState<SessionStatus | null>(null);
   const [sceneNs, setSceneNs] = useState('');
@@ -33,11 +39,19 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
   const [models, setModels] = useState<ModelSummary[]>([]);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [sceneReady, setSceneReady] = useState(false);
+  const [loadWarnings, setLoadWarnings] = useState<string[]>([]);
+  const [connectionIssue, setConnectionIssue] = useState<string | null>(null);
   const [message, setMessage] = useState('');
   const [messageIsError, setMessageIsError] = useState(false);
 
   const setStatus = useCallback((s: SessionStatus | null) => { statusRef.current = s; setStatusState(s); }, []);
-  const setBusyFlag = useCallback((on: boolean) => { busyRef.current = on; setBusy(on); }, []);
+  const setBusyFlag = useCallback((on: boolean) => {
+    if (on) { operationRevisionRef.current++; }
+    busyRef.current = on;
+    setBusy(on);
+  }, []);
 
   // The revision last opened or saved: status.dirty compares with the source file, so it stays set after a Save copy.
   const savedRevisionRef = useRef<number | null>(null);
@@ -64,9 +78,14 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
       const s = statusRef.current;
       if (s) { texturesRef.current.invalidate(s.revision); }
     }
+    setProgress('Reading map scene…');
+    const warnings: string[] = [];
     const [scene, pts] = await Promise.all([
       clientRef.current.mapScene(),
-      clientRef.current.mapPoints().catch(() => ({ points: [] as MapPointWire[] })),
+      clientRef.current.mapPoints().catch(error => {
+        warnings.push(`AIMAPS points could not be loaded: ${errText(error)}`);
+        return { points: [] as MapPointWire[] };
+      }),
     ]);
     setSceneNs(scene.sceneNamespace);
     setCounts(scene.counts);
@@ -98,7 +117,7 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
     await Promise.all(Array.from({ length: Math.min(6, queue.length) }, async () => {
       while (queue.length) { await loadOne(queue.shift()!); }
     }));
-    setProgress('');
+    setProgress('Preparing viewport…');
     instancesRef.current = scene.instances;
     pointsRef.current = pts.points;
     setInstances(scene.instances);
@@ -109,7 +128,9 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
       const kinds = Object.entries(scene.counts).map(([kind, count]) => `${count} ${kind}`).join(', ');
       say(`${scene.sceneNamespace}: ${scene.instances.length} instances (${kinds}), ${pts.points.length} points.`);
     }
-    // All failures at once (they used to overwrite each other); the console has the full list.
+    warnings.push(...failed.map(failure => `Model not drawn: ${failure}`));
+    setLoadWarnings(warnings);
+    // Keep details visible until a successful retry, rather than only in the status bar.
     if (failed.length) {
       console.warn('Map Builder: models that did not load', failed);
       say(`${failed.length} model(s) did not load and are not drawn: ${failed.slice(0, 3).join('; ')}${failed.length > 3 ? '; …' : ''}`, true);
@@ -119,32 +140,69 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
   // Polls skip while a load runs: a map with many models takes longer than one poll interval.
   const reload = useCallback(async (keepCamera: boolean, modelsChanged: boolean) => {
     reloadingRef.current++;
-    try { await loadScene(keepCamera, modelsChanged); } finally { reloadingRef.current--; }
+    sceneReadyRef.current = false;
+    setSceneReady(false);
+    setLoading(true);
+    setLoadWarnings([]);
+    if (viewportRef.current) { viewportRef.current.editable = false; }
+    try {
+      await loadScene(keepCamera, modelsChanged);
+      sceneReadyRef.current = true;
+      setSceneReady(true);
+    } catch (error) {
+      setLoadWarnings([`Scene could not be loaded: ${errText(error)}`]);
+      throw error;
+    } finally {
+      reloadingRef.current--;
+      if (reloadingRef.current === 0) {
+        setProgress('');
+        setLoading(false);
+        if (viewportRef.current) { viewportRef.current.editable = sceneReadyRef.current && !busyRef.current && !statusRef.current?.readOnly; }
+      }
+    }
   }, [loadScene]);
 
   const openPackage = useCallback(async (path: string) => {
+    if (busyRef.current || reloadingRef.current > 0) { say('Wait for the current operation to finish before opening another package.', true); return; }
     const current = statusRef.current;
     if (current && current.path !== path && unsaved() && !window.confirm(`${current.path} has unsaved changes (${current.dirty.join(', ')}). They stay in the session until the server stops; open ${path} anyway?`)) { return; }
     setBusyFlag(true);
     say(`Opening ${path}…`);
+    let opened = false;
     try {
       const s = await clientRef.current.open(path);
+      opened = true;
+      sceneReadyRef.current = false;
+      setSceneReady(false);
+      if (viewportRef.current) { viewportRef.current.editable = false; }
       setStatus(s);
+      setConnectionIssue(null);
+      // Once the client switches sessions, old instance indices must never address the new package.
+      instancesRef.current = [];
+      pointsRef.current = [];
+      setInstances([]);
+      setPoints([]);
+      setModels([]);
+      setCounts({});
+      setSceneNs('');
+      viewportRef.current?.setPlacementMesh(null);
+      viewportRef.current?.clearSelection();
+      viewportRef.current?.setScene([], new Map(), {}, [], true);
+      onOpenedRef.current();
+      setLoadWarnings([]);
       savedRevisionRef.current = s.revision;
       texturesRef.current.invalidate(s.revision);
       meshCacheRef.current.clear();
       pixelCacheRef.current = {};
       setModels(await clientRef.current.listModels());
-      viewportRef.current?.clearSelection();
       await reload(false, false);
     } catch (err) {
+      if (opened) { setLoadWarnings([`Package opened, but its map could not be loaded: ${errText(err)}`]); }
       say(`Could not open ${path}: ${errText(err)}`, true);
     } finally {
       setBusyFlag(false);
     }
-    // unsaved reads refs only.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reload, say, setBusyFlag, setStatus, viewportRef]);
+  }, [reload, say, setBusyFlag, setStatus]);
 
   // Another page asked for a package here (the Asset Viewer's "Open map in Map Builder").
   const request = openRequest();
@@ -166,48 +224,64 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
     if (i >= 0) { vp.select([i]); vp.frameSelected(); }
   }, [viewportRef]);
 
+  const handledChangeRef = useRef<number | null>(null);
   const change = aiChange();
   useEffect(() => {
-    if (!change) { return; }
+    if (!change || change.seq === handledChangeRef.current || busyRef.current || reloadingRef.current > 0) { return; }
+    handledChangeRef.current = change.seq;
     const here = samePath(statusRef.current?.path, change.path);
     const run = async () => {
       if (change.page === 'map' && change.path && !here) {
         await openPackage(change.path);
       } else if (here && change.edited) {
-        setStatus(await clientRef.current.status());
-        await reload(true, true);
+        setBusyFlag(true);
+        try {
+          setStatus(await clientRef.current.status());
+          await reload(true, true);
+        } finally { setBusyFlag(false); }
       } else if (!here) {
         return;
       }
-      if (change.page === 'map') { focus(change.focus); }
+      if (change.page === 'map' && samePath(statusRef.current?.path, change.path) && sceneReadyRef.current) { focus(change.focus); }
       if (change.edited && change.description) { say(`AI: ${change.description}`); }
     };
     void run().catch(err => say(`AI change: ${errText(err)}`, true));
-    // Only a new change should run; the rest is read through refs or stable.
+    // A change received during an edit/load is applied once that operation finishes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [change]);
+  }, [change, busy, loading]);
 
   // Edits made by anyone on the session (an assistant on the same backend) show up here.
   useEffect(() => {
     const timer = setInterval(async () => {
-      if (!clientRef.current.session || busyRef.current || reloadingRef.current > 0) { return; }
+      if (!clientRef.current.session || busyRef.current || reloadingRef.current > 0 || pollingRef.current) { return; }
+      pollingRef.current = true;
+      const session = clientRef.current.session;
+      const operationRevision = operationRevisionRef.current;
+      let receivedStatus = false;
       try {
         const next = await clientRef.current.status();
+        receivedStatus = true;
+        if (busyRef.current || reloadingRef.current > 0 || clientRef.current.session !== session || operationRevisionRef.current !== operationRevision) { return; }
+        setConnectionIssue(null);
         const before = statusRef.current?.revision;
         setStatus(next);
         if (before !== undefined && next.revision !== before) {
           await reload(true, true);
           say(`Session changed (revision ${next.revision}${next.canUndo ? `: ${next.canUndo}` : ''}).`);
         }
-      } catch { /* retried next poll */ }
+      } catch (error) {
+        if (!receivedStatus && clientRef.current.session === session && operationRevisionRef.current === operationRevision) {
+          setConnectionIssue(`Session refresh failed: ${errText(error)}. Retrying automatically.`);
+        }
+      } finally { pollingRef.current = false; }
     }, 2000);
     return () => clearInterval(timer);
   }, [reload, say, setStatus]);
 
   // The gizmo and Place tool are off while an edit runs or the session is read-only.
   useEffect(() => {
-    if (viewportRef.current) { viewportRef.current.editable = !busy && !status?.readOnly; }
-  }, [busy, status, viewportRef]);
+    if (viewportRef.current) { viewportRef.current.editable = sceneReady && !busy && !loading && !status?.readOnly; }
+  }, [busy, loading, sceneReady, status]);
 
   // Closing the tab with edits made since the last save asks first.
   useEffect(() => {
@@ -216,11 +290,25 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
     return () => window.removeEventListener('beforeunload', onUnload);
   }, []);
 
+  const retryScene = async () => {
+    if (!clientRef.current.session || busyRef.current || reloadingRef.current > 0) { return; }
+    setBusyFlag(true);
+    try {
+      setModels(await clientRef.current.listModels());
+      await reload(!!sceneNs, true);
+      say('Map reload completed.');
+    } catch (error) {
+      setLoadWarnings([`Map reload failed: ${errText(error)}`]);
+      say(`Could not reload map: ${errText(error)}`, true);
+    } finally { setBusyFlag(false); }
+  };
+
   // ------------------------------------------------------------------ edits
 
   const edit = useCallback(async (label: string, op: Record<string, unknown>): Promise<Record<string, unknown> | null> => {
     // One edit at a time, and none on a read-only session.
-    if (busyRef.current || statusRef.current?.readOnly) {
+    if (!sceneReadyRef.current) { say('Reload the map before editing; its scene is not ready.', true); return null; }
+    if (busyRef.current || reloadingRef.current > 0 || statusRef.current?.readOnly) {
       say(statusRef.current?.readOnly ? `${label}: this package is read-only.` : `${label}: wait for the previous change to finish.`, true);
       return null;
     }
@@ -242,7 +330,7 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
   }, [reload, say, setBusyFlag, setStatus]);
 
   const history = async (undo: boolean) => {
-    if (!clientRef.current.session) { return; }
+    if (!clientRef.current.session || busyRef.current || reloadingRef.current > 0 || statusRef.current?.readOnly) { return; }
     setBusyFlag(true);
     try {
       const r = undo ? await clientRef.current.undo() : await clientRef.current.redo();
@@ -260,6 +348,7 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
   // ------------------------------------------------------------------ save
 
   const save = async (args: { mode: 'zdb' | 'pack'; outputPath?: string; packName?: string }) => {
+    if (!clientRef.current.session || busyRef.current || reloadingRef.current > 0) { return; }
     setBusyFlag(true);
     try {
       const r = await clientRef.current.save(args);
@@ -292,7 +381,8 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
 
   return {
     client: clientRef.current, instancesRef, pointsRef, statusRef,
-    status, setStatus, sceneNs, counts, instances, points, models, setModels, busy, progress, message, messageIsError, say,
-    reload, edit, history, saveCopy, exportPack, openDialog,
+    status, setStatus, sceneNs, counts, instances, points, models, setModels, busy, progress, loading, sceneReady,
+    loadWarnings, connectionIssue, message, messageIsError, say,
+    reload, retryScene, edit, history, saveCopy, exportPack, openDialog,
   };
 }
