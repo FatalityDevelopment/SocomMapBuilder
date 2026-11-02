@@ -1,6 +1,6 @@
 // Map-side helpers shared by the page and its panels: outliner layers, placement math and text formatting.
 
-import type { MapInstanceWire, MapPointWire } from './webview/model-editor/asset-client';
+import type { MapInstanceWire, MapPointWire, MapProblem } from './webview/model-editor/asset-client';
 import type { MapLayer } from './viewport/mapViewport';
 
 export const LAYERS: Array<{ id: MapLayer; label: string }> = [
@@ -93,4 +93,19 @@ export function groupInstancesByLayer(instances: MapInstanceWire[]): Array<{ sou
     sources.set(instance.source, layers);
   });
   return [...sources].flatMap(([source, layers]) => [...layers].map(([layer, indices]) => ({ source, layer, indices })));
+}
+
+// What a problem points at in the loaded scene: an instance index, a point name, or nothing to select.
+export function problemTarget(problem: MapProblem, instances: MapInstanceWire[]): { instance: number } | { point: string } | null {
+  if (problem.point) { return { point: problem.point }; }
+  const i = typeof problem.clutterIndex === 'number' ? instances.findIndex(x => x.clutterIndex === problem.clutterIndex)
+    : typeof problem.geoIndex === 'number' ? instances.findIndex(x => x.clutterIndex === null && x.geoIndex === problem.geoIndex)
+      : -1;
+  return i >= 0 ? { instance: i } : null;
+}
+
+// Errors first, then warnings, then info; the order within a severity is kept.
+export function sortProblems(problems: MapProblem[]): MapProblem[] {
+  const rank = { error: 0, warning: 1, info: 2 } as const;
+  return problems.map((p, i) => ({ p, i })).sort((a, b) => rank[a.p.severity] - rank[b.p.severity] || a.i - b.i).map(x => x.p);
 }

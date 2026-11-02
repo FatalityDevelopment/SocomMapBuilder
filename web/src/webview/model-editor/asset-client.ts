@@ -106,6 +106,26 @@ export interface MapInstanceWire {
   source: string | null;
 }
 
+// ASSET_VALIDATE: a map lint. A problem names the item it is about (a placed node, a clutter placement, a point).
+export interface MapProblem {
+  severity: 'error' | 'warning' | 'info';
+  code: string;
+  message: string;
+  geoIndex?: number | null;
+  clutterIndex?: number | null;
+  point?: string;
+  texture?: string;
+}
+
+export interface MapValidation {
+  ok: boolean;
+  counts: Partial<Record<MapProblem['severity'], number>>;
+  instances: number;
+  textures: number;
+  textureBytes: number;
+  problems: MapProblem[];
+}
+
 export interface MapSceneResult {
   sceneNamespace: string;
   counts: Record<string, number>;
@@ -190,6 +210,8 @@ export class AssetClient {
   }
 
   mapPoints(): Promise<{ points: MapPointWire[] }> { return this.call('ASSET_MAP_POINTS'); }
+
+  validate(vramBudget?: number): Promise<MapValidation> { return this.withJson('ASSET_VALIDATE', { vramBudget }); }
 
     // Character animation clips: the package's MOTION_S.ZAR (editable) and the shared RUN/MOTION_P.ZAR.
   listAnimations(filter: { query?: string; source?: string } = {}): Promise<AnimationList> {

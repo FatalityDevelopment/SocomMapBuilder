@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MapInstanceWire } from './webview/model-editor/asset-client';
-import { addedClutter, deleteOps, duplicateOps, groupInstancesByLayer, layerOf, movable, pickDuplicates, placementOp, pointKindCounts, scaleOf, yawOf } from './mapModel';
+import { addedClutter, deleteOps, duplicateOps, groupInstancesByLayer, layerOf, movable, pickDuplicates, placementOp, pointKindCounts, problemTarget, scaleOf, sortProblems, yawOf } from './mapModel';
 
 // Column-major, translation in 12..14 (as GEO and clutter store it): yaw about Y, uniform scale.
 function matrix(yawDeg: number, scale: number, x = 0, y = 0, z = 0): number[] {
@@ -107,5 +107,23 @@ describe('selection edits', () => {
     // The copy of /a lands right after it with the same path; clutter #1 is new.
     const after = [geo(1, '/a'), geo(2, '/a'), geo(3, '/b'), clutter(0), clutter(1)];
     expect(pickDuplicates(before, after, new Set([1]))).toEqual([1, 4]);
+  });
+});
+
+describe('map problems', () => {
+  const list = [inst({ geoIndex: 7 }), inst({ kind: 'clutter', clutterIndex: 7, geoIndex: null }), inst({ geoIndex: 9 })];
+
+  it('finds what a problem is about', () => {
+    expect(problemTarget({ severity: 'error', code: 'x', message: '', geoIndex: 9 }, list)).toEqual({ instance: 2 });
+    // A clutter index never matches a GEO node with the same number.
+    expect(problemTarget({ severity: 'error', code: 'x', message: '', clutterIndex: 7 }, list)).toEqual({ instance: 1 });
+    expect(problemTarget({ severity: 'error', code: 'x', message: '', point: 'Alpha1' }, list)).toEqual({ point: 'Alpha1' });
+    expect(problemTarget({ severity: 'warning', code: 'x', message: '', geoIndex: 42 }, list)).toBeNull();
+    expect(problemTarget({ severity: 'warning', code: 'x', message: '' }, list)).toBeNull();
+  });
+
+  it('lists errors first and keeps the order within a severity', () => {
+    const p = (severity: 'error' | 'warning' | 'info', message: string) => ({ severity, code: 'x', message });
+    expect(sortProblems([p('info', 'a'), p('error', 'b'), p('warning', 'c'), p('error', 'd')]).map(x => x.message)).toEqual(['b', 'd', 'c', 'a']);
   });
 });
