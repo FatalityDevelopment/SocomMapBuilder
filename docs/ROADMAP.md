@@ -22,7 +22,7 @@ The goal: people **and AI over MCP** can add, edit and delete every SOCOM asset 
 
 ## In progress / next up
 
-- **Now:** `McpServerTests.cs`, then the 1c hardening fixes.
+- **Now:** the 1c hardening fixes.
 - **Next:** a decodable synthetic mesh plus a TXR/PAL fixture, so the mesh, texture and import ops can be pinned.
 - Note for fixtures: a ZDB of **type 1** (header `0xC8`/`0x58`) is detected as SOCOM 3 / CA and opens read-only. SOCOM II packages are type 2.
 - Note for running tests while the app is open: `dotnet run` locks `server/bin/Debug`, so run `dotnet test tests/MapBuilder.Tests -c Release`.
@@ -44,7 +44,7 @@ The goal: people **and AI over MCP** can add, edit and delete every SOCOM asset 
 - [x] `SessionTests.cs`: join an existing session, missing path, ZDB save keeps `.bak`, save as a copy, no-changes save, pack contents and pack-name rules.
 - [ ] `ImportTests.cs`: importModel and importTexture between sessions, with undo (needs the mesh/TXR fixture).
 - [x] `PackageEditTests.cs`: PACKAGE_EDIT add, remove, replace (the source is left alone), merge, refusals, unknown op.
-- [ ] `McpServerTests.cs`: `tools/list` schemas, an unknown tool, an `assets_edit` round trip.
+- [x] `McpServerTests.cs`: initialize; every tool has an object schema whose required fields (including `reason`) are declared; unknown tool or method gives a JSON-RPC error; a failing command is a tool error; open → edit → undo through the tools; edit errors are tool errors. `McpServer.Dispatch` is `internal` for this.
 
 **1c. Hardening** (each fix lands with a test)
 - [x] Opening a loose package folder twice made two sessions, because `ZipperPackage.SourcePath` for a folder is `<dir>\<name>`, not the folder. The page and the AI therefore never shared edits on an unpacked package. Sessions now remember the path they were opened with (`AssetSession.OpenPath`). Test: `SessionTests.Opening_the_same_package_joins_its_session`.

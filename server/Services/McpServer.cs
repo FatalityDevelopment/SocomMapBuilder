@@ -118,7 +118,7 @@ namespace MapBuilder.Server.Services
             return ctx.Response.WriteAsync(JsonSerializer.Serialize(reply, Json));
         }
 
-        private async Task<object?> Dispatch(JsonElement msg)
+        internal async Task<object?> Dispatch(JsonElement msg)
         {
             if (msg.ValueKind != JsonValueKind.Object) return Error(null, -32600, "Invalid request");
             // Notifications (no id) and replies to requests we never send get no answer.
