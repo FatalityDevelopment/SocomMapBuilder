@@ -118,7 +118,7 @@ async function checkWorkflow(browser) {
     const errors=[]; page.on('pageerror', error => errors.push(error.message));
     await page.goto(baseURL);
     const map=page.locator('.me-app.mp-app');
-    await map.getByLabel('Baked lighting', { exact:true }).check();
+    await map.getByRole('button', { name: 'Studio', exact: true }).click();
     await map.getByLabel('Grid', { exact:true }).uncheck();
     await map.getByLabel('Snap', { exact:true }).check();
     await page.getByTitle('Move snap (units)', { exact:true }).fill('20');
@@ -131,7 +131,7 @@ async function checkWorkflow(browser) {
     await map.getByLabel('Random scale', {exact:true}).check();
     await map.getByLabel('Align to surface', {exact:true}).check();
     await page.reload();
-    assert(await map.getByLabel('Baked lighting', {exact:true}).isChecked());
+    assert((await map.getByRole('button', { name: 'Studio', exact: true }).getAttribute('class')).includes('on'));
     assert(!(await map.getByLabel('Grid', {exact:true}).isChecked()));
     assert.equal(await page.getByTitle('Move snap (units)', {exact:true}).inputValue(),'20');
     assert((await map.getByRole('button', {name:'Ortho',exact:true}).getAttribute('class')).includes('on'));
@@ -157,6 +157,8 @@ async function checkWorkflow(browser) {
     await dialog.getByRole('button',{name:'Close',exact:true}).click();
     console.log('Shortcut search, empty state, Escape and ? verified');
     let current='before.zdb', phase='initial', revision=0, editCalls=0;
+    let holdNextScene = false, sceneHeld = false, sceneOverlap = false, releaseScene, markHeld;
+    const held = new Promise(resolve => { markHeld = resolve; });
     const identity=[1,0,0,0,0,1,0,0,0,0,1,0,0,0,0,1];
     const status=()=>({session:current,path:current,isZdb:true,mapNamespace:'SYN',revision,dirty:[],canUndo:null,canRedo:null,entries:1,models:{}});
     await page.route('**/api/command', async route=>{
@@ -167,6 +169,8 @@ async function checkWorkflow(browser) {
       else if(Command==='ASSET_EDIT') { editCalls++; data={revision}; }
       else if(Command==='ASSET_LIST_MODELS') data=[];
       else if(Command==='ASSET_MAP_SCENE'){
+        if (sceneHeld) { sceneOverlap = true; }
+        if (holdNextScene) { holdNextScene = false; sceneHeld = true; markHeld(); await new Promise(resolve => { releaseScene = resolve; }); sceneHeld = false; }
         if(phase==='fail') return route.fulfill({json:{Success:false,Error:'Synthetic scene unavailable'}});
         data={sceneNamespace:'SYN',counts:{reference:1},instances:[{kind:'reference',model:current==='before.zdb'?'BEFORE':'AFTER',instance:'prop',path:'/prop',position:[0,0,0],scale:1,matrix:identity,geoIndex:1,clutterIndex:null,source:null}]};
       } else if(Command==='ASSET_MAP_POINTS'){
@@ -202,6 +206,19 @@ async function checkWorkflow(browser) {
     await map.getByRole('button',{name:'Retry map loading'}).click();
     await page.locator('.mp-load-notice').waitFor({state:'hidden'});
     console.log('A failed same-session reload blocks stale edits until recovery');
+    holdNextScene = true;
+    await map.getByRole('button', { name: 'File', exact: true }).click();
+    await map.getByRole('button', { name: 'Reload', exact: true }).click();
+    await Promise.race([held, new Promise((_, reject) => setTimeout(() => reject(new Error('Reload did not reach scene request')), 10000))]);
+    await page.evaluate(async () => {
+      const { aiChange } = await import('/src/shared/aiBridge.ts');
+      aiChange.set({ seq: 999, page: 'map', path: 'after.zdb', edited: true, description: 'queued follow-up' });
+    });
+    releaseScene();
+    await map.locator('.me-statusbar').filter({ hasText: 'AI: queued follow-up' }).waitFor();
+    assert.equal(sceneOverlap, false);
+    console.log('An AI refresh received during loading waits until the current operation finishes');
+
     assert.deepEqual(errors,[]);
     console.log('Browser page errors: 0');
 
@@ -254,6 +271,50 @@ async function checkEditorLoading(browser) {
   } finally { await failed.close(); }
 }
 
+async function checkMcpBridge(browser) {
+  const page = await browser.newPage({ viewport: { width: 1280, height: 850 } });
+  page.setDefaultTimeout(20000);
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  let id = 0;
+  const endpoint = process.env.MAP_BUILDER_MCP_URL || 'http://127.0.0.1:8770/mcp';
+  const rpc = async (method, params = {}) => {
+    const response = await fetch(endpoint, {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: ++id, method, params }), signal: AbortSignal.timeout(20000),
+    });
+    assert(response.ok, `MCP HTTP ${response.status}`);
+    const reply = await response.json();
+    assert(!reply.error, JSON.stringify(reply.error));
+    assert(!reply.result?.isError, JSON.stringify(reply.result));
+    return reply.result;
+  };
+  try {
+    await page.goto(baseURL);
+    await page.waitForFunction(async () => (await import('/src/shared/aiBridge.ts')).aiConnected());
+    const initial = await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'browser-smoke', version: '1' } });
+    assert.equal(initial.serverInfo.name, 'mapbuilder');
+    const tools = await rpc('tools/list');
+    assert(tools.tools.some(tool => tool.name === 'ui_view'));
+    await rpc('tools/call', { name: 'ui_view', arguments: { lighting: 'studio', backdrop: 'blueprint' } });
+    await page.waitForFunction(() => document.body.classList.contains('bg-blueprint')
+      && [...document.querySelectorAll('.mp-app .me-seg button.on')].some(button => button.textContent === 'Studio'));
+    const state = await rpc('tools/call', { name: 'ui_state', arguments: {} });
+    const data = JSON.parse(state.content.find(content => content.type === 'text').text);
+    assert.equal(data.state.pages.map.lighting, 'studio');
+    assert.equal(data.state.backdrop, 'blueprint');
+    const screenshot = await rpc('tools/call', { name: 'ui_screenshot', arguments: { maxSize: 320 } });
+    assert(screenshot.content.some(content => content.type === 'image' && content.data.length > 100));
+    await rpc('tools/call', { name: 'ui_view', arguments: { lighting: 'unlit', backdrop: 'dark' } });
+    await page.waitForFunction(() => !document.body.classList.contains('bg-blueprint')
+      && [...document.querySelectorAll('.mp-app .me-seg button.on')].some(button => button.textContent === 'Unlit'));
+    await page.reload();
+    assert((await page.locator('.mp-app').getByRole('button', { name: 'Unlit', exact: true }).getAttribute('class')).includes('on'));
+    assert.deepEqual(errors, []);
+    console.log('MCP initialize, tools, view events, UI state and screenshot bridge work with persistent lighting and backdrops');
+  } finally { await page.close(); }
+}
+
 (async () => {
   const response = await fetch(new URL('/api/health', baseURL));
   assert(response.ok && (await response.json()).ok, 'Start the backend and Vite proxy before running browser checks');
@@ -264,6 +325,7 @@ async function checkEditorLoading(browser) {
     await checkRendering(browser);
     await checkWorkflow(browser);
     await checkEditorLoading(browser);
+    await checkMcpBridge(browser);
     console.log('All Map Builder browser checks passed.');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exitCode = 1; });

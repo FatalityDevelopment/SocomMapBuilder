@@ -1,8 +1,8 @@
-import type { Shading } from '../webview/zipper-core/viewport-core';
+import type { Lighting, Shading } from '../webview/zipper-core/viewport-core';
 
 export interface EditorPreferences {
   shading: Shading;
-  baked: boolean;
+  lighting: Lighting;
   grid: boolean;
   snap: boolean;
   snapMove: number;
@@ -21,7 +21,7 @@ export interface EditorPreferences {
 }
 export const EDITOR_PREFERENCES_KEY = 'socom.map.editorPreferences.v1';
 export const DEFAULT_EDITOR_PREFERENCES: EditorPreferences = {
-  shading: 'textured', baked: false, grid: true, snap: false, snapMove: 10, snapRotate: 15,
+  shading: 'textured', lighting: 'baked', grid: true, snap: false, snapMove: 10, snapRotate: 15,
   snapScale: 0.1, gizmoLocal: false, ortho: false, backfaces: true,
   placeYaw: 0, placeScale: 1, randomYaw: false, randomScale: false, minPlaceScale: 0.8, maxPlaceScale: 1.2, alignSurface: false,
 };
@@ -39,6 +39,12 @@ export function normalizeEditorPreferences(value: unknown): EditorPreferences {
     }
   }
   if (typeof input.shading === 'string' && ['textured', 'solid', 'wireframe', 'xray'].includes(input.shading)) { result.shading = input.shading as Shading; }
+  if (typeof input.lighting === 'string' && ['baked', 'studio', 'unlit'].includes(input.lighting)) {
+    result.lighting = input.lighting as Lighting;
+  } else if (typeof input.baked === 'boolean') {
+    // Migrate the previous baked-lighting checkbox without changing the user's saved appearance.
+    result.lighting = input.baked ? 'baked' : 'unlit';
+  }
   return result;
 }
 export function readEditorPreferences(storage?: Pick<Storage, 'getItem'>): EditorPreferences {

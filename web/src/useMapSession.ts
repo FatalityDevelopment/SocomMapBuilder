@@ -9,6 +9,7 @@ import type { ModelTexturePixels } from './webview/zipper-workbench/zed-model-re
 import type { MapModel, MapViewport } from './viewport/mapViewport';
 import { errText } from './mapModel';
 import { host, openRequest, useSignals } from './shared';
+import { aiChange, samePath, type AiFocus } from './shared/aiBridge';
 
 // Callbacks are read through refs, so the page can mirror selection without coupling session logic to its UI.
 export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
@@ -59,6 +60,7 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
     return !!s && s.dirty.length > 0 && s.revision !== savedRevisionRef.current;
   };
 
+  useSignals();
   const say = useCallback((text: string, error = false) => {
     setMessage(text);
     setMessageIsError(error);
@@ -203,13 +205,50 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
   }, [reload, say, setBusyFlag, setStatus]);
 
   // Another page asked for a package here (the Asset Viewer's "Open map in Map Builder").
-  useSignals();
   const request = openRequest();
   useEffect(() => {
     if (request?.page === 'map') { void openPackage(request.path); }
     // openPackage is stable for the page's life; only a new request should open.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [request]);
+
+  // The AI (MCP) edited or asked to show something: open its package here if it brought this page forward, reload
+  // when the session changed, then select and frame what it touched.
+  const focus = useCallback((f: AiFocus | null | undefined) => {
+    const vp = viewportRef.current;
+    if (!vp || !f) { return; }
+    if (f.point) { vp.selectPoint(f.point); vp.frameSelected(); return; }
+    const i = instancesRef.current.findIndex(inst =>
+      (f.clutterIndex != null && inst.clutterIndex === f.clutterIndex) ||
+      (f.geoIndex != null && inst.clutterIndex === null && inst.geoIndex === f.geoIndex));
+    if (i >= 0) { vp.select([i]); vp.frameSelected(); }
+  }, [viewportRef]);
+
+  const handledChangeRef = useRef<number | null>(null);
+  const change = aiChange();
+  useEffect(() => {
+    if (!change || change.seq === handledChangeRef.current || busyRef.current || reloadingRef.current > 0) { return; }
+    handledChangeRef.current = change.seq;
+    const here = samePath(statusRef.current?.path, change.path);
+    const run = async () => {
+      if (change.page === 'map' && change.path && !here) {
+        await openPackage(change.path);
+      } else if (here && change.edited) {
+        setBusyFlag(true);
+        try {
+          setStatus(await clientRef.current.status());
+          await reload(true, true);
+        } finally { setBusyFlag(false); }
+      } else if (!here) {
+        return;
+      }
+      if (change.page === 'map' && samePath(statusRef.current?.path, change.path) && sceneReadyRef.current) { focus(change.focus); }
+      if (change.edited && change.description) { say(`AI: ${change.description}`); }
+    };
+    void run().catch(err => say(`AI change: ${errText(err)}`, true));
+    // A change received during an edit/load is applied once that operation finishes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [change, busy, loading]);
 
   // Edits made by anyone on the session (an assistant on the same backend) show up here.
   useEffect(() => {

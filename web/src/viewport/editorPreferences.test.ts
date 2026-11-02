@@ -14,9 +14,15 @@ describe('editor preferences', () => {
       .toEqual(DEFAULT_EDITOR_PREFERENCES);
     expect(normalizeEditorPreferences(null)).toEqual(DEFAULT_EDITOR_PREFERENCES);
   });
+  it('migrates the old checkbox and lets an explicit lighting mode take precedence', () => {
+    expect(normalizeEditorPreferences({ baked: false }).lighting).toBe('unlit');
+    expect(normalizeEditorPreferences({ baked: true }).lighting).toBe('baked');
+    expect(normalizeEditorPreferences({ baked: false, lighting: 'studio' }).lighting).toBe('studio');
+    expect(normalizeEditorPreferences({ lighting: 'broken' }).lighting).toBe('baked');
+  });
   it('round-trips settings and survives broken or unavailable storage', () => {
     let saved = '';
-    const preferences = { ...DEFAULT_EDITOR_PREFERENCES, baked: true, backfaces: false };
+    const preferences = { ...DEFAULT_EDITOR_PREFERENCES, lighting: 'studio' as const, backfaces: false };
     writeEditorPreferences(preferences, { setItem: (_, value) => { saved = value; } });
     expect(readEditorPreferences({ getItem: () => saved })).toEqual(preferences);
     expect(readEditorPreferences({ getItem: () => '{' })).toEqual(DEFAULT_EDITOR_PREFERENCES);

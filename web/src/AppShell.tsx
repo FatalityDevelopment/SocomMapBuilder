@@ -3,6 +3,9 @@ import { Icon } from './shared/Icon';
 import { HostDialog } from './shared/HostDialog';
 import { FileBrowser } from './shared/FileBrowser';
 import { ImportDialog } from './shared/ImportDialog';
+import { AiPanel } from './shared/AiPanel';
+import { aiLog, aiPanelOpen } from './shared/aiBridge';
+import { viewBackdrop } from './shared/viewSettings';
 import { activePage, useSignals, type PageId } from './shared';
 import { MapPage } from './MapPage';
 
@@ -23,6 +26,9 @@ export function AppShell() {
   const current = activePage();
   const [visited, setVisited] = useState(() => new Set<PageId>([current]));
   if (!visited.has(current)) { setVisited(new Set([...visited, current])); }
+  const blueprint = viewBackdrop() === 'blueprint';
+  const aiBusy = aiLog().some(a => a.phase === 'start');
+
   return (
     <div className="mb-shell">
       <nav className="mb-activity" aria-label="Editors">
@@ -33,6 +39,14 @@ export function AppShell() {
             <Icon name={p.icon} size={22} strokeWidth={1.5} />
           </button>
         ))}
+        <span className="mb-activity-spacer" />
+        <button className={`mb-activity-btn${blueprint ? ' on' : ''}`} title={blueprint ? 'Backdrop: blueprint (click for dark)' : 'Backdrop: dark (click for blueprint)'}
+          onClick={() => viewBackdrop.set(blueprint ? 'dark' : 'blueprint')}>
+          <Icon name="image" size={20} strokeWidth={1.5} />
+        </button>
+        <button className={`mb-activity-btn${aiPanelOpen() ? ' on' : ''}${aiBusy ? ' busy' : ''}`} title="AI activity (MCP)" onClick={() => aiPanelOpen.set(!aiPanelOpen())}>
+          <Icon name="bot" size={20} strokeWidth={1.5} />
+        </button>
       </nav>
       <main className="mb-pages">
         {PAGES.filter(p => visited.has(p.id)).map(p => (
@@ -44,6 +58,7 @@ export function AppShell() {
             </EditorBoundary>
           </div>
         ))}
+        <AiPanel />
       </main>
       <HostDialog />
       {/* The import dialog opens the file browser, so the browser renders on top. */}

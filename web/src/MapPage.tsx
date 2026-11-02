@@ -6,15 +6,17 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ModelSummary } from './webview/model-editor/asset-client';
 import { decodeMesh, type MeshWire } from './webview/model-editor/mesh-data';
 import { MapViewport, type MapLayer, type MapTool } from './viewport/mapViewport';
-import type { Shading, ViewPreset } from './webview/zipper-core/viewport-core';
+import { LIGHTINGS, type Lighting, type Shading, type ViewPreset } from './webview/zipper-core/viewport-core';
 import { LAYERS, errText, layerOf, movable, pointKindCounts, type ModelGroup } from './mapModel';
+
 import { MenuBar, type Menu } from './components/MenuBar';
 import { PageHeader } from './shared/PageHeader';
 import { Outliner } from './components/Outliner';
 import { PropsPanel, type PropTab } from './components/PropsPanel';
 import { ViewportView } from './components/ViewportView';
 import { NumField } from './components/NumField';
-import { host } from './shared';
+import { activePage, host } from './shared';
+import { aiView, provideAiState } from './shared/aiBridge';
 import { SHORTCUTS, TOOLS } from './mapShortcuts';
 import { useMapKeys } from './useMapKeys';
 import { useMapSession } from './useMapSession';
@@ -46,7 +48,7 @@ export function MapPage() {
   const [propTab, setPropTab] = useState<PropTab>('item');
   const [tool, setToolState] = useState<MapTool>('select');
   const [shading, setShadingState] = useState<Shading>(initialPreferences.shading);
-  const [baked, setBaked] = useState(initialPreferences.baked);
+  const [lighting, setLightingState] = useState<Lighting>(initialPreferences.lighting);
   const [grid, setGrid] = useState(initialPreferences.grid);
   const [snap, setSnap] = useState(initialPreferences.snap);
   const [snapMove, setSnapMove] = useState(initialPreferences.snapMove);
@@ -121,9 +123,9 @@ export function MapPage() {
 
   const cycleShading = () => setShading(SHADING_ORDER[(SHADING_ORDER.indexOf(shading) + 1) % SHADING_ORDER.length]);
 
-  const toggleBaked = (on: boolean) => {
-    setBaked(on);
-    viewportRef.current?.setLighting(on);
+  const setLighting = (mode: Lighting) => {
+    setLightingState(mode);
+    viewportRef.current?.setLighting(mode);
   };
 
   const toggleGrid = (on: boolean) => {
@@ -380,7 +382,7 @@ export function MapPage() {
     vp.editable = false;
     vp.onStats = setViewportStats;
     vp.shading = initialPreferences.shading;
-    vp.setLighting(initialPreferences.baked);
+    vp.setLighting(initialPreferences.lighting);
     vp.setBackfaces(initialPreferences.backfaces);
     vp.showGrid = initialPreferences.grid;
     vp.showAxes = initialPreferences.grid;
@@ -388,6 +390,7 @@ export function MapPage() {
     if (initialPreferences.ortho) { vp.toggleOrtho(); }
     vp.setSnap(initialPreferences.snap ? initialPreferences.snapMove : null,
       initialPreferences.snap ? initialPreferences.snapRotate : null, initialPreferences.snap ? initialPreferences.snapScale : null);
+
     viewportRef.current = vp;
   }, []);
 
@@ -419,10 +422,41 @@ export function MapPage() {
   }, [renderSettings]);
 
   useEffect(() => {
-    writeEditorPreferences({ shading, baked, grid, snap, snapMove, snapRotate, snapScale, gizmoLocal, ortho, backfaces,
+    writeEditorPreferences({ shading, lighting, grid, snap, snapMove, snapRotate, snapScale, gizmoLocal, ortho, backfaces,
       placeYaw, placeScale, randomYaw, randomScale, minPlaceScale, maxPlaceScale, alignSurface });
-  }, [shading, baked, grid, snap, snapMove, snapRotate, snapScale, gizmoLocal, ortho, backfaces,
+  }, [shading, lighting, grid, snap, snapMove, snapRotate, snapScale, gizmoLocal, ortho, backfaces,
     placeYaw, placeScale, randomYaw, randomScale, minPlaceScale, maxPlaceScale, alignSurface]);
+  // ------------------------------------------------------------------ AI (MCP)
+
+  // ui_view on this page: shading, lighting, camera preset, framing.
+  const aiViewRequest = aiView();
+  useEffect(() => {
+    if (!aiViewRequest || activePage() !== 'map') { return; }
+    if (aiViewRequest.shading) { setShading(aiViewRequest.shading); }
+    if (aiViewRequest.lighting) { setLighting(aiViewRequest.lighting); }
+    if (aiViewRequest.view) { view(aiViewRequest.view); }
+    if (aiViewRequest.frame === 'selected') { frameSelected(); } else if (aiViewRequest.frame === 'all') { frameAll(); }
+    // Only a new request should run.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiViewRequest]);
+
+  // What ui_state reports for this page (read through a ref: always the latest render's values).
+  const aiStateRef = useRef<() => unknown>(() => null);
+  aiStateRef.current = () => ({
+    path: status?.path ?? null,
+    session: status?.session ?? null,
+    revision: status?.revision ?? null,
+    unsaved: status?.dirty ?? [],
+    shading, lighting, tool,
+    instances: instances.length,
+    selection: selection.slice(0, 50).map(i => {
+      const inst = instances[i];
+      return inst && { model: inst.model, kind: inst.kind, geoIndex: inst.geoIndex, clutterIndex: inst.clutterIndex, position: inst.position };
+    }),
+    selectedPoint,
+  });
+  useEffect(() => provideAiState('map', () => aiStateRef.current()), []);
+
 
   // ------------------------------------------------------------------ render
 
@@ -448,7 +482,11 @@ export function MapPage() {
             <button key={s.id} className={shading === s.id ? 'on' : ''} onClick={() => setShading(s.id)}>{s.label}</button>
           ))}
         </div>
-        <label className="me-toggle"><input type="checkbox" checked={baked} onChange={e => toggleBaked(e.target.checked)} /> Baked lighting</label>
+        <div className="me-seg" title="Lighting">
+          {LIGHTINGS.map(l => (
+            <button key={l.id} className={lighting === l.id ? 'on' : ''} onClick={() => setLighting(l.id)} title={l.title}>{l.label}</button>
+          ))}
+        </div>
         <label className="me-toggle"><input type="checkbox" checked={grid} onChange={e => toggleGrid(e.target.checked)} /> Grid</label>
         <label className="me-toggle"><input type="checkbox" checked={snap} onChange={e => toggleSnap(e.target.checked)} /> Snap</label>
         {snap && (

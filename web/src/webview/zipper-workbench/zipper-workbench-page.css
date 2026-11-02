@@ -295,6 +295,18 @@ input {
   background-size: 40px 40px;
 }
 
+/* The blueprint backdrop (activity bar toggle), matching the 3D viewports' sheet. */
+.bg-blueprint .zip-preview-canvas {
+  background-color: #1f4a7a;
+  background-image:
+    linear-gradient(rgba(205, 230, 255, 0.24) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(205, 230, 255, 0.24) 1px, transparent 1px),
+    linear-gradient(rgba(190, 220, 255, 0.10) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(190, 220, 255, 0.10) 1px, transparent 1px),
+    radial-gradient(circle, #1f4a7a 0%, #173a62 100%);
+  background-size: 80px 80px, 80px 80px, 16px 16px, 16px 16px, 100% 100%;
+}
+
 .zip-preview-pic {
   background: #111318;
   image-rendering: pixelated;
