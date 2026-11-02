@@ -4,7 +4,7 @@
 // pans, F frames. A finished drag is handed to the page as UV edits, which go
 // to the bridge as a setVertices edit.
 
-import type { ModelTexturePixels } from '../zipper-workbench/zed-model-renderer';
+import type { ModelTexturePixels } from '../zipper-core/texture-pixels';
 import type { EditorChunk } from './mesh-data';
 
 export type UvEdits = Map<number, Map<number, [number, number]>>;

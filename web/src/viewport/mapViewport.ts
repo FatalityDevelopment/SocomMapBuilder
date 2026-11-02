@@ -235,7 +235,7 @@ export class MapViewport extends ViewportCore {
   setScene(
     instances: MapInstance[],
     models: Map<string, MapModel>,
-    textures: Record<string, import('../webview/zipper-workbench/zed-model-renderer').ModelTexturePixels>,
+    textures: Record<string, import('../webview/zipper-core/texture-pixels').ModelTexturePixels>,
     points: MapPointInfo[],
     keepCamera: boolean,
   ): void {

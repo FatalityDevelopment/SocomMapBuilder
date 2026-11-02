@@ -4,7 +4,7 @@
 
 import * as THREE from 'three';
 import { activePage, computed, host, modalOpen, signal } from '../../shared';
-import type { ModelTexturePixels } from '../zipper-workbench/zed-model-renderer';
+import type { ModelTexturePixels } from '../zipper-core/texture-pixels';
 import { AssetClient, type ExportResult, type ModelDescription, type ModelSummary, type SessionStatus, type TextureInfo } from './asset-client';
 import { TextureCache } from './model-loader';
 import { decodeMesh, toModelMatrix, toModelPoint, type EditorChunk, type EditorMesh, type MeshWire } from './mesh-data';

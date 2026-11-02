@@ -9,7 +9,7 @@ import { DEFAULT_RENDER_SETTINGS, normalizeRenderSettings, renderPixelRatio, typ
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
-import type { ModelTexturePixels } from '../zipper-workbench/zed-model-renderer';
+import type { ModelTexturePixels } from './texture-pixels';
 import { effect, type EffectRef } from '../../shared/signals';
 import { viewBackdrop } from '../../shared/viewSettings';
 import { modalOpen } from '../../shared/host';

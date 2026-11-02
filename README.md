@@ -43,7 +43,7 @@ Open a game package and work across the map, its props and clutter, vehicles, ch
 
 ## Pages
 
-Use the activity bar to switch between tools. Editors load on their first visit, then remain mounted so their sessions, cameras and selections survive switching. The editors are connected: double-click a prop on the map to open it in the Model Editor, or right-click a model in the Asset Viewer to send it to the appropriate editor.
+Use the activity bar to switch between tools. Editors load on their first visit, then remain mounted so their sessions, cameras and selections survive switching. The editors are connected: double-click a prop on the map to open it in the Model Editor, or double-click a model in the Asset Viewer to open it there.
 
 ### Map Builder
 
@@ -90,13 +90,14 @@ Preview character clips on skinned models. Package-local `MOTION_S.ZAR` clips ar
 
 <img src="docs/screenshots/asset.png" alt="SOCOM Map Builder asset viewer for browsing package files and archives" width="850">
 
-Browse package contents and archives, preview assets, and send items directly to the editor that supports them.
+Browse a whole disc (or any folder) down into packages and archives, preview what is there, and send it to the editor that works on it. The page has the editors' layout: the browser on the left, the preview in the middle, what the selection is and what can be done with it on the right.
 
-- Browse .ZDB / .CDB / .ZAR / .ZED files and the archives inside them, in a list with icons and thumbnails, a path bar (Up / Backspace, breadcrumbs) and a filter.
-- Lists match the editors: model archives list models (characters, weapons), TXR archives textures (as a list or icons), PAL archives palettes (with a swatch preview), GEO archives definitions, CLUTTER.ZAR its clutter models with their placement counts. Records that hold records open like folders.
-- Previews: models (decoded by the server, textured), textures, palettes, GEO scenes with a spawn camera, RDR screens, AI maps, animations. The sidebar shows the textures of what is open.
-- **Right-click** an item to open it in the editor it needs (Model Editor, Animation Editor, Map Builder), export a texture as PNG, extract it, replace or remove it.
-- **Import…**: add .ZED / .ZAR / .MPS files to a package (or merge another package's files), or any file (an .RDR, say) to a .ZAR / .ZED archive. Replace and Remove work at both levels.
+- Open a folder (File › Open folder…, Ctrl+O) — the SOCOM II disc's drive, its RUN folder, or a folder of packages — and browse folders, .ZDB / .CDB packages and the .ZAR / .ZED archives inside them, with breadcrumbs, Back / Forward / Up, a filter and kind chips. Lists of thousands of records (RUN/SOUNDS/VAGSTORE.ZAR holds 10 942) scroll without slowing down.
+- Package archives list what the editors list, from the same asset session: models, textures, palettes, GEO definitions and animation clips (a loose RUN/MOTION_P.ZAR borrows a session from a package beside it).
+- Previews use the editors' own code: models in the Model Editor's viewport, a package's composed map in the Map Builder's (Show map), clips playing on a character in the Animation Editor's, textures through ASSET_TEXTURE.
+- Every file type on the retail disc previews: memory-card icons (.ICO, in 3D with their texture) and icon lists, sounds (.VAG and the VAGSTORE / BNKSTORE stores, .BNK / .BD banks sample by sample) played in the page, the RAW / RGB loading screens, RDR trees, AI maps, text (.CNF), programs (.ELF, .IRX: sections, IOP module name), movies (.PSS: picture size, frame rate, length, and **Convert for preview**, which takes out its sound track (the PS2's "SShd" PCM stream, which ffmpeg does not read) and has ffmpeg join it to the picture as an H.264 / AAC MP4, kept in `%LOCALAPPDATA%\MapBuilder\movies`, so it plays in the page; needs ffmpeg on the server: `winget install Gyan.FFmpeg` or `MAPBUILDER_FFMPEG`), and a hex dump with strings for anything else.
+- Actions: open in the Map Builder, Model Editor or Animation Editor; export a texture, screen or icon texture as PNG and a sound as WAV; extract any record as stored.
+- **Import… / Replace… / Remove**: change a package's files or an archive's records; the result is written to a file you choose.
 
 Edits in the editors are undoable. SOCOM 3 / Combined Assault archives and GTA: San Andreas (.ISO or .IMG) open read-only.
 
@@ -188,7 +189,7 @@ The API can read and write any file your account can, so the server also only an
 | Shading | Z cycles textured, solid, wire, X-ray |
 | Lighting / backdrop | Baked · Studio · Unlit in the header / image icon in the activity bar |
 | Undo / redo / save copy | Ctrl+Z / Ctrl+Y / Ctrl+S |
-| Asset Viewer | Double-click / Enter opens · Backspace up · right-click for actions |
+| Asset Viewer | Double-click / Enter opens · Backspace up · Alt+Left / Right back / forward · arrows move · Space plays a clip |
 
 ## How it fits together
 
@@ -200,7 +201,7 @@ web/  React 18 + TypeScript + three.js ──POST /api/command──▶ server/ 
 ```
 
 - The backend owns the package. Every edit is an `ASSET_*` command on an in-memory session (one per package path, shared by all pages); the pages preview and send commands.
-- The Asset Viewer reads archives with `ZIPPER_*` commands and decodes most of them in the page; SOCOM II models are decoded by the server, the same mesh the editors draw.
+- The Asset Viewer lists and previews with `VIEWER_LIST` / `VIEWER_PREVIEW`; package archives come from an asset session, so models, textures, maps and clips are drawn with the editors' commands and viewports. Disc formats only it reads (SPU ADPCM, memory-card icons, raw screens, PSS / ELF headers) are in `CodeDesigner.Ps2.FileFormats/Ps2`.
 - `web/src/webview/` mirrors CodeDesigner's webview folders: the viewports, decoders and players are shared files, and each page's logic runs on a small dependency-tracking signals shim (`web/src/shared/signals.ts`) under a React view.
 
 ```
@@ -217,7 +218,7 @@ web/src/
   MapPage.tsx, viewport/          Map Builder
   webview/model-editor/           Model Editor
   webview/animation-editor/       Animation Editor
-  webview/zipper-workbench/       Asset Viewer
+  webview/asset-viewer/           Asset Viewer
   shared/                         host (dialogs, file browser, import), signals, icons
 ```
 
@@ -273,6 +274,8 @@ All commands are `POST /api/command` with a JSON body `{ "Command": ..., ...fiel
 | `ASSET_HISTORY` / `ASSET_VALIDATE` | `AssetSession` (+ `AssetJson: {vramBudget?}` for validate) | The undo / redo steps; a map lint |
 | `PACKAGE_EDIT` | `InputPath`, `OutputPath`, `Data: [ops]`, `DryRun?` | Add / replace / remove package files and archive records (refused while an open session has unsaved edits on the file) |
 | `FS_PLACES` / `FS_LIST` | `InputPath` | Drives, common folders and folder listings |
+| `VIEWER_MOVIE` | `InputPath` (a .PSS) | Converts a movie to MP4 once (ffmpeg) and answers its `/api/viewer/movie/…` stream URL |
+| `VIEWER_LIST` / `VIEWER_PREVIEW` / `VIEWER_EXTRACT` | `InputPath`, `AssetJson: {inner?: [entry indices], sample?, rate?}` (+ `OutputPath` for extract) | Asset Viewer: what a folder, file or archive holds; a typed preview of one file or record; a record's bytes as stored |
 
 Edit ops include `moveClutter`, `addClutter`, `deleteClutter`, `moveInstance`, `duplicateInstance`, `placeInstance`, `deleteInstance`, `movePoint`, `setPoint`, `setVertices`, `transformVertices`, `addMesh`, `deleteFaces`, `duplicateFaces`, `retexture`, `replaceTexture`, `tintVertexColors`, the animation ops, and:
 

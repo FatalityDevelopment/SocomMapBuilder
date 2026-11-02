@@ -394,7 +394,9 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZED
             int recordEnd = checked(firstRecordOffset + (entryCount * RecordSize));
 
             uint bodySize = Read32(data, 0x54);
-            int bodyStart = checked(data.Length - (int)bodySize);
+            // Sound stores (BNKSTORE / VAGSTORE.ZAR) record no body size: the body starts at the record table's end,
+            // aligned to their 2048-byte sectors (word 0x10).
+            int bodyStart = bodySize == 0 ? AlignUp(recordEnd, (int)Math.Max(HeaderWord10, DefaultDataAlignment)) : checked(data.Length - (int)bodySize);
             if (bodyStart < recordEnd)
                 throw new InvalidDataException("Record table overlaps the body region.");
 

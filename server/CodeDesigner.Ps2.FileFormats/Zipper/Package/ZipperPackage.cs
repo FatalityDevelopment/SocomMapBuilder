@@ -80,8 +80,10 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             if (!File.Exists(path) && !Directory.Exists(path)) throw new FileNotFoundException($"Package not found: {path}", path);
             string dir = Directory.Exists(path) ? path : System.IO.Path.GetDirectoryName(path) ?? path;
             if (!Directory.Exists(dir)) throw new FileNotFoundException("Package not found", path);
-            // Package files are a few MB; anything huge beside them (a disc image) is not part of the package.
-            var files = Directory.GetFiles(dir).Where(f => new FileInfo(f).Length < 512L * 1024 * 1024)
+            // Package files are a few MB; anything huge beside them (a disc image) is not part of the package, and
+            // neither are other packages or movies beside it (a file in the disc's RUN folder sits by every map's ZDB).
+            var files = Directory.GetFiles(dir).Where(f => new FileInfo(f).Length < 512L * 1024 * 1024
+                    && !ZdbArchive.IsArchivePath(f) && !f.EndsWith(".PSS", StringComparison.OrdinalIgnoreCase))
                 .Select(f => MakeEntry(f, File.ReadAllBytes(f))).ToList();
             string name = Directory.Exists(path) ? System.IO.Path.GetFileName(dir.TrimEnd('\\', '/')) : System.IO.Path.GetFileName(path);
             return new ZipperPackage(System.IO.Path.Combine(dir, name), false, files);

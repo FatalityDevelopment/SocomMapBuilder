@@ -1,0 +1,93 @@
+// The Asset Viewer's server calls: VIEWER_LIST (what a folder, file or archive holds), VIEWER_PREVIEW (a typed
+// preview of one file or record), VIEWER_EXTRACT, and PACKAGE_EDIT for Import / Replace / Remove. Models, textures,
+// maps and clips are previewed through the asset session a listing names, with the editors' AssetClient.
+
+import { command } from '../../api/client';
+
+export type ItemKind =
+  | 'folder' | 'package' | 'models' | 'textures' | 'palettes' | 'geo' | 'clips' | 'archive' | 'group'
+  | 'model' | 'texture' | 'palette' | 'clip'
+  | 'rdr' | 'mps' | 'sound' | 'bank' | 'movie' | 'image' | 'icon' | 'iconsys' | 'program' | 'text' | 'binary';
+
+/** A place: a path on disk and the entry indices that lead into it. */
+export interface Place { path: string; inner: number[] }
+
+export interface ItemRef {
+  // Models: archive + name; textures: name + namespace; palettes: archive + id; clips: name + source.
+  archive?: string; name?: string; modelKind?: string; namespace?: string | null; id?: number; source?: string;
+}
+
+export interface ViewerItem extends Place {
+  name: string;
+  kind: ItemKind;
+  size: number;
+  detail?: string;
+  entryPath?: string | null;
+  ref?: ItemRef;
+}
+
+export interface Crumb extends Place { label: string; entryPath?: string | null }
+
+export interface Listing extends Place {
+  name: string;
+  kind: ItemKind;
+  size: number;
+  session: string | null;
+  package: string | null;
+  crumbs: Crumb[];
+  items: ViewerItem[];
+}
+
+export type Fact = [string, string];
+
+export type RdrValue = string | number | boolean | null | RdrValue[] | { [key: string]: RdrValue };
+
+export type Preview = { name: string; facts: Fact[] } & (
+  | { type: 'folder' | 'info' }
+  | { type: 'movie'; canConvert: boolean; url: string | null }
+  | { type: 'archive'; kind: ItemKind }
+  | { type: 'package'; session: string; package: string; hasMap: boolean; mapNamespace: string | null; models: number; characters: number }
+  | { type: 'rdr'; root: RdrValue }
+  | { type: 'mps'; maps: Array<{ name: string; width: number; height: number; min: number[]; max: number[]; scale: number[]; offset: number }> }
+  | { type: 'audio'; rate: number; seconds: number; wav: string | null; sample?: number; samples?: Array<{ offset: number; length: number; seconds: number }> }
+  | { type: 'image'; width: number; height: number; png: string }
+  | { type: 'icon'; mesh: unknown; png: string | null }
+  | { type: 'program'; sections: Array<{ name: string; type: string; address: string; size: number }> }
+  | { type: 'text'; text: string; truncated: boolean }
+  | { type: 'hex'; kind: ItemKind; note: string | null; bytes: string; strings: string[] }
+  | { type: 'palette'; rgba: number[]; is16: boolean }
+);
+
+const json = (value: unknown) => JSON.stringify(value);
+
+export function list(place: Place): Promise<Listing> {
+  return command('VIEWER_LIST', { InputPath: place.path, AssetJson: json({ inner: place.inner }) });
+}
+
+export function preview(place: Place, options: { sample?: number; rate?: number } = {}): Promise<Preview> {
+  return command('VIEWER_PREVIEW', { InputPath: place.path, AssetJson: json({ inner: place.inner, ...options }) });
+}
+
+export function palette(session: string, archive: string, id: number): Promise<Preview> {
+  return command('VIEWER_PREVIEW', { AssetJson: json({ session, archive, palette: id }) });
+}
+
+/** Converts a .PSS to MP4 (once; it is cached) and answers where the page can stream it. */
+export function convertMovie(path: string): Promise<{ url: string; size: number; silent: boolean }> {
+  return command('VIEWER_MOVIE', { InputPath: path });
+}
+
+export function extract(place: Place, outputPath: string): Promise<{ written: string; size: number }> {
+  return command('VIEWER_EXTRACT', { InputPath: place.path, OutputPath: outputPath, AssetJson: json({ inner: place.inner }) });
+}
+
+export interface EditReport { written: string; added: string[]; replaced: string[]; removed: string[] }
+
+export function packageEdit(path: string, output: string, ops: unknown[]): Promise<EditReport> {
+  return command('PACKAGE_EDIT', { InputPath: path, OutputPath: output, Data: json(ops) });
+}
+
+export const samePlace = (a: Place | null | undefined, b: Place | null | undefined) =>
+  !!a && !!b && a.path.toLowerCase() === b.path.toLowerCase() && a.inner.length === b.inner.length && a.inner.every((v, i) => v === b.inner[i]);
+
+export const placeKey = (p: Place, ref?: ItemRef) => `${p.path}|${p.inner.join('/')}|${ref ? `${ref.archive ?? ''}:${ref.name ?? ref.id ?? ''}:${ref.source ?? ''}` : ''}`;

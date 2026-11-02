@@ -1,0 +1,874 @@
+// The Asset Viewer: browse a disc (or any folder) down into packages and archives, and preview what is there.
+// Listings and previews come from the server (VIEWER_LIST / VIEWER_PREVIEW). Models, textures, palettes, maps and
+// animation clips of a package are drawn the way the editors draw them: the same asset session commands, mesh
+// decoding, texture cache and viewports (EditorViewport, MapViewport, AnimViewport).
+
+import { activePage, computed, host, modalOpen, rememberFolder, rememberedFolder, signal } from '../../shared';
+import { AssetClient, pngToRgba, type ModelSummary } from '../model-editor/asset-client';
+import { TextureCache } from '../model-editor/model-loader';
+import { decodeMesh, type EditorMesh, type MeshWire } from '../model-editor/mesh-data';
+import { EditorViewport } from '../model-editor/editor-viewport';
+import { AnimViewport, type ClipData } from '../animation-editor/anim-viewport';
+import { MapViewport, type MapModel } from '../../viewport/mapViewport';
+import { loadMapModels } from '../zipper-core/map-models';
+import type { Lighting, Shading, ViewPreset, ViewportCore } from '../zipper-core/viewport-core';
+import type { ModelTexturePixels } from '../zipper-core/texture-pixels';
+import * as api from './viewer-client';
+import type { ItemKind, Listing, Place, Preview, ViewerItem } from './viewer-client';
+
+export type Stage = 'empty' | 'loading' | 'model' | 'map' | 'clip' | 'image' | 'palette' | 'audio' | 'movie' | 'rdr' | 'mps' | 'text' | 'hex' | 'program' | 'summary' | 'error';
+type ViewportKind = 'model' | 'map' | 'clip';
+
+export interface MenuItem { label: string; action?: () => void; disabled?: () => boolean; shortcut?: string; separator?: boolean }
+export interface Menu { id: string; label: string; items: MenuItem[] }
+
+// GS pixel storage modes (TEX0.PSM).
+const PSM: Record<string, string> = { '0x00': 'PSMCT32', '0x01': 'PSMCT24', '0x02': 'PSMCT16', '0x0A': 'PSMCT16S', '0x13': 'PSMT8', '0x14': 'PSMT4', '0x1B': 'PSMT8H', '0x24': 'PSMT4HL', '0x2C': 'PSMT4HH' };
+const BROWSABLE = new Set<ItemKind>(['folder', 'package', 'models', 'textures', 'palettes', 'geo', 'clips', 'archive']);
+const LAST_PLACE = 'mapbuilder.viewer.place';
+
+export const KIND_LABEL: Record<ItemKind, string> = {
+  folder: 'Folder', package: 'Package', models: 'Models', textures: 'Textures', palettes: 'Palettes', geo: 'GEO definitions',
+  clips: 'Animations', archive: 'Archive', group: 'Group', model: 'Model', texture: 'Texture', palette: 'Palette', clip: 'Animation clip',
+  rdr: 'RDR data', mps: 'AI maps', sound: 'Sound', bank: 'Sound bank', movie: 'Movie', image: 'Screen image', icon: 'Memory-card icon',
+  iconsys: 'Icon list', program: 'Program', text: 'Text', binary: 'Data',
+};
+
+const errText = (err: unknown) => err instanceof Error ? err.message : String(err);
+const fileName = (p: string) => p.split(/[\\/]/).filter(Boolean).pop() ?? p;
+const isPackagePath = (p: string) => /\.(zdb|cdb)$/i.test(p);
+
+function loadPlace(): Place | null {
+  try { const v = JSON.parse(localStorage.getItem(LAST_PLACE) ?? 'null') as Place | null; return v && typeof v.path === 'string' ? v : null; } catch { return null; }
+}
+function savePlace(p: Place): void {
+  try { localStorage.setItem(LAST_PLACE, JSON.stringify({ path: p.path, inner: p.inner })); } catch { /* per-viewer convenience only */ }
+}
+
+export class AssetViewerLogic {
+  readonly listing = signal<Listing | null>(null);
+  readonly listBusy = signal(false);
+  readonly selected = signal<ViewerItem | null>(null);
+  readonly query = signal('');
+  readonly kindFilter = signal<ItemKind | ''>('');
+  readonly stage = signal<Stage>('empty');
+  readonly preview = signal<Preview | null>(null);
+  readonly stageError = signal('');
+  readonly stageNote = signal('');
+  readonly message = signal('');
+  readonly messageError = signal(false);
+  readonly openMenu = signal<string | null>(null);
+  readonly canBack = signal(false);
+  readonly canForward = signal(false);
+
+  // Texture / image previews.
+  readonly imageUrl = signal('');
+  readonly imageSize = signal<[number, number]>([0, 0]);
+  readonly zoom = signal<'fit' | 1 | 2 | 4>('fit');
+  // Sound previews.
+  readonly audioUrl = signal('');
+  readonly rate = signal(22050);
+  // Movies: the converted MP4 the player streams, and a conversion in progress.
+  readonly movieUrl = signal('');
+  readonly movieBusy = signal(false);
+  readonly movieNote = signal('');
+  // 3D previews.
+  readonly viewportKind = signal<ViewportKind | null>(null);
+  readonly shading = signal<Shading>('textured');
+  readonly lighting = signal<Lighting>('baked');
+  readonly modelInfo = signal('');
+  readonly mapProgress = signal('');
+  readonly mapShown = signal(false);
+  readonly characters = signal<ModelSummary[]>([]);
+  readonly character = signal('');
+  readonly clipPlaying = signal(false);
+  readonly clipTime = signal(0);
+  readonly clipDuration = signal(0);
+  // RDR trees: expanded paths.
+  readonly rdrOpen = signal<ReadonlySet<string>>(new Set(['']));
+
+  readonly shadings: Array<{ id: Shading; label: string }> = [
+    { id: 'textured', label: 'Textured' }, { id: 'solid', label: 'Solid' }, { id: 'wireframe', label: 'Wire' },
+  ];
+
+  readonly visibleItems = computed(() => {
+    const l = this.listing();
+    if (!l) { return []; }
+    const q = this.query().trim().toLowerCase();
+    const k = this.kindFilter();
+    return l.items.filter(i => (!k || i.kind === k) && (!q || i.name.toLowerCase().includes(q) || (i.detail ?? '').toLowerCase().includes(q)));
+  });
+
+  readonly kinds = computed(() => {
+    const counts = new Map<ItemKind, number>();
+    for (const i of this.listing()?.items ?? []) { counts.set(i.kind, (counts.get(i.kind) ?? 0) + 1); }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([kind, count]) => ({ kind, count }));
+  });
+
+  readonly menus: Menu[] = [
+    {
+      id: 'file', label: 'File', items: [
+        { label: 'Open folder…', action: () => void this.openFolder(), shortcut: 'Ctrl+O' },
+        { label: 'Open file…', action: () => void this.openFile() },
+        { label: '', separator: true },
+        { label: 'Extract selected…', action: () => void this.extractSelected(), disabled: () => !this.canExtract(this.selected()) },
+        { label: 'Import into this archive…', action: () => void this.importHere(), disabled: () => !this.canImportHere() },
+        { label: 'Replace selected…', action: () => void this.replaceSelected(), disabled: () => !this.canEdit(this.selected()) },
+        { label: 'Remove selected', action: () => void this.removeSelected(), disabled: () => !this.canEdit(this.selected()) },
+        { label: '', separator: true },
+        { label: 'Copy path', action: () => void this.copyPath(), disabled: () => !this.listing() },
+        { label: 'Reload', action: () => void this.reload(), shortcut: 'F5', disabled: () => !this.listing() },
+      ],
+    },
+    {
+      id: 'go', label: 'Go', items: [
+        { label: 'Back', action: () => void this.back(), shortcut: 'Alt+Left', disabled: () => !this.canBack() },
+        { label: 'Forward', action: () => void this.forward(), shortcut: 'Alt+Right', disabled: () => !this.canForward() },
+        { label: 'Up one level', action: () => void this.up(), shortcut: 'Backspace', disabled: () => !this.parentPlace() },
+        { label: '', separator: true },
+        { label: 'Open selected', action: () => { const s = this.selected(); if (s) { void this.activate(s); } }, shortcut: 'Enter', disabled: () => !this.selected() },
+      ],
+    },
+    {
+      id: 'editors', label: 'Editors', items: [
+        { label: 'Open in Map Builder', action: () => this.openInMap(), disabled: () => !this.mapPackage() },
+        { label: 'Open in Model Editor', action: () => this.openInModelEditor(), disabled: () => !this.modelEditorTarget() },
+        { label: 'Open in Animation Editor', action: () => this.openInAnimationEditor(), disabled: () => !this.animationTarget() },
+      ],
+    },
+  ];
+
+  private history: Place[] = [];
+  private future: Place[] = [];
+  private canvases: Partial<Record<ViewportKind, HTMLCanvasElement>> = {};
+  private modelVp: EditorViewport | null = null;
+  private mapVp: MapViewport | null = null;
+  private animVp: AnimViewport | null = null;
+  private clients = new Map<string, { client: AssetClient; textures: TextureCache }>();
+  private previewSeq = 0;
+  private listSeq = 0;
+  private wav: string | null = null;
+  private png: string | null = null;
+  private clipTimer = 0;
+  private readonly keyHandler = (e: KeyboardEvent) => this.onKey(e);
+
+  mount(): void {
+    window.addEventListener('keydown', this.keyHandler);
+    this.clipTimer = window.setInterval(() => {
+      if (this.animVp && this.viewportKind() === 'clip') { this.clipTime.set(this.animVp.time); this.clipPlaying.set(this.animVp.playing); }
+    }, 100);
+    const last = loadPlace();
+    if (last) { void this.navigate(last, true).catch(() => this.navigate({ path: last.path.replace(/[\\/][^\\/]*$/, '') || last.path, inner: [] }, true).catch(() => undefined)); }
+  }
+
+  dispose(): void {
+    window.removeEventListener('keydown', this.keyHandler);
+    window.clearInterval(this.clipTimer);
+    this.revokeUrls();
+    this.modelVp?.dispose();
+    this.mapVp?.dispose();
+    this.animVp?.dispose();
+  }
+
+  attachCanvas(kind: ViewportKind, canvas: HTMLCanvasElement | null): void {
+    if (canvas) { this.canvases[kind] = canvas; }
+  }
+
+  // ------------------------------------------------------------------ navigation
+
+  async navigate(place: Place, replace = false): Promise<void> {
+    const seq = ++this.listSeq;
+    this.listBusy.set(true);
+    try {
+      const listing = await api.list(place);
+      if (seq !== this.listSeq) { return; }
+      const current = this.listing();
+      if (current && !replace && !api.samePlace(current, listing)) { this.history.push({ path: current.path, inner: current.inner }); this.future = []; }
+      this.listing.set(listing);
+      this.query.set('');
+      this.kindFilter.set('');
+      this.selected.set(null);
+      this.syncHistory();
+      savePlace(listing);
+      if (listing.kind === 'folder') { rememberFolder('viewer', listing.path); }
+      this.say(`${listing.name}: ${listing.items.length} item${listing.items.length === 1 ? '' : 's'}`);
+      await this.showPreview(null);
+    } catch (err) {
+      if (seq === this.listSeq) { this.say(`${fileName(place.path)}: ${errText(err)}`, true); }
+      throw err;
+    } finally {
+      if (seq === this.listSeq) { this.listBusy.set(false); }
+    }
+  }
+
+  private syncHistory(): void { this.canBack.set(this.history.length > 0); this.canForward.set(this.future.length > 0); }
+
+  async back(): Promise<void> {
+    const to = this.history.pop();
+    const cur = this.listing();
+    if (!to) { return; }
+    if (cur) { this.future.push({ path: cur.path, inner: cur.inner }); }
+    await this.navigate(to, true).catch(() => undefined);
+    this.syncHistory();
+  }
+
+  async forward(): Promise<void> {
+    const to = this.future.pop();
+    const cur = this.listing();
+    if (!to) { return; }
+    if (cur) { this.history.push({ path: cur.path, inner: cur.inner }); }
+    await this.navigate(to, true).catch(() => undefined);
+    this.syncHistory();
+  }
+
+  parentPlace(): Place | null {
+    const crumbs = this.listing()?.crumbs ?? [];
+    return crumbs.length >= 2 ? crumbs[crumbs.length - 2] : null;
+  }
+
+  async up(): Promise<void> {
+    const parent = this.parentPlace();
+    const here = this.listing();
+    if (!parent || !here) { return; }
+    await this.navigate(parent).catch(() => undefined);
+    // Land on the place we came from.
+    const back = this.listing()?.items.find(i => api.samePlace(i, here) || (i.kind === 'folder' && i.path.toLowerCase() === here.path.toLowerCase()));
+    if (back) { void this.select(back); }
+  }
+
+  async reload(): Promise<void> {
+    const l = this.listing();
+    const sel = this.selected();
+    if (!l) { return; }
+    await this.navigate(l, true).catch(() => undefined);
+    const again = sel && this.listing()?.items.find(i => api.placeKey(i, i.ref) === api.placeKey(sel, sel.ref));
+    if (again) { void this.select(again); }
+  }
+
+  async openFolder(): Promise<void> {
+    const picked = await host.browse({ mode: 'folder', title: 'Browse a folder in the Asset Viewer', start: this.listing()?.path || rememberedFolder('viewer') || undefined, key: 'viewer', submitLabel: 'Browse' });
+    if (picked) { await this.navigate({ path: picked, inner: [] }).catch(() => undefined); }
+  }
+
+  async openFile(): Promise<void> {
+    const picked = await host.browse({ mode: 'open', title: 'Open in the Asset Viewer', start: this.listing()?.path || rememberedFolder('viewer') || undefined, key: 'viewer', submitLabel: 'Open', allowFolder: true });
+    if (picked) { await this.openPath(picked); }
+  }
+
+  /** Opens a path from outside (the file browser, another page, the AI): archives open, other files are selected in their folder. */
+  async openPath(path: string): Promise<void> {
+    try {
+      await this.navigate({ path, inner: [] });
+    } catch {
+      const dir = path.replace(/[\\/][^\\/]*$/, '');
+      await this.navigate({ path: dir, inner: [] }).catch(() => undefined);
+      const item = this.listing()?.items.find(i => i.path.toLowerCase() === path.toLowerCase());
+      if (item) { await this.select(item); }
+    }
+  }
+
+  isBrowsable(item: ViewerItem | null): boolean {
+    // Records named like archives that hold none (UI/DBUFFER.ZAR) come back as data; models etc. are leaves.
+    return !!item && !item.ref && BROWSABLE.has(item.kind);
+  }
+
+  async activate(item: ViewerItem): Promise<void> {
+    if (this.isBrowsable(item)) { await this.navigate(item).catch(() => undefined); return; }
+    if (item.kind === 'model') { this.openInModelEditor(item); return; }
+    if (item.kind === 'clip') { this.toggleClip(); }
+  }
+
+  // ------------------------------------------------------------------ selection and previews
+
+  async select(item: ViewerItem | null): Promise<void> {
+    if (item && this.selected() && api.placeKey(item, item.ref) === api.placeKey(this.selected()!, this.selected()!.ref)) { return; }
+    this.selected.set(item);
+    await this.showPreview(item);
+  }
+
+  moveSelection(delta: number): void {
+    const items = this.visibleItems();
+    if (!items.length) { return; }
+    const sel = this.selected();
+    const at = sel ? items.findIndex(i => api.placeKey(i, i.ref) === api.placeKey(sel, sel.ref)) : -1;
+    const next = items[Math.max(0, Math.min(items.length - 1, at < 0 ? 0 : at + delta))];
+    void this.select(next);
+  }
+
+  private async showPreview(item: ViewerItem | null): Promise<void> {
+    const seq = ++this.previewSeq;
+    const live = () => seq === this.previewSeq;
+    this.stageError.set('');
+    this.stageNote.set('');
+    this.mapShown.set(false);
+    this.mapProgress.set('');
+    this.pauseClip();
+    const l = this.listing();
+    // Nothing selected: the place itself (a package's summary and map, an archive's summary).
+    const target: ViewerItem | null = item ?? (l && l.kind !== 'folder' ? { path: l.path, inner: l.inner, name: l.name, kind: l.kind, size: l.size } : null);
+    if (!target) { this.setStage('empty', null); return; }
+    this.stage.set('loading');
+    try {
+      if (target.ref && l?.session) {
+        if (target.kind === 'model') { await this.previewModel(l.session, target, live); return; }
+        if (target.kind === 'texture') { await this.previewTexture(l.session, target, live); return; }
+        if (target.kind === 'clip') { await this.previewClip(l.session, target, live); return; }
+        if (target.kind === 'palette') {
+          const p = await api.palette(l.session, target.ref.archive!, target.ref.id!);
+          if (live()) { this.setStage('palette', p); }
+          return;
+        }
+      }
+      const p = await api.preview(target, { rate: this.rate() });
+      if (!live()) { return; }
+      await this.showRawPreview(p, live);
+    } catch (err) {
+      if (!live()) { return; }
+      this.setStage('error', null);
+      this.stageError.set(errText(err));
+    }
+  }
+
+  private async showRawPreview(p: Preview, live: () => boolean): Promise<void> {
+    switch (p.type) {
+      case 'image':
+        this.setImage(p.png, p.width, p.height);
+        this.setStage('image', p);
+        return;
+      case 'icon': {
+        const mesh = decodeMesh(p.mesh as MeshWire);
+        const pixels: Record<string, ModelTexturePixels> = {};
+        if (p.png) {
+          const { width, height, rgba } = await pngToRgba(p.png);
+          // Black texels are see-through (CodeDesigner's icon renderer discards alpha below 0.05).
+          pixels.icon = { width, height, rgba, wrapS: 'clamp', wrapT: 'clamp', alphaTest: 0.05, hasTransparency: rgba.some((v, i) => i % 4 === 3 && v === 0) };
+          this.png = p.png;
+        }
+        if (!live()) { return; }
+        this.setStage('model', p);
+        this.showMesh(mesh, pixels, `${mesh.chunks[0]?.triangles.length / 3 | 0} triangles`);
+        return;
+      }
+      case 'audio':
+        this.setAudio(p.wav);
+        this.setStage('audio', p);
+        return;
+      case 'package':
+        this.setStage('summary', p);
+        return;
+      case 'movie':
+        this.movieUrl.set(p.url ?? '');
+        this.movieNote.set('');
+        this.setStage('movie', p);
+        return;
+      case 'rdr': this.rdrOpen.set(new Set([''])); this.setStage('rdr', p); return;
+      case 'mps': this.setStage('mps', p); return;
+      case 'text': this.setStage('text', p); return;
+      case 'hex': this.setStage('hex', p); if (p.note) { this.stageNote.set(p.note); } return;
+      case 'program': this.setStage('program', p); return;
+      case 'palette': this.setStage('palette', p); return;
+      default: this.setStage('summary', p);
+    }
+  }
+
+  private setStage(stage: Stage, p: Preview | null): void {
+    if (stage !== 'image') { this.png = stage === 'model' && p?.type === 'icon' ? this.png : null; }
+    if (stage !== 'audio') { this.setAudio(null); }
+    this.preview.set(p);
+    this.stage.set(stage);
+    this.viewportKind.set(stage === 'model' ? 'model' : stage === 'map' ? 'map' : stage === 'clip' ? 'clip' : null);
+  }
+
+  private clientFor(session: string): { client: AssetClient; textures: TextureCache } {
+    let hit = this.clients.get(session);
+    if (!hit) {
+      const client = new AssetClient();
+      client.session = session;
+      hit = { client, textures: new TextureCache(client) };
+      this.clients.set(session, hit);
+    }
+    return hit;
+  }
+
+  private async meshWithTextures(session: string, archive: string, name: string): Promise<{ mesh: EditorMesh; pixels: Record<string, ModelTexturePixels>; missing: string[] }> {
+    const { client, textures } = this.clientFor(session);
+    const wire = await client.mesh(archive, name) as MeshWire;
+    const mesh = decodeMesh(wire);
+    const ns = wire.textureNamespace ?? null;
+    const pixels: Record<string, ModelTexturePixels> = {};
+    const missing: string[] = [];
+    await Promise.all([...new Set(mesh.chunks.map(c => c.texture).filter((t): t is string => !!t))].map(async n => {
+      const p = await textures.get(n, ns);
+      if (p) { pixels[n.toLowerCase()] = p; } else { missing.push(n); }
+    }));
+    return { mesh, pixels, missing };
+  }
+
+  private async previewModel(session: string, item: ViewerItem, live: () => boolean): Promise<void> {
+    const { mesh, pixels, missing } = await this.meshWithTextures(session, item.ref!.archive!, item.ref!.name!);
+    if (!live()) { return; }
+    const tris = mesh.chunks.reduce((n, c) => n + c.triangles.length / 3, 0);
+    const verts = mesh.chunks.reduce((n, c) => n + c.vertexCount, 0);
+    const visuals = new Set(mesh.chunks.map(c => c.visual ?? '')).size;
+    const facts: api.Fact[] = [
+      ['Kind', item.ref?.modelKind ?? 'model'], ['Archive', item.ref!.archive!], ['Chunks', String(mesh.chunks.length)],
+      ['Visuals', String(visuals)], ['Vertices', verts.toLocaleString()], ['Triangles', tris.toLocaleString()],
+      ['Textures', `${Object.keys(pixels).length} bound${missing.length ? `, ${missing.length} missing` : ''}`],
+    ];
+    if (mesh.skeleton) { facts.push(['Skeleton', `${mesh.skeleton.length} bones`]); }
+    this.setStage('model', { type: 'info', name: item.name, facts });
+    if (missing.length) { this.stageNote.set(`Missing textures: ${missing.join(', ')}`); }
+    this.showMesh(mesh, pixels, `${verts.toLocaleString()} vertices · ${tris.toLocaleString()} triangles`);
+  }
+
+  private async previewTexture(session: string, item: ViewerItem, live: () => boolean): Promise<void> {
+    const { client } = this.clientFor(session);
+    const { info, png } = await client.texture(item.ref!.name!, item.ref!.archive ?? item.ref!.namespace);
+    if (!live()) { return; }
+    const facts: api.Fact[] = [
+      ['Size', `${info.width}×${info.height}`], ['Format', `${PSM[info.psm ?? ''] ?? info.psm ?? ''} (${info.bpp ?? '?'}-bit)`],
+      ['Palette', info.palette === null || info.palette === undefined ? 'none (direct colour)' : `texpal_${info.palette}${info.paletteResolved ? '' : ' (not found)'}`],
+      ['Transparency', info.hasTransparency ? (info.alphaBlend ? 'blended' : 'alpha tested') : 'opaque'],
+      ['Wrap', info.clamp ? `${info.clamp[0] ? 'clamp' : 'repeat'} / ${info.clamp[1] ? 'clamp' : 'repeat'}` : 'repeat'],
+      ['Archive', item.ref!.archive ?? ''],
+    ];
+    this.setImage(png, info.width ?? 0, info.height ?? 0);
+    this.setStage('image', { type: 'info', name: item.name, facts });
+  }
+
+  private async previewClip(session: string, item: ViewerItem, live: () => boolean): Promise<void> {
+    const { client } = this.clientFor(session);
+    if (!this.characters().length || this.charactersSession !== session) {
+      this.charactersSession = session;
+      const chars = (await client.listModels({ kind: 'character' })).sort((a, b) => a.name.localeCompare(b.name));
+      this.characters.set(chars);
+      const pick = chars.find(m => /seal|ally|sniper|player/i.test(m.name)) ?? chars[0];
+      this.character.set(pick ? `${pick.archive}:${pick.name}` : '');
+      this.loadedCharacter = '';
+    }
+    const clip = await client.animation(item.ref!.name!, item.ref!.source) as ClipData;
+    if (!live()) { return; }
+    const facts: api.Fact[] = [
+      ['Source', clip.source], ['Length', `${clip.duration.toFixed(2)} s`], ['Frames', `${clip.frames} (${clip.samples} samples)`],
+      ['Rate', `${clip.fps} fps`], ['Bones', String(clip.bones.length)], ['Editable', clip.editable ? 'yes (the package\'s own)' : 'no (shared MOTION_P.ZAR)'],
+    ];
+    this.setStage('clip', { type: 'info', name: item.name, facts });
+    const vp = this.ensureViewport('clip') as AnimViewport;
+    await this.loadCharacter(session, live);
+    if (!live()) { return; }
+    vp.setClip(clip);
+    vp.setTime(0);
+    vp.playing = true;
+    this.clipDuration.set(clip.duration);
+    this.clipPlaying.set(true);
+    this.modelInfo.set(`${item.name} on ${this.character().split(':')[1] ?? 'no character'}`);
+  }
+
+  private charactersSession = '';
+  private loadedCharacter = '';
+
+  private async loadCharacter(session: string, live: () => boolean): Promise<void> {
+    const key = this.character();
+    const vp = this.ensureViewport('clip') as AnimViewport;
+    if (!key) { this.stageNote.set('This package has no character to play the clip on; the skeleton is drawn alone.'); return; }
+    if (key === this.loadedCharacter) { return; }
+    const cut = key.indexOf(':');
+    const { mesh, pixels } = await this.meshWithTextures(session, key.slice(0, cut), key.slice(cut + 1));
+    if (!live()) { return; }
+    vp.setCharacter(mesh, pixels, !!this.loadedCharacter);
+    if (!this.loadedCharacter) { vp.frameCharacter(); }
+    this.loadedCharacter = key;
+  }
+
+  async pickCharacter(key: string): Promise<void> {
+    this.character.set(key);
+    const l = this.listing();
+    const sel = this.selected();
+    if (!l?.session || sel?.kind !== 'clip') { return; }
+    const seq = this.previewSeq;
+    await this.loadCharacter(l.session, () => seq === this.previewSeq);
+  }
+
+  toggleClip(): void {
+    if (!this.animVp || this.viewportKind() !== 'clip') { return; }
+    this.animVp.playing = !this.animVp.playing;
+    this.clipPlaying.set(this.animVp.playing);
+  }
+
+  scrubClip(t: number): void {
+    if (!this.animVp) { return; }
+    this.animVp.playing = false;
+    this.animVp.setTime(t);
+    this.clipPlaying.set(false);
+    this.clipTime.set(t);
+  }
+
+  private pauseClip(): void { if (this.animVp) { this.animVp.playing = false; } }
+
+  /** Draws the package's composed map (the Map Builder's scene) in the preview. */
+  async showMap(): Promise<void> {
+    const p = this.preview();
+    if (p?.type !== 'package' || !p.hasMap) { return; }
+    const seq = this.previewSeq;
+    const live = () => seq === this.previewSeq;
+    const { client, textures } = this.clientFor(p.session);
+    try {
+      this.mapProgress.set('Reading map scene…');
+      const [scene, pts] = await Promise.all([client.mapScene(), client.mapPoints().catch(() => ({ points: [] }))]);
+      const meshes = new Map<string, MapModel>();
+      const pixels: Record<string, ModelTexturePixels> = {};
+      const failed = await loadMapModels(client, textures, scene.instances.map(i => i.source).filter((s): s is string => !!s), meshes, pixels,
+        (done, total) => { if (live()) { this.mapProgress.set(`Loading models ${done}/${total}…`); } });
+      if (!live()) { return; }
+      this.viewportKind.set('map');
+      this.stage.set('map');
+      const vp = this.ensureViewport('map') as MapViewport;
+      vp.editable = false;
+      vp.setScene(scene.instances, meshes, pixels, pts.points, false);
+      vp.frameAll();
+      this.mapShown.set(true);
+      this.modelInfo.set(`${scene.sceneNamespace.toUpperCase()} — ${scene.instances.length.toLocaleString()} instances · ${pts.points.length} points`);
+      if (failed.length) { this.stageNote.set(`${failed.length} model(s) not drawn: ${failed.slice(0, 3).join('; ')}${failed.length > 3 ? '; …' : ''}`); }
+    } catch (err) {
+      if (live()) { this.stageNote.set(`Map could not be loaded: ${errText(err)}`); }
+    } finally {
+      if (live()) { this.mapProgress.set(''); }
+    }
+  }
+
+  hideMap(): void {
+    if (this.stage() !== 'map') { return; }
+    this.mapShown.set(false);
+    this.stage.set('summary');
+    this.viewportKind.set(null);
+  }
+
+  async pickSample(index: number): Promise<void> {
+    const target = this.selected() ?? this.locationItem();
+    if (!target) { return; }
+    const seq = ++this.previewSeq;
+    try {
+      const p = await api.preview(target, { sample: index, rate: this.rate() });
+      if (seq !== this.previewSeq || p.type !== 'audio') { return; }
+      this.setAudio(p.wav, true);
+      this.preview.set(p);
+    } catch (err) { this.say(errText(err), true); }
+  }
+
+  async setRate(rate: number): Promise<void> {
+    this.rate.set(rate);
+    const p = this.preview();
+    if (p?.type === 'audio' && p.samples) { await this.pickSample(p.sample ?? 0); }
+  }
+
+  /** Converts the selected .PSS to MP4 with the server's ffmpeg (a minute or so for a long movie), then plays it. */
+  async convertMovie(): Promise<void> {
+    const item = this.selected();
+    if (!item || item.kind !== 'movie' || this.movieBusy()) { return; }
+    const seq = this.previewSeq;
+    this.movieBusy.set(true);
+    this.say(`Converting ${item.name}…`);
+    try {
+      const r = await api.convertMovie(item.path);
+      if (seq !== this.previewSeq) { return; }
+      this.movieUrl.set(r.url);
+      this.movieNote.set(r.silent ? 'This movie has no sound track the viewer reads; the picture plays without sound.' : '');
+      this.say(`${item.name} converted (${formatBytes(r.size)} MP4, kept for next time).`);
+    } catch (err) {
+      if (seq === this.previewSeq) { this.movieNote.set(errText(err)); this.say(`${item.name}: ${errText(err)}`, true); }
+    } finally {
+      this.movieBusy.set(false);
+    }
+  }
+
+  private locationItem(): ViewerItem | null {
+    const l = this.listing();
+    return l ? { path: l.path, inner: l.inner, name: l.name, kind: l.kind, size: l.size } : null;
+  }
+
+  // ------------------------------------------------------------------ viewports
+
+  private ensureViewport(kind: ViewportKind): ViewportCore {
+    const canvas = this.canvases[kind];
+    if (!canvas) { throw new Error('The preview is not ready yet'); }
+    if (kind === 'model') { return this.modelVp ??= this.styled(new EditorViewport(canvas)); }
+    if (kind === 'map') { return this.mapVp ??= this.styled(new MapViewport(canvas)); }
+    return this.animVp ??= this.styled(new AnimViewport(canvas));
+  }
+
+  private styled<T extends ViewportCore>(vp: T): T {
+    vp.shading = this.shading();
+    vp.setLighting(this.lighting());
+    return vp;
+  }
+
+  private showMesh(mesh: EditorMesh, pixels: Record<string, ModelTexturePixels>, info: string): void {
+    const vp = this.ensureViewport('model') as EditorViewport;
+    vp.setBackfaces(this.selected()?.kind === 'icon');
+    vp.setMesh(mesh, pixels, false);
+    vp.setView('iso');
+    vp.frameAll();
+    this.modelInfo.set(info);
+  }
+
+  private activeViewport(): ViewportCore | null {
+    const k = this.viewportKind();
+    return k === 'model' ? this.modelVp : k === 'map' ? this.mapVp : k === 'clip' ? this.animVp : null;
+  }
+
+  setShading(s: Shading): void {
+    this.shading.set(s);
+    for (const vp of [this.modelVp, this.mapVp, this.animVp]) { if (vp) { vp.shading = s; } }
+  }
+
+  setLighting(l: Lighting): void {
+    this.lighting.set(l);
+    for (const vp of [this.modelVp, this.mapVp, this.animVp]) { vp?.setLighting(l); }
+  }
+
+  view(preset: ViewPreset): void {
+    const vp = this.activeViewport();
+    if (!vp) { return; }
+    vp.setView(preset);
+    this.frame();
+  }
+
+  frame(): void {
+    const k = this.viewportKind();
+    if (k === 'model') { this.modelVp?.frameAll(); } else if (k === 'map') { this.mapVp?.frameAll(); } else if (k === 'clip') { this.animVp?.frameCharacter(); }
+  }
+
+  // ------------------------------------------------------------------ media
+
+  private revokeUrls(): void {
+    if (this.audioUrl()) { URL.revokeObjectURL(this.audioUrl()); }
+    if (this.imageUrl()) { URL.revokeObjectURL(this.imageUrl()); }
+  }
+
+  private setImage(png: string, w: number, h: number): void {
+    if (this.imageUrl()) { URL.revokeObjectURL(this.imageUrl()); }
+    this.png = png;
+    this.imageUrl.set(URL.createObjectURL(new Blob([base64Bytes(png)], { type: 'image/png' })));
+    this.imageSize.set([w, h]);
+  }
+
+  private setAudio(wav: string | null, keepIfSame = false): void {
+    if (keepIfSame && wav === this.wav) { return; }
+    if (this.audioUrl()) { URL.revokeObjectURL(this.audioUrl()); }
+    this.wav = wav;
+    this.audioUrl.set(wav ? URL.createObjectURL(new Blob([base64Bytes(wav)], { type: 'audio/wav' })) : '');
+  }
+
+  canExportImage(): boolean { return !!this.png && (this.stage() === 'image' || this.stage() === 'model'); }
+  canExportAudio(): boolean { return !!this.wav && this.stage() === 'audio'; }
+
+  exportImage(): void {
+    if (!this.png) { return; }
+    const name = (this.selected()?.name ?? this.listing()?.name ?? 'image').replace(/\.[^.]+$/, '');
+    const where = host.saveFile(`${name}.png`, { base64: this.png }, 'image/png');
+    this.say(`Saved ${where}`);
+  }
+
+  exportAudio(): void {
+    if (!this.wav) { return; }
+    const p = this.preview();
+    const base = (this.selected()?.name ?? this.listing()?.name ?? 'sound').replace(/\.[^.]+$/, '');
+    const name = p?.type === 'audio' && p.samples ? `${base}_${(p.sample ?? 0) + 1}` : base;
+    const where = host.saveFile(`${name}.wav`, { base64: this.wav }, 'audio/wav');
+    this.say(`Saved ${where}`);
+  }
+
+  // ------------------------------------------------------------------ editors
+
+  /** The package to open in the Map Builder: a .ZDB / .CDB listed or selected, when it has a map. */
+  mapPackage(): string | null {
+    const p = this.preview();
+    if (p?.type === 'package' && p.hasMap) { return p.package; }
+    return null;
+  }
+
+  modelEditorTarget(item: ViewerItem | null = this.selected()): { path: string; model?: { archive: string; name: string } } | null {
+    const l = this.listing();
+    if (!l) { return null; }
+    if (item?.kind === 'model' && item.ref && l.package) { return { path: l.package, model: { archive: item.ref.archive!, name: item.ref.name! } }; }
+    if ((l.kind === 'models' || l.kind === 'geo' || l.kind === 'textures') && l.package) { return { path: l.package }; }
+    const p = this.preview();
+    if (p?.type === 'package' && p.models > 0) { return { path: p.package }; }
+    return null;
+  }
+
+  animationTarget(): string | null {
+    const l = this.listing();
+    if (l?.kind === 'clips' && l.package) { return l.package; }
+    const p = this.preview();
+    return p?.type === 'package' && p.characters > 0 ? p.package : null;
+  }
+
+  openInMap(): void { const p = this.mapPackage(); if (p) { host.open('map', p); } }
+
+  openInModelEditor(item: ViewerItem | null = this.selected()): void {
+    const t = this.modelEditorTarget(item);
+    if (t) { host.open('models', t.path, t.model); }
+  }
+
+  openInAnimationEditor(): void { const p = this.animationTarget(); if (p) { host.open('animations', p); } }
+
+  // ------------------------------------------------------------------ extract / import / replace / remove
+
+  canExtract(item: ViewerItem | null): boolean { return !!item && !item.ref && item.inner.length > 0; }
+
+  async extractSelected(): Promise<void> {
+    const item = this.selected();
+    if (!item || !this.canExtract(item)) { return; }
+    const safe = item.name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_') || 'entry.bin';
+    const target = await host.browse({ mode: 'save', title: `Extract ${item.name}`, fileName: safe, key: 'extract', submitLabel: 'Extract' });
+    if (!target) { return; }
+    try {
+      const r = await api.extract(item, target);
+      this.say(`Extracted ${item.name} (${formatBytes(r.size)}) → ${r.written}`);
+    } catch (err) { this.say(`Extract: ${errText(err)}`, true); }
+  }
+
+  // Records the viewer can change on disk with PACKAGE_EDIT: a package's files and the records of archives (raw
+  // listings only; models, textures and clips are edited in the editors).
+  canEdit(item: ViewerItem | null): boolean {
+    const l = this.listing();
+    return !!item && !!l && !item.ref && item.inner.length > 0 && !l.session?.startsWith('ca') && this.editChain(item.inner.slice(0, -1)) !== null;
+  }
+
+  canImportHere(): boolean {
+    const l = this.listing();
+    return !!l && l.kind !== 'folder' && !l.items.some(i => i.ref) && this.editChain(l.inner) !== null;
+  }
+
+  // The PACKAGE_EDIT "inside" chain for the archive at `inner` (null: not editable): in a package, the root entry's
+  // path then {name, index} per nested record; in a loose .ZED / .ZAR, only the records.
+  private editChain(inner: number[]): unknown[] | null {
+    const l = this.listing();
+    if (!l) { return null; }
+    const pkg = isPackagePath(l.path);
+    if (!pkg && !/\.(zed|zar)$/i.test(l.path)) { return null; }
+    const crumbs = l.crumbs.filter(c => c.path.toLowerCase() === l.path.toLowerCase() && c.inner.length > 0);
+    const chain: unknown[] = [];
+    for (let k = 0; k < inner.length; k++) {
+      const crumb = crumbs.find(c => c.inner.length === k + 1);
+      if (!crumb) { return null; }
+      if (pkg && k === 0) { if (!crumb.entryPath) { return null; } chain.push(crumb.entryPath); } else { chain.push({ name: crumb.label, index: inner[k] }); }
+    }
+    return chain;
+  }
+
+  private async runEdit(label: string, ops: unknown[]): Promise<void> {
+    const l = this.listing();
+    if (!l) { return; }
+    const ext = (/\.[^.\\/]+$/.exec(l.path)?.[0] ?? '.zdb').slice(1);
+    const target = await host.browse({ mode: 'save', title: `${label}: save as`, filters: [{ label: `${ext.toUpperCase()} file`, extensions: [ext] }], start: l.path.replace(/[\\/][^\\/]*$/, ''), fileName: fileName(l.path), key: 'save', submitLabel: 'Save' });
+    if (!target) { return; }
+    try {
+      this.say(`${label}…`);
+      const r = await api.packageEdit(l.path, target, ops);
+      const parts = [r.added.length ? `added ${r.added.join(', ')}` : '', r.replaced.length ? `replaced ${r.replaced.join(', ')}` : '', r.removed.length ? `removed ${r.removed.join(', ')}` : ''].filter(Boolean).join('; ');
+      await this.navigate({ path: r.written, inner: l.inner }, true).catch(() => this.navigate({ path: r.written, inner: [] }, true));
+      this.say(`${label}: ${parts || 'no change'} → ${r.written}`);
+    } catch (err) { this.say(`${label}: ${errText(err)}`, true); }
+  }
+
+  private recordOp(item: ViewerItem, op: 'replace' | 'remove', file?: string): unknown | null {
+    const l = this.listing();
+    if (!l) { return null; }
+    if (isPackagePath(l.path) && item.inner.length === 1) {
+      return item.entryPath ? { op, path: item.entryPath, ...(file ? { file } : {}) } : null;
+    }
+    const inside = this.editChain(item.inner.slice(0, -1));
+    return inside ? { op, inside, index: item.inner[item.inner.length - 1], name: item.name, ...(file ? { file } : {}) } : null;
+  }
+
+  async replaceSelected(): Promise<void> {
+    const item = this.selected();
+    if (!item || !this.canEdit(item)) { return; }
+    const file = await host.browse({ mode: 'open', title: `Replace ${item.name} with…`, key: 'import', submitLabel: 'Replace' });
+    const op = file && this.recordOp(item, 'replace', file);
+    if (op) { await this.runEdit(`Replace ${item.name}`, [op]); }
+  }
+
+  async removeSelected(): Promise<void> {
+    const item = this.selected();
+    if (!item || !this.canEdit(item)) { return; }
+    const ok = window.confirm(`Remove ${item.name}? The archive is written to a file you choose next (the same file keeps a .bak).`);
+    const op = ok && this.recordOp(item, 'remove');
+    if (op) { await this.runEdit(`Remove ${item.name}`, [op]); }
+  }
+
+  async importHere(): Promise<void> {
+    const l = this.listing();
+    if (!l || !this.canImportHere()) { return; }
+    const file = await host.browse({ mode: 'open', title: `Import into ${l.name}`, key: 'import', submitLabel: 'Import' });
+    if (!file) { return; }
+    if (isPackagePath(l.path) && l.inner.length === 0) {
+      // Package files keep the folder their siblings have inside the package.
+      const sibling = l.items.find(i => i.entryPath)?.entryPath ?? '';
+      const dir = sibling.includes('\\') || sibling.includes('/') ? sibling.replace(/[\\/][^\\/]*$/, '') + '\\' : '';
+      await this.runEdit(`Import ${fileName(file)}`, [{ op: 'add', path: dir + fileName(file).toUpperCase(), file }]);
+      return;
+    }
+    const inside = this.editChain(l.inner);
+    if (inside) { await this.runEdit(`Import ${fileName(file)}`, [{ op: 'add', inside, name: fileName(file), file }]); }
+  }
+
+  async copyPath(): Promise<void> {
+    const l = this.listing();
+    if (!l) { return; }
+    const sel = this.selected();
+    const text = sel && sel.inner.length === 0 ? sel.path : [l.path, ...l.crumbs.filter(c => c.inner.length > 0).map(c => c.label), ...(sel ? [sel.name] : [])].join(' › ');
+    try { await navigator.clipboard.writeText(text); this.say(`Copied ${text}`); } catch { this.say(text); }
+  }
+
+  // ------------------------------------------------------------------ menus, keys, status
+
+  toggleMenu(id: string): void { this.openMenu.set(this.openMenu() === id ? null : id); }
+  hoverMenu(id: string): void { if (this.openMenu() && this.openMenu() !== id) { this.openMenu.set(id); } }
+  runMenu(item: MenuItem): void { this.openMenu.set(null); if (!item.disabled?.()) { item.action?.(); } }
+  closeMenusOutside(e: PointerEvent): void {
+    if (this.openMenu() && !(e.target instanceof Element && e.target.closest('.me-menu'))) { this.openMenu.set(null); }
+  }
+
+  private onKey(e: KeyboardEvent): void {
+    if (activePage() !== 'viewer' || modalOpen()) { return; }
+    const t = e.target as HTMLElement | null;
+    const typing = !!t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable);
+    // The 3D preview's own keys (W/A/S/D fly, F frame) belong to it while it has focus.
+    const inCanvas = t?.tagName === 'CANVAS';
+    let handled = true;
+    if (e.ctrlKey && e.key.toLowerCase() === 'o') { void this.openFolder(); }
+    else if (e.key === 'F5') { void this.reload(); }
+    else if (e.altKey && e.key === 'ArrowLeft') { void this.back(); }
+    else if (e.altKey && e.key === 'ArrowRight') { void this.forward(); }
+    else if (typing || inCanvas) { handled = false; }
+    else if (e.key === 'Backspace') { void this.up(); }
+    else if (e.key === 'ArrowDown') { this.moveSelection(1); }
+    else if (e.key === 'ArrowUp') { this.moveSelection(-1); }
+    else if (e.key === 'PageDown') { this.moveSelection(15); }
+    else if (e.key === 'PageUp') { this.moveSelection(-15); }
+    else if (e.key === 'Enter') { const s = this.selected(); if (s) { void this.activate(s); } }
+    else if (e.key === ' ' && this.viewportKind() === 'clip') { this.toggleClip(); }
+    else if (e.key === 'Escape') { this.openMenu.set(null); }
+    else { handled = false; }
+    if (handled) { e.preventDefault(); }
+  }
+
+  say(text: string, error = false): void { this.message.set(text); this.messageError.set(error); }
+}
+
+function base64Bytes(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) { out[i] = bin.charCodeAt(i); }
+  return out;
+}
+
+export function formatBytes(n: number): string {
+  if (n < 1024) { return `${n} B`; }
+  if (n < 1024 * 1024) { return `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`; }
+  if (n < 1024 * 1024 * 1024) { return `${(n / 1024 / 1024).toFixed(1)} MB`; }
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}

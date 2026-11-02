@@ -5,7 +5,7 @@
 // pages. The React view (AnimationEditorPage.tsx) renders it; signals come from the shared shim.
 
 import { activePage, computed, host, modalOpen, signal } from '../../shared';
-import type { ModelTexturePixels } from '../zipper-workbench/zed-model-renderer';
+import type { ModelTexturePixels } from '../zipper-core/texture-pixels';
 import type { Shading, ViewPreset } from '../zipper-core/viewport-core';
 import { AssetClient, type AnimationSummary, type FxNode, type ModelSummary, type SessionStatus, type WeaponSummary } from '../model-editor/asset-client';
 import { TextureCache } from '../model-editor/model-loader';
