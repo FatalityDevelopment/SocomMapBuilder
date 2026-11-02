@@ -246,9 +246,9 @@ namespace MapBuilder.Server.Services
 
         private static string? CheckArguments(Tool tool, JsonElement args) => CheckArguments(tool.Name, tool.InputSchema, args);
 
-        private static string? CheckValue(string name, Dictionary<string, object> p, JsonElement v)
+        internal static string? CheckValue(string name, Dictionary<string, object> p, JsonElement v)
         {
-            string type = (string)p["type"];
+            string type = p.TryGetValue("type", out var t) && t is string ts ? ts : "any";
             bool fits = type switch
             {
                 "string" => v.ValueKind == JsonValueKind.String,
@@ -584,7 +584,7 @@ namespace MapBuilder.Server.Services
                 "(the Map Builder frames the item, the Model Editor opens the model). dryRun: true checks the edit and answers what it " +
                 "would do (archives changed, new indices) without changing anything. Risk: changes the in-memory session only.",
                 false, Schema(new[] { "session" }, session,
-                    P("op", "object", "The edit: an object with \"op\" (see the description)."),
+                    ("op", EditOps.Schema()),
                     P("opJson", "string", "The same edit as JSON text (instead of op)."),
                     P("label", "string", "Optional undo label (defaults to a description of the op)."),
                     P("dryRun", "boolean", "Check the edit and report what it would do, changing nothing.")),
@@ -596,7 +596,7 @@ namespace MapBuilder.Server.Services
                         : JsonDocument.Parse(Str(a, "opJson") ?? throw new ArgumentException("\"op\" (an object) or \"opJson\" is required"));
                     op = parsed?.RootElement ?? o;
                     string json = op.GetRawText();
-                    if (op.ValueKind != JsonValueKind.Object || Str(op, "op") == null) throw new ArgumentException("\"op\" is an object with an \"op\" name (see the description)");
+                    if (EditOps.Check(op) is { } invalid) throw new ArgumentException(invalid);
                     bool dryRun = Bool(a, "dryRun");
                     if ((Str(a, "label") is { } label && !op.TryGetProperty("label", out _)) || dryRun)
                     {

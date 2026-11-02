@@ -22,7 +22,7 @@ The goal: people **and AI over MCP** can add, edit and delete every SOCOM asset 
 
 ## In progress / next up
 
-- **Now:** the Phase 2 leftovers: the `oneOf` op schema, prefabs, the `weapons_create` dry run, the Problems list in the Map tab.
+- **Now:** the Problems list in the Map tab, then the `weapons_create` dry run.
 - **Next:** a decodable synthetic mesh plus a TXR/PAL fixture, so the mesh, texture and import ops can be pinned.
 - Note for fixtures: a ZDB of **type 1** (header `0xC8`/`0x58`) is detected as SOCOM 3 / CA and opens read-only. SOCOM II packages are type 2.
 - Note for running tests while the app is open: `dotnet run` locks `server/bin/Debug`, so run `dotnet test tests/MapBuilder.Tests -c Release`.
@@ -67,7 +67,7 @@ The goal: people **and AI over MCP** can add, edit and delete every SOCOM asset 
 - [ ] Browser smoke: edit → undo → save-request flow. *Not done:* it needs the backend and the Vite dev server running; add it to `web/scripts/browser-smoke.cjs` next to `checkWorkflow`.
 
 ### Phase 2: MCP authoring
-- [~] Typed schemas: new helpers `E` (enum), `N` (number/integer bounds) and `A` (typed array items, min/max items); `additionalProperties:false` on every tool. Enums cover the map scene kind, the save mode, the ui_show page and the ui_view shading/lighting/backdrop/view/frame. *Left over:* `assets_edit.op` is still a free-form object. The next step is a `oneOf` per op generated from one op-spec table that also drives AssetService's validation.
+- [x] Typed schemas: helpers `E` (enum), `N` (number/integer bounds) and `A` (typed array items, min/max items); `additionalProperties:false` on every tool. Enums cover the map scene kind, the save mode, the ui_show page and the ui_view shading/lighting/backdrop/view/frame. `assets_edit.op` is a `oneOf` with one closed branch per op, generated from the op table in `server/Services/EditOps.cs`. The same table checks each op (and each op in a batch) before it runs: unknown fields (typos), missing required fields, wrong types, enums, ranges. Tests: `EditOpsSchemaTests`, including one that keeps the table and the `Edit` switch in AssetService.cs in step. **When you add an op, add it to `EditOps.All`.**
 - [x] Strict arguments: `McpServer.CheckArguments` runs before every tool and rejects unknown names, missing required values (a blank `reason` included), wrong types (an integer must be integral), enum misses, out-of-range numbers and bad array items. Tests: `AuthoringTests.Map_scene_arguments_are_checked` and `View_arguments_are_checked`. `web/scripts/browser-smoke.cjs` now passes `reason`.
 - [~] Dry run: `ASSET_EDIT {dryRun:true}` (batches too) runs the edit, then takes it back with the session's revision, dirty set and redo stack restored; `assets_edit` takes `dryRun`. `PACKAGE_EDIT` / `package_edit` take `DryRun` / `dryRun` and write nothing. Tests: `AuthoringTests.A_dry_run_*` and `Package_edit_dry_run_writes_nothing`. *Left over:* `weapons_create` dry run and making it atomic (it runs three commands).
 - [~] Safe responses: an over-long reply becomes valid JSON (`truncated`, `totalCharacters`, `hint`, `start`); `assets_map_scene` takes `offset` and answers `matched` / `offset` / `nextOffset` (test: `The_scene_pages_with_offset_and_next_offset`); `ui_screenshot maxSize` is limited to 64..2048. *Left over:* paging for `assets_model_mesh` arrays; no unit test for the truncation path.
