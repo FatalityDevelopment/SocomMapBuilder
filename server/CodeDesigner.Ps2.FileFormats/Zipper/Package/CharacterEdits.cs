@@ -127,6 +127,251 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             return result;
         }
 
+        /// <summary>Which vertices of a skinned mesh an edit takes: all, or those of a section, a texture and / or whose
+        /// heaviest bone is one of <see cref="Bones"/> (every given filter must match).</summary>
+        public sealed record Selection(IReadOnlySet<string>? Bones = null, string? Texture = null, int? Section = null);
+
+        // One vertex part as stored: the entry's offset in the payload and the bone it follows.
+        private readonly record struct Part(int Offset, CharacterSkeleton.Bone Bone, float Weight);
+
+        /// <summary>
+        /// The selected vertices' bind-pose positions (model space), per vertex its parts. A vertex is a draw group's
+        /// slot; its parts sit in the group's vertex batches.
+        /// </summary>
+        private static List<(float[] Position, float[] Normal, List<Part> Parts)> Vertices(byte[] payload, int start, CharacterSkeleton skeleton, Selection sel)
+        {
+            var list = new List<(float[], float[], List<Part>)>();
+            int count = (int)(BitConverter.ToUInt32(payload, start) & 0xFFFF);
+            int section = -1;
+            string texture = string.Empty;
+            bool matrixPending = false;
+            var slots = new SortedDictionary<int, List<Part>>();
+            for (int t = 1; t <= count; t++)
+            {
+                int o = start + t * 16;
+                uint lo = BitConverter.ToUInt32(payload, o);
+                int addr = BitConverter.ToInt32(payload, o + 4), qwc = (int)(lo & 0xFFFF);
+                if ((lo >> 28 & 7) == 1) { section++; texture = ReadName(payload, addr); continue; }
+                if (BitConverter.ToUInt32(payload, o + 8) == Stcycl101 && BitConverter.ToUInt32(payload, o + 12) == UnpackMatrix) { matrixPending = true; continue; }
+                if (addr < 0 || addr + qwc * 16 > payload.Length) continue;
+                if (matrixPending)
+                {
+                    matrixPending = false;
+                    int h = addr + 8;
+                    var bone = skeleton.ByMatrixId(BitConverter.ToInt16(payload, h + 4));
+                    int n = BitConverter.ToInt16(payload, h + 6);
+                    if (bone == null) continue;
+                    for (int i = 0; i < n && h + 8 + i * 16 + 16 <= addr + qwc * 16; i++)
+                    {
+                        int v = h + 8 + i * 16;
+                        int slot = BitConverter.ToInt16(payload, v + 6) / 2;
+                        if (!slots.TryGetValue(slot, out var parts)) slots[slot] = parts = new List<Part>();
+                        parts.Add(new Part(v, bone, BitConverter.ToInt16(payload, v + 14) / 32767f));
+                    }
+                    continue;
+                }
+                // A draw block closes the group.
+                bool inSection = (sel.Section == null || sel.Section == section) && (sel.Texture == null || sel.Texture.Equals(texture, StringComparison.OrdinalIgnoreCase));
+                foreach (var parts in slots.Values)
+                {
+                    if (!inSection || parts.Sum(p => p.Weight) <= 0) continue;
+                    if (sel.Bones != null && !sel.Bones.Contains(parts.MaxBy(p => p.Weight).Bone.Name)) continue;
+                    var pos = new float[3];
+                    var nrm = new float[3];
+                    foreach (var p in parts)
+                    {
+                        var w = p.Bone.World;
+                        float x = BitConverter.ToInt16(payload, p.Offset) / 4096f, y = BitConverter.ToInt16(payload, p.Offset + 2) / 4096f, z = BitConverter.ToInt16(payload, p.Offset + 4) / 4096f;
+                        float nx = BitConverter.ToInt16(payload, p.Offset + 8) / 32767f, ny = BitConverter.ToInt16(payload, p.Offset + 10) / 32767f, nz = BitConverter.ToInt16(payload, p.Offset + 12) / 32767f;
+                        var (wx, wy, wz) = Matrix4.Apply(w, x, y, z);
+                        pos[0] += p.Weight * wx; pos[1] += p.Weight * wy; pos[2] += p.Weight * wz;
+                        nrm[0] += p.Weight * (w[0] * nx + w[4] * ny + w[8] * nz);
+                        nrm[1] += p.Weight * (w[1] * nx + w[5] * ny + w[9] * nz);
+                        nrm[2] += p.Weight * (w[2] * nx + w[6] * ny + w[10] * nz);
+                    }
+                    list.Add((pos, nrm, parts));
+                }
+                slots = new SortedDictionary<int, List<Part>>();
+            }
+            return list;
+        }
+
+        /// <summary>The centre of the selected vertices' bounds (bind pose, model space), or null when none is selected.</summary>
+        public static float[]? SelectionCentre(ZipperPackage pkg, string archive, string modelName, Selection sel)
+        {
+            var (_, _, payload, start, skeleton) = Open(pkg, archive, modelName, null);
+            var verts = Vertices(payload, start, skeleton, sel);
+            if (verts.Count == 0) return null;
+            var min = new float[3]; var max = new float[3];
+            for (int k = 0; k < 3; k++) { min[k] = verts.Min(v => v.Position[k]); max[k] = verts.Max(v => v.Position[k]); }
+            return new[] { (min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2 };
+        }
+
+        /// <summary>
+        /// Moves the selected vertices of a skinned mesh by <paramref name="matrix"/> (model space, bind pose). Each
+        /// vertex moves by d = M·p − p: every part gets d in its bone's frame added, so the blend (weights summing to 1)
+        /// moves by d; normals follow M's inverse transpose. Sizes stay, so the payload changes in place.
+        /// </summary>
+        public static Result TransformVertices(ZipperPackage pkg, string archive, string modelName, float[] matrix, Selection sel, byte[]? archiveBytes = null)
+        {
+            var (entry, model, payload, start, skeleton) = Open(pkg, archive, modelName, archiveBytes);
+            payload = (byte[])payload.Clone();
+            var verts = Vertices(payload, start, skeleton, sel);
+            if (verts.Count == 0) throw new ArgumentException($"No vertex of {modelName} matches the selection");
+            float[] normalMatrix = NormalMatrix(matrix);
+            var inverses = new Dictionary<string, float[]>();
+            foreach (var (p, n, parts) in verts)
+            {
+                var (mx, my, mz) = Matrix4.Apply(matrix, p[0], p[1], p[2]);
+                float[] d = { mx - p[0], my - p[1], mz - p[2] };
+                float[] nw = Normalize(new[]
+                {
+                    normalMatrix[0] * n[0] + normalMatrix[4] * n[1] + normalMatrix[8] * n[2],
+                    normalMatrix[1] * n[0] + normalMatrix[5] * n[1] + normalMatrix[9] * n[2],
+                    normalMatrix[2] * n[0] + normalMatrix[6] * n[1] + normalMatrix[10] * n[2],
+                });
+                foreach (var part in parts)
+                {
+                    if (!inverses.TryGetValue(part.Bone.Name, out var inv)) inverses[part.Bone.Name] = inv = Matrix4.InverseAffine(part.Bone.World);
+                    float[] ld = { inv[0] * d[0] + inv[4] * d[1] + inv[8] * d[2], inv[1] * d[0] + inv[5] * d[1] + inv[9] * d[2], inv[2] * d[0] + inv[6] * d[1] + inv[10] * d[2] };
+                    float[] ln = Normalize(new[] { inv[0] * nw[0] + inv[4] * nw[1] + inv[8] * nw[2], inv[1] * nw[0] + inv[5] * nw[1] + inv[9] * nw[2], inv[2] * nw[0] + inv[6] * nw[1] + inv[10] * nw[2] });
+                    for (int k = 0; k < 3; k++)
+                    {
+                        float v = BitConverter.ToInt16(payload, part.Offset + k * 2) / 4096f + ld[k];
+                        if (MathF.Abs(v) * 4096 > 32767)
+                            throw new ArgumentException($"A vertex would end {MathF.Abs(v):0.##} units from {part.Bone.Name}; skinned vertices reach at most 7.99. Use a smaller change.");
+                        BitConverter.GetBytes(Q(v * 4096)).CopyTo(payload, part.Offset + k * 2);
+                        BitConverter.GetBytes(Q(ln[k] * 32767)).CopyTo(payload, part.Offset + 8 + k * 2);
+                    }
+                }
+            }
+            var result = new Result { Vertices = verts.Count };
+            result.Changed[entry.Leaf] = ZedSplice.Replace(archiveBytes ?? entry.Data, model.NodeIndex, payload);
+            return result;
+        }
+
+        /// <summary>How <see cref="ScaleBones"/> scales one bone's parts, in its own frame about its joint: along its
+        /// length axis (<see cref="Length"/>), across it (<see cref="Thickness"/>), and all over (<see cref="Scale"/>).</summary>
+        public sealed record BoneScale(float Scale = 1, float Thickness = 1, float Length = 1);
+
+        /// <summary>
+        /// Scales the parts that follow each named bone, in that bone's frame about its joint. A vertex shared by several
+        /// bones moves by its weight's share, so the change fades across joints with no seam (thicker biceps blend into
+        /// the elbow and shoulder). The length axis points from the joint to the bone's children (their average), or for
+        /// an end bone (hand, head) along the bone from its parent. Normals follow the inverse scale.
+        /// </summary>
+        public static Result ScaleBones(ZipperPackage pkg, string archive, string modelName, IReadOnlyDictionary<string, BoneScale> scales, byte[]? archiveBytes = null)
+        {
+            var (entry, model, payload, start, skeleton) = Open(pkg, archive, modelName, archiveBytes);
+            payload = (byte[])payload.Clone();
+            var matrices = new Dictionary<int, (float[] M, float[] N, string Name)>();
+            foreach (var (name, s) in scales)
+            {
+                int index = skeleton.Bones.FindIndex(b => b.MatrixId >= 0 && b.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                if (index < 0) throw new ArgumentException($"{modelName} has no skinning bone {name} (bones: {string.Join(", ", skeleton.Bones.Where(b => b.MatrixId >= 0).Select(b => b.Name))})");
+                if (s.Scale <= 0 || s.Thickness <= 0 || s.Length <= 0) throw new ArgumentException($"{name}: scale, thickness and length are above 0");
+                float[] axis = LengthAxis(skeleton, index);
+                // S = scale * (thickness * (I - a aT) + length * a aT); symmetric, so its inverse transpose is its inverse.
+                var m = new float[9];
+                var n = new float[9];
+                for (int r = 0; r < 3; r++)
+                    for (int c = 0; c < 3; c++)
+                    {
+                        float aa = axis[r] * axis[c], id = r == c ? 1 : 0;
+                        m[r * 3 + c] = s.Scale * (s.Thickness * (id - aa) + s.Length * aa);
+                        n[r * 3 + c] = (1 / s.Scale) * ((1 / s.Thickness) * (id - aa) + (1 / s.Length) * aa);
+                    }
+                matrices[skeleton.Bones[index].MatrixId] = (m, n, skeleton.Bones[index].Name);
+            }
+
+            int count = (int)(BitConverter.ToUInt32(payload, start) & 0xFFFF), parts = 0;
+            bool matrixPending = false;
+            for (int t = 1; t <= count; t++)
+            {
+                int o = start + t * 16;
+                uint lo = BitConverter.ToUInt32(payload, o);
+                int addr = BitConverter.ToInt32(payload, o + 4), qwc = (int)(lo & 0xFFFF);
+                if ((lo >> 28 & 7) == 1) continue;
+                if (BitConverter.ToUInt32(payload, o + 8) == Stcycl101 && BitConverter.ToUInt32(payload, o + 12) == UnpackMatrix) { matrixPending = true; continue; }
+                if (!matrixPending) continue;
+                matrixPending = false;
+                if (addr < 0 || addr + qwc * 16 > payload.Length) continue;
+                int h = addr + 8;
+                if (!matrices.TryGetValue(BitConverter.ToInt16(payload, h + 4), out var s)) continue;
+                int vertices = BitConverter.ToInt16(payload, h + 6);
+                for (int i = 0; i < vertices && h + 8 + i * 16 + 16 <= addr + qwc * 16; i++)
+                {
+                    int v = h + 8 + i * 16;
+                    float[] p = { BitConverter.ToInt16(payload, v) / 4096f, BitConverter.ToInt16(payload, v + 2) / 4096f, BitConverter.ToInt16(payload, v + 4) / 4096f };
+                    float[] nl = { BitConverter.ToInt16(payload, v + 8) / 32767f, BitConverter.ToInt16(payload, v + 10) / 32767f, BitConverter.ToInt16(payload, v + 12) / 32767f };
+                    float[] nn = Normalize(Mul3(s.N, nl));
+                    float[] q = Mul3(s.M, p);
+                    for (int k = 0; k < 3; k++)
+                    {
+                        if (MathF.Abs(q[k]) * 4096 > 32767)
+                            throw new ArgumentException($"A vertex would end {MathF.Abs(q[k]):0.##} units from {s.Name}; skinned vertices reach at most 7.99. Use a smaller scale.");
+                        BitConverter.GetBytes(Q(q[k] * 4096)).CopyTo(payload, v + k * 2);
+                        BitConverter.GetBytes(Q(nn[k] * 32767)).CopyTo(payload, v + 8 + k * 2);
+                    }
+                    parts++;
+                }
+            }
+            if (parts == 0) throw new ArgumentException($"No vertex of {modelName} follows {string.Join(", ", scales.Keys)}");
+            var result = new Result { Vertices = parts };
+            result.Changed[entry.Leaf] = ZedSplice.Replace(archiveBytes ?? entry.Data, model.NodeIndex, payload);
+            return result;
+        }
+
+        private static float[] Mul3(float[] m, float[] v) =>
+            new[] { m[0] * v[0] + m[1] * v[1] + m[2] * v[2], m[3] * v[0] + m[4] * v[1] + m[5] * v[2], m[6] * v[0] + m[7] * v[1] + m[8] * v[2] };
+
+        // A bone's length axis in its own frame: towards its children (the average of their offsets), else for an end
+        // bone the direction it lies along from its parent.
+        private static float[] LengthAxis(CharacterSkeleton skeleton, int index)
+        {
+            var sum = new float[3];
+            foreach (var c in skeleton.Bones.Where(b => b.Parent == index))
+                for (int k = 0; k < 3; k++) sum[k] += c.Local[12 + k];
+            if (sum[0] * sum[0] + sum[1] * sum[1] + sum[2] * sum[2] > 1e-6f) return Normalize(sum);
+            var own = skeleton.Bones[index].Local;
+            // The offset from the parent is in the parent's frame; the bone's local rotation (transposed) brings it into its own.
+            float[] t = { own[12], own[13], own[14] };
+            float[] inOwn = { own[0] * t[0] + own[1] * t[1] + own[2] * t[2], own[4] * t[0] + own[5] * t[1] + own[6] * t[2], own[8] * t[0] + own[9] * t[1] + own[10] * t[2] };
+            return inOwn[0] * inOwn[0] + inOwn[1] * inOwn[1] + inOwn[2] * inOwn[2] > 1e-6f ? Normalize(inOwn) : new[] { 0f, 1f, 0f };
+        }
+
+        private static (ZipperPackage.RootEntry Entry, ZipperPackage.ModelRef Model, byte[] Payload, int Start, CharacterSkeleton Skeleton) Open(
+            ZipperPackage pkg, string archive, string modelName, byte[]? archiveBytes)
+        {
+            var entry = pkg.Entry(archive) is { Kind: "mdl" } e ? e : throw new ArgumentException($"{archive} is not a model archive of this package");
+            var model = pkg.FindModel(entry.Leaf, modelName) ?? throw new KeyNotFoundException($"No model {modelName} in {entry.Leaf}");
+            var container = ZedContainer.FromBytes(archiveBytes ?? entry.Data);
+            int start = CharacterMesh.StartOffset(container, model.NodeIndex)
+                ?? throw new ArgumentException($"{modelName} is not a skinned character mesh (no {modelName}_START); use transformVertices");
+            var geo = pkg.FindSkeleton(model.Namespace, CharacterMesh.SkeletonName(model.Name))
+                ?? throw new InvalidOperationException($"{modelName} has no skeleton {CharacterMesh.SkeletonName(model.Name)} in a GEO archive");
+            byte[] payload = container.Nodes[model.NodeIndex].Data;
+            if (start % 16 != 0 || start + 16 > payload.Length) throw new InvalidDataException($"{modelName}: chain start 0x{start:X} is not a tag in the payload");
+            return (entry, model, payload, start, CharacterMesh.SkeletonFromGeo(geo));
+        }
+
+        // The inverse transpose of a matrix's 3x3 (column-major in a 4x4).
+        private static float[] NormalMatrix(float[] m)
+        {
+            float a = m[0], b = m[4], c = m[8], d = m[1], e = m[5], f = m[9], g = m[2], h = m[6], i = m[10];
+            float det = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+            if (MathF.Abs(det) < 1e-12f) throw new ArgumentException("The transform flattens the mesh (its determinant is 0)");
+            // M^-1 row-major (adjugate / det); (M^-1)^T stored column-major is that same order.
+            float[] inv = { (e * i - f * h) / det, (c * h - b * i) / det, (b * f - c * e) / det, (f * g - d * i) / det, (a * i - c * g) / det, (c * d - a * f) / det, (d * h - e * g) / det, (b * g - a * h) / det, (a * e - b * d) / det };
+            return new[] { inv[0], inv[1], inv[2], 0, inv[3], inv[4], inv[5], 0, inv[6], inv[7], inv[8], 0, 0, 0, 0, 1f };
+        }
+
+        private static float[] Normalize(float[] v)
+        {
+            float l = MathF.Sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+            return l > 1e-6f ? new[] { v[0] / l, v[1] / l, v[2] / l } : new[] { 0f, 1f, 0f };
+        }
+
         /// <summary>A character's lower-detail mesh name: <c>MESH_seal_A_woodland_LO</c> → <c>MESH_seal_A_woodland_1_LO</c>,
         /// <c>MESH_alban_ter01</c> → <c>MESH_alban_ter01_1</c>.</summary>
         public static string LowDetailName(string meshName) =>

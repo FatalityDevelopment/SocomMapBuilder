@@ -1,4 +1,5 @@
 using System.Text.Json;
+using CodeDesigner.Ps2.FileFormats.Zipper.Package;
 using MapBuilder.Server;
 using MapBuilder.Tests.Fixtures;
 using Xunit;
@@ -157,6 +158,120 @@ namespace MapBuilder.Tests
             {
                 try { Directory.Delete(dir, true); } catch (IOException) { }
             }
+        }
+
+        // The SEAL decoded (bind pose, model space) before and after a transform, chunk by chunk.
+        private static (List<float[]> Before, List<float[]> After)? Transformed(float[] matrix, CharacterEdits.Selection sel)
+        {
+            string? path = Environment.GetEnvironmentVariable("MB_MAP_ZDB");
+            if (string.IsNullOrEmpty(path) || !File.Exists(path)) return null;
+            var pkg = ZipperPackage.Open(path);
+            var model = pkg.FindModel("CLIB_MDL.ZED", Seal)!;
+            var before = ZipperModelMesh.Build(pkg, model).Chunks.Select(c => c.Positions).ToList();
+            var r = CharacterEdits.TransformVertices(pkg, "CLIB_MDL.ZED", Seal, matrix, sel);
+            foreach (var (leaf, bytes) in r.Changed) pkg.ReplaceEntry(leaf, bytes);
+            var after = ZipperModelMesh.Build(pkg, pkg.FindModel("CLIB_MDL.ZED", Seal)!).Chunks.Select(c => c.Positions).ToList();
+            return (before, after);
+        }
+
+        [Fact]
+        public void A_translation_moves_every_skinned_vertex_by_that_much()
+        {
+            float[] up = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0.25f, 0.5f, -0.125f, 1 };
+            if (Transformed(up, new CharacterEdits.Selection()) is not var (before, after)) return;
+            Assert.Equal(before.Count, after.Count);
+            for (int c = 0; c < before.Count; c++)
+                for (int i = 0; i < before[c].Length; i++)
+                    Assert.InRange(after[c][i] - before[c][i] - up[12 + i % 3], -0.01f, 0.01f);
+        }
+
+        [Fact]
+        public void A_bone_selection_leaves_the_rest_of_the_body_alone()
+        {
+            // Twice as big about the head bone: the head grows, the feet stay.
+            float[] grow = { 2, 0, 0, 0, 0, 2, 0, 0, 0, 0, 2, 0, 0, -17.63f, -0.15f, 1 };
+            if (Transformed(grow, new CharacterEdits.Selection(new HashSet<string> { "head" })) is not var (before, after)) return;
+            int moved = 0, still = 0;
+            for (int c = 0; c < before.Count; c++)
+                for (int i = 1; i < before[c].Length; i += 3)
+                {
+                    float y0 = before[c][i], y1 = after[c][i];
+                    if (y0 < 5) { Assert.InRange(y1 - y0, -0.01f, 0.01f); still++; }
+                    if (y0 > 19 && y1 - y0 > 0.5f) moved++;
+                }
+            Assert.True(still > 0 && moved > 0, $"{still} foot vertices, {moved} moved head-top vertices");
+        }
+
+        [Fact]
+        public void A_thicker_bicep_blends_into_the_elbow_and_shoulder_without_a_seam()
+        {
+            string? path = Environment.GetEnvironmentVariable("MB_MAP_ZDB");
+            if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
+            var pkg = ZipperPackage.Open(path);
+            var before = ZipperModelMesh.Build(pkg, pkg.FindModel("CLIB_MDL.ZED", Seal)!);
+            var r = CharacterEdits.ScaleBones(pkg, "CLIB_MDL.ZED", Seal, new Dictionary<string, CharacterEdits.BoneScale> { ["rbicep"] = new(Thickness: 1.3f) });
+            foreach (var (leaf, bytes) in r.Changed) pkg.ReplaceEntry(leaf, bytes);
+            var after = ZipperModelMesh.Build(pkg, pkg.FindModel("CLIB_MDL.ZED", Seal)!);
+            var shoulder = before.Skeleton!.Bones.First(b => b.Name == "rbicep").World;
+            var elbow = before.Skeleton.Bones.First(b => b.Name == "rforearm").World;
+            float[] axis = { elbow[12] - shoulder[12], elbow[13] - shoulder[13], elbow[14] - shoulder[14] };
+            float len = MathF.Sqrt(axis.Sum(x => x * x));
+            float Off(float[] q, int i)   // distance from the upper arm's line
+            {
+                float[] d = { q[i] - shoulder[12], q[i + 1] - shoulder[13], q[i + 2] - shoulder[14] };
+                float along = (d[0] * axis[0] + d[1] * axis[1] + d[2] * axis[2]) / len;
+                return MathF.Sqrt(MathF.Max(0, d.Sum(x => x * x) - along * along));
+            }
+            float worst = 0;
+            int grew = 0, left = 0;
+            for (int c = 0; c < before.Chunks.Count; c++)
+            {
+                float[] p0 = before.Chunks[c].Positions, p1 = after.Chunks[c].Positions;
+                int[] t = before.Chunks[c].Triangles;
+                for (int k = 0; k < t.Length; k++)
+                {
+                    int a = t[k] * 3, b = t[k - k % 3 + (k + 1) % 3] * 3;
+                    float l0 = MathF.Sqrt(Enumerable.Range(0, 3).Sum(i => (p0[a + i] - p0[b + i]) * (p0[a + i] - p0[b + i])));
+                    float l1 = MathF.Sqrt(Enumerable.Range(0, 3).Sum(i => (p1[a + i] - p1[b + i]) * (p1[a + i] - p1[b + i])));
+                    if (l0 > 0.05f) worst = MathF.Max(worst, l1 / l0);
+                }
+                for (int i = 0; i < p0.Length; i += 3)
+                {
+                    if (p0[i] < -1) { Assert.InRange(p1[i] - p0[i], -0.01f, 0.01f); left++; }    // the left side
+                    if (Off(p1, i) > Off(p0, i) * 1.2f && Off(p0, i) > 0.3f) grew++;
+                }
+            }
+            Assert.True(worst < 1.36f, $"an edge stretched {worst:0.00}x");
+            Assert.True(left > 0 && grew > 0, $"{left} left-side vertices, {grew} grown upper-arm vertices");
+        }
+
+        [Fact]
+        public void ScaleBones_names_its_bones_and_keeps_vertices_in_reach()
+        {
+            if (OpenMap() is not { } s) return;
+            byte[] mdl = Backend.Bytes(s, "CLIB_MDL.ZED");
+            var r = _b.Edit(s, new { op = "scaleBones", archive = "CLIB_MDL.ZED", model = Seal, bones = new Dictionary<string, object> { ["head"] = 0.9f, ["lbicep"] = new { thickness = 1.2f } } });
+            Assert.True(r.GetProperty("parts").GetInt32() > 0);
+            Assert.Equal("MESH_seal_A_woodland_1_LO", r.GetProperty("lowDetail").GetProperty("model").GetString());
+            _b.Undo(s);
+            Assert.Equal(mdl, Backend.Bytes(s, "CLIB_MDL.ZED"));
+            Assert.Contains("no skinning bone", _b.EditFails(s, new { op = "scaleBones", archive = "CLIB_MDL.ZED", model = Seal, bones = new { tail = 2 } }));
+            Assert.Contains("at most 7.99", _b.EditFails(s, new { op = "scaleBones", archive = "CLIB_MDL.ZED", model = Seal, bones = new { rcalf = new { length = 3 } } }));
+        }
+
+        [Fact]
+        public void TransformCharacter_is_one_undo_step_on_both_meshes()
+        {
+            if (OpenMap() is not { } s) return;
+            byte[] mdl = Backend.Bytes(s, "CLIB_MDL.ZED");
+            var r = _b.Edit(s, new { op = "transformCharacter", archive = "CLIB_MDL.ZED", model = Seal, bones = new[] { "rbicep", "rforearm", "rhand" }, scale = 1.15f });
+            Assert.True(r.GetProperty("vertices").GetInt32() > 0);
+            Assert.Equal("MESH_seal_A_woodland_1_LO", r.GetProperty("lowDetail").GetProperty("model").GetString());
+            Assert.NotEqual(mdl, Backend.Bytes(s, "CLIB_MDL.ZED"));
+            _b.Undo(s);
+            Assert.Equal(mdl, Backend.Bytes(s, "CLIB_MDL.ZED"));
+            Assert.Contains("No vertex", _b.EditFails(s, new { op = "transformCharacter", archive = "CLIB_MDL.ZED", model = Seal, texture = "nothing.tif", scale = 2 }));
+            Assert.Contains("at most 7.99", _b.EditFails(s, new { op = "transformCharacter", archive = "CLIB_MDL.ZED", model = Seal, scale = 6 }));
         }
 
         [Fact]

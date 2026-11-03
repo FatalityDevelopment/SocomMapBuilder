@@ -270,6 +270,64 @@ namespace MapBuilder.Server.Services
                         lowDetail = low == null ? null : new { model = lowName, groups = low.Groups },
                     };
                 }
+                case "scaleBones":
+                {
+                    // {archive, model, bones: {name: number | {scale?, thickness?, length?}}, lowDetail?}: body parts grown or
+                    // thinned in their bones' frames, blending across joints (the lower-detail mesh too unless lowDetail is false).
+                    string archive = Str(a, "archive") ?? throw new ArgumentException("\"archive\" is required");
+                    string model = Str(a, "model") ?? throw new ArgumentException("\"model\" is required");
+                    if (!a.TryGetProperty("bones", out var bs) || bs.ValueKind != JsonValueKind.Object || !bs.EnumerateObject().Any())
+                        throw new ArgumentException("\"bones\" {name: scale | {scale?, thickness?, length?}} is required");
+                    var scales = new Dictionary<string, CharacterEdits.BoneScale>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var b in bs.EnumerateObject())
+                    {
+                        float F(string field) => b.Value.TryGetProperty(field, out var x) ? Number(x, $"bones.{b.Name}.{field}") : 1;
+                        scales[b.Name] = b.Value.ValueKind == JsonValueKind.Number
+                            ? new CharacterEdits.BoneScale(Number(b.Value, $"bones.{b.Name}"))
+                            : b.Value.ValueKind == JsonValueKind.Object ? new CharacterEdits.BoneScale(F("scale"), F("thickness"), F("length"))
+                            : throw new ArgumentException($"bones.{b.Name} is a number or {{scale?, thickness?, length?}}");
+                    }
+                    bool lowDetail = !(a.TryGetProperty("lowDetail", out var ld) && ld.ValueKind == JsonValueKind.False);
+                    string lowName = CharacterEdits.LowDetailName(model);
+                    bool hasLow = lowDetail && pkg.FindModel(archive, lowName) != null;
+                    CharacterEdits.Result? made = null, low = null;
+                    var result = ApplyEdit(s, Str(a, "label") ?? $"scale {string.Join(", ", scales.Keys)} of {model}{(hasLow ? " and " + lowName : "")}", p =>
+                    {
+                        made = CharacterEdits.ScaleBones(p, archive, model, scales, null);
+                        if (!hasLow) return made.Changed;
+                        try { low = CharacterEdits.ScaleBones(p, archive, lowName, scales, made.Changed[p.Entry(archive)!.Leaf]); }
+                        catch (ArgumentException) { return made.Changed; }
+                        return low.Changed;
+                    });
+                    return new { result, parts = made!.Vertices, lowDetail = low == null ? null : new { model = lowName, parts = low.Vertices } };
+                }
+                case "transformCharacter":
+                {
+                    // {archive, model, translate / rotate / scale / pivot | matrix, bones?, texture?, section?, lowDetail?}:
+                    // move a skinned character's vertices in its bind pose (the lower-detail mesh too unless lowDetail is false).
+                    string archive = Str(a, "archive") ?? throw new ArgumentException("\"archive\" is required");
+                    string model = Str(a, "model") ?? throw new ArgumentException("\"model\" is required");
+                    var bones = a.TryGetProperty("bones", out var bs) && bs.ValueKind == JsonValueKind.Array
+                        ? bs.EnumerateArray().Select(x => x.GetString() ?? "").ToHashSet(StringComparer.OrdinalIgnoreCase) : null;
+                    var sel = new CharacterEdits.Selection(bones, Str(a, "texture"), OptInt(a, "section"));
+                    TransformMatrix(a, new float[3]);   // bad translate / rotate / scale fail before the mesh is read
+                    float[] m = Vec(a, "matrix", 16) ?? TransformMatrix(a, Vec(a, "pivot", 3) ?? CharacterEdits.SelectionCentre(pkg, archive, model, sel)
+                        ?? throw new ArgumentException($"No vertex of {model} matches the selection"));
+                    bool lowDetail = !(a.TryGetProperty("lowDetail", out var ld) && ld.ValueKind == JsonValueKind.False);
+                    string lowName = CharacterEdits.LowDetailName(model);
+                    bool hasLow = lowDetail && pkg.FindModel(archive, lowName) != null;
+                    CharacterEdits.Result? made = null, low = null;
+                    var result = ApplyEdit(s, Str(a, "label") ?? $"transform {model}{(hasLow ? " and " + lowName : "")}", p =>
+                    {
+                        made = CharacterEdits.TransformVertices(p, archive, model, m, sel);
+                        if (!hasLow) return made.Changed;
+                        // The lower-detail mesh may have fewer parts in the selection (or none): it follows when it can.
+                        try { low = CharacterEdits.TransformVertices(p, archive, lowName, m, sel, made.Changed[p.Entry(archive)!.Leaf]); }
+                        catch (ArgumentException) { return made.Changed; }
+                        return low.Changed;
+                    });
+                    return new { result, vertices = made!.Vertices, lowDetail = low == null ? null : new { model = lowName, vertices = low.Vertices } };
+                }
                 case "removeCharacterSection":
                 {
                     // {archive, model, texture | section}: material sections out of a skinned mesh's chain (e.g. gear added earlier).
@@ -498,12 +556,7 @@ namespace MapBuilder.Server.Services
         /// </summary>
         private static float[] VertexTransform(AssetSession s, string archive, string model, JsonElement a, List<int>? chunks, Dictionary<int, int[]>? verts)
         {
-            float[] t = Vec(a, "translate", 3) ?? new float[3];
-            float[] r = Vec(a, "rotate", 3) ?? new float[3];
-            float[] sc = a.TryGetProperty("scale", out var sv) && sv.ValueKind == JsonValueKind.Number
-                ? new[] { Number(sv, "scale"), Number(sv, "scale"), Number(sv, "scale") }
-                : Vec(a, "scale", 3) ?? new[] { 1f, 1f, 1f };
-            if (sc.Any(x => x == 0)) throw new ArgumentException("\"scale\" must not be 0");
+            TransformMatrix(a, new float[3]);   // bad translate / rotate / scale fail before the mesh is read
             float[]? pivot = Vec(a, "pivot", 3);
             if (pivot == null)
             {
@@ -520,6 +573,18 @@ namespace MapBuilder.Server.Services
                 }
                 pivot = min[0] <= max[0] ? new[] { (min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2 } : new float[3];
             }
+            return TransformMatrix(a, pivot);
+        }
+
+        // translate / rotate (degrees, X then Y then Z) / scale about a pivot, as one column-major matrix.
+        private static float[] TransformMatrix(JsonElement a, float[] pivot)
+        {
+            float[] t = Vec(a, "translate", 3) ?? new float[3];
+            float[] r = Vec(a, "rotate", 3) ?? new float[3];
+            float[] sc = a.TryGetProperty("scale", out var sv) && sv.ValueKind == JsonValueKind.Number
+                ? new[] { Number(sv, "scale"), Number(sv, "scale"), Number(sv, "scale") }
+                : Vec(a, "scale", 3) ?? new[] { 1f, 1f, 1f };
+            if (sc.Any(x => x == 0)) throw new ArgumentException("\"scale\" must not be 0");
             static float[] Rot(int axis, float deg)
             {
                 float rad = deg * MathF.PI / 180, c = MathF.Cos(rad), sn = MathF.Sin(rad);
