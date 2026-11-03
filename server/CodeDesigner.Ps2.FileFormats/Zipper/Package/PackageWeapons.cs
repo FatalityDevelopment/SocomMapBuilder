@@ -3,7 +3,7 @@ using CodeDesigner.Ps2.FileFormats.Zipper.ZED;
 namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
 {
     /// <summary>
-    /// New weapons from a template weapon of the package (a .ZDB, or a loose folder such as RUN/COMMON with
+    /// New models (weapons through newWeapon, map props through newProp) from a template model of the package (a .ZDB, or a loose folder such as RUN/COMMON with
     /// WEAP_MDL / WEAP_TXR / WEAP_PAL / WEAP_GEO). The copy is the template's whole MDL record (its N* visual stubs and
     /// chain records too, which carry the texture bindings and vertex colours) with a re-encoded payload. A new skin is
     /// a texture in the TXR / PAL pair beside the MDL built on the replaced texture (its size, wrap and filtering), with a palette of its own, and
@@ -41,7 +41,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             var mdlEntry = pkg.Entry(mdlLeaf) is { Kind: "mdl" } e ? e : throw new ArgumentException($"{mdlLeaf} is not a model archive of this package");
             var model = pkg.FindModel(mdlEntry.Leaf, template) ?? throw new KeyNotFoundException($"No model {template} in {mdlEntry.Leaf}");
             newName = newName.Trim();
-            if (newName.Length == 0) throw new ArgumentException("The new weapon needs a name");
+            if (newName.Length == 0) throw new ArgumentException("The new model needs a name");
 
             var mdl = ZedContainer.FromBytes(mdlEntry.Data);
             if (PackageImport.TopLevel(mdl, newName) >= 0 || pkg.ResolveModel(newName) is { } clash && clash.Name.Equals(newName, StringComparison.OrdinalIgnoreCase))

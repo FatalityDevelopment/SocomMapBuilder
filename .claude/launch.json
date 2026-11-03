@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "mapbuilder",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["run", "--project", "server", "-c", "Release", "--no-launch-profile", "--urls", "http://127.0.0.1:8770"],
+      "port": 8770
+    }
+  ]
+}
