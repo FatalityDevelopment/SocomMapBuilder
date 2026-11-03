@@ -7,6 +7,7 @@ import * as THREE from 'three';
 import { placementMatrix, samplePlacement, surfaceNormal, type PlacementOptions, type PlacementSample, type PlacementTransform } from './placement';
 import { SELECT_COLOR, ViewportCore, billboardYaw, chunkGeometry, isIdentity, labelSprite, type MaterialSpec } from '../webview/zipper-core/viewport-core';
 import type { EditorMesh } from '../webview/model-editor/mesh-data';
+import { propDrawChunks } from './propFaces';
 import { groupInstancesByLayer, isSkyChunk, layerOf, movable as isMovable, pointColor } from '../mapModel';
 
 export type MapTool = 'select' | 'move' | 'rotate' | 'scale' | 'place';
@@ -256,6 +257,12 @@ export class MapViewport extends ViewportCore {
     this.instances = instances;
     this.display = instances.map(i => toDisplay(i.matrix));
     this.slots = instances.map(() => []);
+    // MP82 draws fog across snow/rock layers that themselves use vertex-alpha blending.
+    // Draw wholly translucent textures after those surfaces have established their depth.
+    const translucentTextures = new Set(Object.keys(textures).filter(key => {
+      const pixels = textures[key];
+      return pixels.hasTransparency && !pixels.rgba.some((value, i) => i % 4 === 3 && value === 255);
+    }));
 
     for (const { source, layer, indices: idx } of groupInstancesByLayer(instances)) {
       const model = models.get(source);
@@ -263,7 +270,9 @@ export class MapViewport extends ViewportCore {
       const ns = model.textureNamespace;
       const box = new THREE.Box3();
       const skyNodes = new Set<string>();
-      for (const chunk of model.mesh.chunks) {
+      const drawChunks = layer === 'reference' ? propDrawChunks(model.mesh.chunks)
+        : model.mesh.chunks.map(chunk => ({ chunk, frontOnly: false }));
+      for (const { chunk, frontOnly } of drawChunks) {
         const geometry = chunkGeometry(chunk);
         geometry.computeBoundingBox();
         // A world model's sky dome draws with the Sky layer, and stays out of the map's bounds and the point drop.
@@ -271,8 +280,12 @@ export class MapViewport extends ViewportCore {
         if (chunkLayer === 'sky' && layer === 'world') { skyNodes.add(chunk.node || chunk.texture || 'sky'); }
         else if (geometry.boundingBox) { box.union(geometry.boundingBox); }
         // Texture keys are namespaced: the same .tif name can differ between archives.
-        const spec: MaterialSpec = { texture: chunk.texture ? `${ns ?? ''}:${chunk.texture.toLowerCase()}` : null, materialBlend: chunk.materialBlend, colors: chunk.colors };
+        const texture = chunk.texture ? `${ns ?? ''}:${chunk.texture}`.toLowerCase() : null;
+        const translucentEffect = !!texture && translucentTextures.has(texture)
+          && (chunk.materialBlend ?? textures[texture].alphaBlend ?? false);
+        const spec: MaterialSpec = { texture, materialBlend: chunk.materialBlend, colors: chunk.colors, translucentEffect, frontOnly };
         const mesh = new THREE.InstancedMesh(geometry, this.materialFor(spec), idx.length);
+        if (translucentEffect) { mesh.renderOrder = 1; }
         idx.forEach((instIndex, slot) => {
           mesh.setMatrixAt(slot, this.display[instIndex]);
           this.slots[instIndex].push({ mesh, slot });
@@ -395,14 +408,26 @@ export class MapViewport extends ViewportCore {
     this.buildGridAxes(this.worldBox);
   }
 
-  // Model-space Y of the first surface under instance i's origin (props, world), ignoring itself; null if none.
-  groundBelow(i: number): number | null {
+  // Target Y for the placement's pivot when its mesh rests on the surface beneath it.
+  // A turret's pivot is at the gun, for example, several units above the base.
+  groundedOriginY(i: number): number | null {
     const origin = new THREE.Vector3().setFromMatrixPosition(this.display[i]);
+    let bottom = Infinity;
+    const matrix = new THREE.Matrix4();
+    for (const { mesh, slot } of this.slots[i]) {
+      mesh.getMatrixAt(slot, matrix);
+      const e = matrix.elements, pos = mesh.geometry.getAttribute('position');
+      for (let v = 0; v < pos.count; v++) {
+        bottom = Math.min(bottom, e[1] * pos.getX(v) + e[5] * pos.getY(v) + e[9] * pos.getZ(v) + e[13]);
+      }
+    }
+    if (!Number.isFinite(bottom)) { return null; }
     // Start a little above the origin: a prop sunk into the ground still finds it, one inside a building finds the floor.
-    const ray = new THREE.Raycaster(origin.clone().add(new THREE.Vector3(0, Math.max(1, this.extent * 0.002), 0)), new THREE.Vector3(0, -1, 0));
+    const startY = Math.max(origin.y, bottom) + Math.max(1, this.extent * 0.002);
+    const ray = new THREE.Raycaster(new THREE.Vector3(origin.x, startY, origin.z), new THREE.Vector3(0, -1, 0));
     const targets = this.content.children.filter(c => c.visible && c.userData['layer'] !== 'sky');
     for (const hit of ray.intersectObjects(targets, false)) {
-      if (this.instanceOf(hit) !== i) { return hit.point.y; }
+      if (this.instanceOf(hit) !== i) { return hit.point.y + (origin.y - bottom); }
     }
     return null;
   }
@@ -426,12 +451,16 @@ export class MapViewport extends ViewportCore {
       const color = pointColor(p.kind);
       const pillar = new THREE.Mesh(
         new THREE.CylinderGeometry(height * 0.08, height * 0.08, height, 10),
-        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85, depthTest: false }),
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.85, depthWrite: false }),
       );
       pillar.position.set(p.x, y + height / 2, p.z);
       pillar.renderOrder = 10;
       pillar.userData['point'] = p.name;
       const label = labelSprite(p.name, '#ffffff', 32);
+      // These labels live on the map, unlike selection/gizmo overlays. A sky dome
+      // or building in front of a point must occlude both its pillar and its label.
+      label.material.depthTest = true;
+      label.material.depthWrite = false;
       label.position.set(p.x, y + height * 1.25, p.z);
       label.scale.set(height * 0.35 * (label.userData['aspect'] as number), height * 0.35, 1);
       label.renderOrder = 11;

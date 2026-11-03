@@ -17,17 +17,21 @@ export interface ModelGroup { source: string; model: string; indices: number[] }
 const SKY_NAME = /^(thesun|flare|mist)|^sun$|sky(?!line|light|scraper)/i;
 // Most maps draw their sky inside the world model: a skydome / sky / cloudlayer node, or a node with sky or cloud textures.
 const SKY_PART = /sky(?!line|light|scraper)|cloud|whispy/i;
+// Retail maps also keep celestial cards outside the dome node (MP7's moon / stars,
+// MP53 and MP71's sunglow). Match complete names so signs and lamps stay scenery.
+const CELESTIAL_PART = /^(?:moon|stars?|sun(?:glow)?)(?:\d+)?(?:_\d+)*(?:\.tif)?$/i;
 
 export const isSkyModel = (name: string) => SKY_NAME.test(name);
 
 /** Whether a world-model chunk is part of the sky, by its GEO node's name or its texture. */
 export const isSkyChunk = (chunk: { node?: string | null; texture: string | null }) =>
-  SKY_PART.test(chunk.node ?? '') || SKY_PART.test(chunk.texture ?? '');
+  SKY_PART.test(chunk.node ?? '') || SKY_PART.test(chunk.texture ?? '')
+  || CELESTIAL_PART.test(chunk.node ?? '') || CELESTIAL_PART.test(chunk.texture ?? '');
 
 export function layerOf(inst: MapInstanceWire): MapLayer {
   if (inst.kind === 'clutter') { return 'clutter'; }
-  if (inst.kind === 'model') { return 'world'; }
   if (isSkyModel(inst.model)) { return 'sky'; }
+  if (inst.kind === 'model') { return 'world'; }
   return 'reference';
 }
 
