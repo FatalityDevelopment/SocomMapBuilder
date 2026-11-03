@@ -135,3 +135,37 @@
 .av-patch-bytes .me-input { flex: 1; width: 100%; }
 .av-form { display: flex; flex-direction: column; gap: 6px; max-width: 560px; }
 .av-badge-btn { background: none; font: inherit; font-size: 11px; cursor: pointer; }
+/* Palettes */
+.av-pal-edit { flex: 1; display: flex; gap: 18px; padding: 14px; min-height: 0; overflow: auto; align-items: flex-start; }
+.av-palette-edit span { cursor: pointer; }
+.av-palette-edit span.on { outline: 2px solid var(--vscode-focusBorder, #3e8bff); outline-offset: -1px; z-index: 1; }
+.av-pal-form { flex: 1 1 220px; min-width: 180px; max-width: 280px; padding: 0; }
+.av-palette-edit { flex: none; }
+.av-pal-pick { display: flex; gap: 6px; align-items: center; }
+.av-pal-pick input[type=color] { width: 34px; height: 24px; padding: 0; border: none; background: none; }
+/* Clutter */
+.av-clutter-bar { flex-wrap: wrap; position: sticky; top: 0; z-index: 2; }
+.av-add select { width: 150px; }
+.av-more { margin: 6px 0; }
+.av-warn { color: var(--vscode-editorWarning-foreground, #e2c08d); }
+/* Two panes: a list or tree, and the selection's form */
+.av-split { flex: 1; display: flex; min-height: 0; }
+.av-split-list { width: 280px; flex: none; display: flex; flex-direction: column; border-right: 1px solid var(--me-border); min-height: 0; }
+.av-split-filter { margin: 8px; }
+.av-split > .av-scroll { flex: 1; }
+.av-geo-row { display: flex; align-items: center; gap: 2px; padding: 2px 6px; white-space: nowrap; cursor: pointer; font-size: 12px; }
+.av-geo-row:hover { background: var(--vscode-list-hoverBackground, #2a2d2e); }
+.av-geo-row.active { background: var(--vscode-list-activeSelectionBackground, #04395e); }
+.av-vec-label-wide { width: 58px; }
+/* ZANIM */
+.av-zanim { padding: 10px 14px; }
+.av-track { margin-bottom: 10px; }
+.av-instr { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 3px 6px; border-bottom: 1px solid rgba(255, 255, 255, 0.04); font-size: 12px; }
+.av-instr-op { font-family: var(--vscode-editor-font-family, monospace); color: #c586c0; min-width: 150px; }
+.av-instr.cond .av-instr-op::before { content: '? '; }
+.av-field { display: inline-flex; align-items: center; gap: 4px; }
+.av-field-label { font-size: 11px; }
+.av-field-select { width: auto; max-width: 200px; }
+.av-words { display: inline-flex; flex-wrap: wrap; gap: 3px; align-items: center; }
+.av-word { width: 76px; }
+.av-words-btn { font-size: 11px; }

@@ -157,6 +157,59 @@ namespace MapBuilder.Tests
             _b.Close(t.GetProperty("session").GetString()!);
         }
 
+        [Fact]
+        public void A_geo_archive_previews_its_scene_and_edits_a_node_in_place()
+        {
+            string zdb = _pkg.WriteZdb();
+            int geo = Item(List(zdb), "TST_GEO.ZED").GetProperty("inner")[0].GetInt32();
+            var p = Preview(zdb, geo);
+            Assert.Equal("geo", p.GetProperty("type").GetString());
+            var world = p.GetProperty("models")[0];
+            Assert.Equal("worldmodel", world.GetProperty("name").GetString());
+            var crate = world.GetProperty("children")[1];
+            Assert.Equal("crate_2", crate.GetProperty("name").GetString());
+            Assert.Equal(-30f, crate.GetProperty("matrix")[12].GetSingle());
+            Assert.Equal("crate", crate.GetProperty("modelName").GetProperty("text").GetString());
+
+            int nparams = crate.GetProperty("nparams").GetInt32();
+            float[] m = crate.GetProperty("matrix").EnumerateArray().Select(x => x.GetSingle()).ToArray();
+            m[12] = 7;
+            var r = Edit(zdb, new[] { geo }, new { op = "nparams", node = nparams, matrix = m, kind = 7, flags = 0x80800051u });
+            Edit(zdb, new[] { geo }, new { op = "modelName", node = crate.GetProperty("modelName").GetProperty("node").GetInt32(), name = "tree" });
+            crate = Preview(zdb, geo).GetProperty("models")[0].GetProperty("children")[1];
+            Assert.Equal(7f, crate.GetProperty("matrix")[12].GetSingle());
+            Assert.Equal(7, crate.GetProperty("kind").GetInt32());
+            Assert.Equal(0x80800051u, crate.GetProperty("flags").GetUInt32());
+            Assert.Equal("tree", crate.GetProperty("modelName").GetProperty("text").GetString());
+            _b.Fails(new CommandMessage { Command = "VIEWER_EDIT", InputPath = zdb, AssetJson = JsonSerializer.Serialize(new { op = "nparams", node = nparams + 1, kind = 1, inner = new[] { geo } }) });
+
+            string session = r.GetProperty("session").GetString()!;
+            _b.Undo(session);
+            _b.Undo(session);
+            Assert.Equal(-30f, Preview(zdb, geo).GetProperty("models")[0].GetProperty("children")[1].GetProperty("matrix")[12].GetSingle());
+            _b.Close(session);
+        }
+
+        [Fact]
+        public void Clutter_previews_its_placements_and_moves_them_through_the_session()
+        {
+            string zdb = _pkg.WriteZdb();
+            int clutter = Item(List(zdb), "CLUTTER.ZAR").GetProperty("inner")[0].GetInt32();
+            var p = Preview(zdb, clutter);
+            Assert.Equal("clutter", p.GetProperty("type").GetString());
+            string session = p.GetProperty("session").GetString()!;
+            int count = p.GetProperty("placements").GetArrayLength();
+            Assert.True(count > 0);
+            _b.Ok(new CommandMessage { Command = "ASSET_EDIT", AssetSession = session, AssetJson = JsonSerializer.Serialize(new { op = "moveClutter", clutterIndex = 0, position = new[] { 1f, 2f, 3f }, yaw = 90f, scale = 2f }) });
+            var moved = Preview(zdb, clutter).GetProperty("placements")[0];
+            Assert.Equal(new[] { 1f, 2f, 3f }, moved.GetProperty("position").EnumerateArray().Select(x => x.GetSingle()).ToArray());
+            Assert.Equal(90f, moved.GetProperty("yaw").GetSingle(), 3);
+            Assert.Equal(2f, moved.GetProperty("scale").GetSingle(), 3);
+            _b.Ok(new CommandMessage { Command = "ASSET_EDIT", AssetSession = session, AssetJson = JsonSerializer.Serialize(new { op = "deleteClutter", clutterIndex = 0 }) });
+            Assert.Equal(count - 1, Preview(zdb, clutter).GetProperty("placements").GetArrayLength());
+            _b.Close(session);
+        }
+
         // ------------------------------------------------------------------ sound stores
 
         // A ZAR laid out like RUN/SOUNDS/*STORE.ZAR: no body size, the body on the next 2048-byte sector.

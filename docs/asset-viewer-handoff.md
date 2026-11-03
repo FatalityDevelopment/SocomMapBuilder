@@ -56,13 +56,32 @@ Found and fixed on the way:
 branches render (400 items a page), so no lazy loading was needed. The disc test now checks that duplicating a nested
 list leaves the rest of the tree as it was.
 
+## Editors for structured package data
+
+Selecting these in a package opens an editor in the preview (`scene-editors.tsx`, server `AssetService.ViewerScenes.cs`):
+
+- **Palettes** (a texpal in a _PAL listing): click a swatch, set its colour and alpha, Apply; or Load colours from
+  image (Edit › Palette colours from image…). ASSET_EDIT `setPalette` re-encodes the buf at its own depth and splices
+  it; every M51 palette re-encodes byte for byte, so one swatch never disturbs the others. Textures redraw.
+- **CLUTTER.ZAR**: placements by model (filter), position / yaw / scale with Apply, ✕ remove, Add a model at a
+  position. Uses the session's moveClutter / addClutter / deleteClutter. Yaw or scale rebuild a placement upright
+  (⚠ marks tilted ones); position alone keeps the matrix.
+- **_GEO.ZED**: the scene node tree (filter), and per node its local transform (axes and position), bounds, kind,
+  flags and model reference. VIEWER_EDIT `nparams` / `modelName` (`Geo/GeoEdits.cs`).
+- ***ZANIM.ZAR**: the effects (filter); one shows its tracks and instructions, nested by IF / WHILE, with decoded
+  arguments editable in place (numbers, vectors, object / animation pickers, flags) and each instruction's argument
+  words in hex. VIEWER_EDIT `zanimField` / `zanimWord`; `ZanimFile.Layout` is the one table for reading and writing.
+  Sizes never change: instructions are not added, removed or reordered, and IF term counts are read-only.
+
+Checked in the running app on M51: each editor's edits, undo of all of them, Replace picture (a generated PNG fed to
+the page's file input) and Save into a scratch folder (the saved copy reopens with the new texture). Saving a copy
+elsewhere leaves the edits counted as unsaved, as in the editors: only saving over the package clears them.
+
 ## Still to do
 
-1. **Save and Replace picture from the page.** Both open a host dialog (save path / image file) that was not driven
-   in this pass; both were verified through the server earlier. Click through once by hand.
-2. **Not editable yet:** ZANIM effect scripts, GEO scene data, CLUTTER placements (edited in the Map Builder),
-   palettes (no "replace palette" in the viewer), sounds and movies (out of scope). These all fall back to the byte
-   patcher.
+1. **Structural ZANIM edits** (add / remove / reorder instructions, new effects) would need sizes and IF term counts
+   rewritten; only values change today.
+2. **Sounds and movies** are previewed, not edited (out of scope).
 3. **INTRO_2.PSS** on the user's disc copy is 25% zero-filled sectors (likely a bad rip); converted, its sound runs
    ~30 s ahead after the first gap. Not a code problem.
 

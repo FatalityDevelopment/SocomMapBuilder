@@ -7,6 +7,7 @@ import { LIGHTINGS } from '../zipper-core/viewport-core';
 import { AssetViewerLogic, KIND_LABEL, formatBytes } from './asset-viewer-page';
 import { placeKey, type ItemKind, type Preview, type ViewerItem } from './viewer-client';
 import { BytePatch, IconSysEditor, MpsEditor, RdrEditor, TextEditor } from './editors';
+import { ClutterEditor, GeoEditor, PaletteEditor, ZanimEditor } from './scene-editors';
 
 const KIND_ICON: Record<ItemKind, string> = {
   folder: 'library', package: 'harddrive', models: 'database', textures: 'image', palettes: 'sparkles', geo: 'workflow',
@@ -350,7 +351,7 @@ function StageBody({ c }: { c: C }) {
     case 'image':
       return <ImageStage c={c} />;
     case 'palette':
-      return p?.type === 'palette' ? <PaletteStage rgba={p.rgba} /> : null;
+      return p?.type === 'palette' ? <PaletteEditor c={c} p={p} /> : null;
     case 'audio':
       return p?.type === 'audio' ? (
         <div className="av-center">
@@ -385,6 +386,12 @@ function StageBody({ c }: { c: C }) {
       return p?.type === 'text' ? <TextEditor c={c} p={p} /> : null;
     case 'iconsys':
       return p?.type === 'iconsys' ? <IconSysEditor c={c} p={p} /> : null;
+    case 'geo':
+      return p?.type === 'geo' ? <GeoEditor c={c} p={p} /> : null;
+    case 'clutter':
+      return p?.type === 'clutter' ? <ClutterEditor c={c} p={p} /> : null;
+    case 'zanim':
+      return p?.type === 'zanim' ? <ZanimEditor c={c} p={p} /> : null;
     case 'hex':
       return p?.type === 'hex' ? <HexStage c={c} p={p} /> : null;
     case 'program':
@@ -431,19 +438,6 @@ function ImageStage({ c }: { c: C }) {
       </div>
       <div className={`av-image-scroll${zoom === 'fit' ? ' fit' : ''}`}>
         {c.imageUrl() && <img className="av-image" src={c.imageUrl()} alt={c.preview()?.name ?? ''} style={style} />}
-      </div>
-    </div>
-  );
-}
-
-function PaletteStage({ rgba }: { rgba: number[] }) {
-  return (
-    <div className="av-center">
-      <div className="av-palette">
-        {Array.from({ length: 256 }, (_, i) => {
-          const [r, g, b, a] = rgba.slice(i * 4, i * 4 + 4);
-          return <span key={i} title={`#${i}: ${r}, ${g}, ${b}, alpha ${a}`} style={{ background: `rgba(${r}, ${g}, ${b}, ${a / 255})` }} />;
-        })}
       </div>
     </div>
   );

@@ -1,6 +1,9 @@
 using System.Text;
 using CodeDesigner.Ps2.FileFormats.Imaging;
+using System.Text.Json;
 using CodeDesigner.Ps2.FileFormats.Ps2;
+using CodeDesigner.Ps2.FileFormats.Zipper.Anim;
+using CodeDesigner.Ps2.FileFormats.Zipper.Geo;
 using CodeDesigner.Ps2.FileFormats.Zipper.MPS;
 using CodeDesigner.Ps2.FileFormats.Zipper.RDR;
 using CodeDesigner.Ps2.FileFormats.Zipper.ZDB;
@@ -18,7 +21,8 @@ namespace MapBuilder.Server.Services
     {
         private sealed record ViewerEditRequest(
             int[]? Inner, string? Op, int? Atom, string? Value, int? Map, string? Name, float[]? Min, float[]? Max, float[]? Scale,
-            string? Text, int? Offset, string? Hex, string? PngBase64, string? Title1, string? Title2, string[]? Icons);
+            string? Text, int? Offset, string? Hex, string? PngBase64, string? Title1, string? Title2, string[]? Icons,
+            int? Node, float[]? Matrix, int? Kind, uint? Flags, string? Field, JsonElement? FieldValue, int? Word, uint? WordValue);
 
         private static void RegisterViewerEdits(CommandRegistry reg)
         {
@@ -81,6 +85,9 @@ namespace MapBuilder.Server.Services
             "bytes" => "Patch bytes in",
             "image" => "Replace the picture of",
             "iconSys" => "Change the title of",
+            "nparams" => "Change a scene node in",
+            "modelName" => "Change a model reference in",
+            "zanimField" or "zanimWord" => "Change an effect in",
             _ => "Edit",
         };
 
@@ -141,9 +148,36 @@ namespace MapBuilder.Server.Services
                 }
                 case "iconSys":
                     return Ps2Icon.WithIconSys(data, r.Title1 ?? "", r.Title2 ?? "", r.Icons ?? Array.Empty<string>());
+                case "nparams":
+                    return GeoEdits.WithNodeParams(data, r.Node ?? throw new ArgumentException("\"node\" (the nparams record) is required"), r.Matrix, r.Min, r.Max, r.Kind, r.Flags);
+                case "modelName":
+                    return GeoEdits.WithModelName(data, r.Node ?? throw new ArgumentException("\"node\" (the model_name record) is required"), r.Name ?? throw new ArgumentException("\"name\" is required"));
+                case "zanimField":
+                case "zanimWord":
+                {
+                    // {node: the animation's Seq_Data record, offset: the instruction, field + fieldValue | word + wordValue}
+                    int node = r.Node ?? throw new ArgumentException("\"node\" (the Seq_Data record) is required");
+                    int offset = r.Offset ?? throw new ArgumentException("\"offset\" (the instruction) is required");
+                    var nodes = ZedContainer.FromBytes(data).Nodes;
+                    if (node < 0 || node >= nodes.Count || nodes[node].Name != "Seq_Data") throw new ArgumentException($"Record #{node} is not a Seq_Data");
+                    byte[] seq = r.Op == "zanimWord"
+                        ? ZanimFile.WithWord(nodes[node].Data, offset, r.Word ?? throw new ArgumentException("\"word\" is required"), r.WordValue ?? throw new ArgumentException("\"wordValue\" is required"))
+                        : ZanimFile.WithField(nodes[node].Data, offset, r.Field ?? throw new ArgumentException("\"field\" is required"), FieldValueOf(r.FieldValue));
+                    return ZedSplice.Replace(data, node, seq);
+                }
                 default:
-                    throw new ArgumentException($"Unknown op '{r.Op}' (rdrSet, rdrDuplicate, rdrRemove, mpsMap, text, bytes, image, iconSys)");
+                    throw new ArgumentException($"Unknown op '{r.Op}' (rdrSet, rdrDuplicate, rdrRemove, mpsMap, text, bytes, image, iconSys, nparams, modelName, zanimField, zanimWord)");
             }
         }
+
+        // A ZANIM field value from JSON: a number, three numbers, or true / false.
+        private static object FieldValueOf(JsonElement? v) => v?.ValueKind switch
+        {
+            JsonValueKind.Number => v.Value.GetDouble(),
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.Array => v.Value.EnumerateArray().Select(x => x.GetDouble()).ToArray(),
+            _ => throw new ArgumentException("\"fieldValue\" is a number, three numbers or true / false"),
+        };
     }
 }

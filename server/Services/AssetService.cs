@@ -305,6 +305,18 @@ namespace MapBuilder.Server.Services
                     var result = ApplyEdit(s, Str(a, "label") ?? "add palette", p => { var r = PackageTextures.AddPalette(p, Str(a, "namespace"), rgba, is16); id = r.PaletteId; archive = r.Archive; return r.Changed; });
                     return new { result, archive, paletteId = id, palette = "texpal_" + id };
                 }
+                case "setPalette":
+                {
+                    // {archive, id, rgba: [1024 bytes] | pngBase64 | imagePath}: 256 colours set in place (an image gives
+                    // its first 256 pixels, row by row: a 16 × 16 swatch image maps one to one)
+                    string archive = Str(a, "archive") ?? throw new ArgumentException("\"archive\" (the _PAL.ZED) is required");
+                    int id = Int(a, "id");
+                    byte[] rgba = a.TryGetProperty("rgba", out var colours) && colours.ValueKind == JsonValueKind.Array
+                        ? colours.EnumerateArray().Select(v => (byte)Math.Clamp(v.GetInt32(), 0, 255)).ToArray()
+                        : ImageRgba(a, out _, out _);
+                    if (rgba.Length < 1024) throw new ArgumentException("A palette needs 256 colours (an image of at least 256 pixels)");
+                    return ApplyEdit(s, Str(a, "label") ?? $"set palette texpal_{id}", p => PackageTextures.SetPalette(p, archive, id, rgba));
+                }
                 case "importTexture":
                 {
                     // {sourceSession | source, name, sourceNamespace?, namespace?, newName?}

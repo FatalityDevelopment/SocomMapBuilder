@@ -16,7 +16,7 @@ import type { ModelTexturePixels } from '../zipper-core/texture-pixels';
 import * as api from './viewer-client';
 import { RDR_ROOT, type EditStatus, type ItemKind, type Listing, type Place, type Preview, type ViewerItem } from './viewer-client';
 
-export type Stage = 'empty' | 'loading' | 'model' | 'map' | 'clip' | 'image' | 'palette' | 'audio' | 'movie' | 'rdr' | 'mps' | 'text' | 'hex' | 'program' | 'iconsys' | 'summary' | 'error';
+export type Stage = 'empty' | 'loading' | 'model' | 'map' | 'clip' | 'image' | 'palette' | 'audio' | 'movie' | 'rdr' | 'mps' | 'text' | 'hex' | 'program' | 'iconsys' | 'geo' | 'clutter' | 'zanim' | 'summary' | 'error';
 type ViewportKind = 'model' | 'map' | 'clip';
 
 export interface MenuItem { label: string; action?: () => void; disabled?: () => boolean; shortcut?: string; separator?: boolean }
@@ -95,6 +95,8 @@ export class AssetViewerLogic {
   readonly clipPlaying = signal(false);
   readonly clipTime = signal(0);
   readonly clipDuration = signal(0);
+  // ZANIM archives: the effect shown in full (an index into the archive's effects).
+  readonly zanimEffect = signal<number | null>(null);
   // RDR trees: expanded rows, by path of list indices ("r/0/3").
   readonly rdrOpen = signal<ReadonlySet<string>>(new Set([RDR_ROOT]));
 
@@ -137,6 +139,7 @@ export class AssetViewerLogic {
       { label: '', separator: true },
       { label: 'Save changes…', action: () => void this.saveEdits(), shortcut: 'Ctrl+S', disabled: () => !this.editStatus()?.dirty.length },
       { label: 'Replace picture from image…', action: () => void this.replaceImage(), disabled: () => !this.canReplaceImage() },
+      { label: 'Palette colours from image…', action: () => void this.paletteFromImage(), disabled: () => !this.canEditPalette() },
       // Packages with unsaved edits elsewhere: going there makes their edits the ones Undo / Save act on.
       ...this.unsavedElsewhere().flatMap((st, i) => [
         ...(i === 0 ? [{ label: '', separator: true }] : []),
@@ -308,6 +311,7 @@ export class AssetViewerLogic {
   async select(item: ViewerItem | null): Promise<void> {
     if (item && this.selected() && api.placeKey(item, item.ref) === api.placeKey(this.selected()!, this.selected()!.ref)) { return; }
     this.selected.set(item);
+    this.zanimEffect.set(null);
     await this.showPreview(item);
   }
 
@@ -332,7 +336,8 @@ export class AssetViewerLogic {
     // Nothing selected: the place itself (a package's summary and map, an archive's summary).
     const target: ViewerItem | null = item ?? (l && l.kind !== 'folder' ? { path: l.path, inner: l.inner, name: l.name, kind: l.kind, size: l.size } : null);
     if (!target) { this.setStage('empty', null); return; }
-    this.stage.set('loading');
+    // After an edit the editor stays up (and keeps what it has open) while the new preview loads.
+    if (!this.refreshing) { this.stage.set('loading'); }
     try {
       if (target.ref && l?.session) {
         if (target.kind === 'model') { await this.previewModel(l.session, target, live); return; }
@@ -344,7 +349,8 @@ export class AssetViewerLogic {
           return;
         }
       }
-      const p = await api.preview(target, { rate: this.rate() });
+      const effect = /ZANIM\.ZAR$/i.test(target.name) ? this.zanimEffect() ?? undefined : undefined;
+      const p = await api.preview(target, { rate: this.rate(), effect });
       if (!live()) { return; }
       await this.showRawPreview(p, live);
     } catch (err) {
@@ -386,7 +392,10 @@ export class AssetViewerLogic {
         this.movieNote.set('');
         this.setStage('movie', p);
         return;
-      case 'rdr': if (!this.keepRdrOpen) { this.rdrOpen.set(new Set([RDR_ROOT])); } this.setStage('rdr', p); return;
+      case 'rdr': if (!this.refreshing) { this.rdrOpen.set(new Set([RDR_ROOT])); } this.setStage('rdr', p); return;
+      case 'geo': this.setStage('geo', p); return;
+      case 'clutter': this.setStage('clutter', p); return;
+      case 'zanim': this.setStage('zanim', p); return;
       case 'iconsys': this.setStage('iconsys', p); return;
       case 'mps': this.setStage('mps', p); return;
       case 'text': this.setStage('text', p); return;
@@ -687,7 +696,7 @@ export class AssetViewerLogic {
 
   // ------------------------------------------------------------------ editing (VIEWER_EDIT, through the package's session)
 
-  private keepRdrOpen = false;
+  private refreshing = false;
 
   /** Whether the selection (or, with nothing selected, this place) can be edited in place. */
   canEditInPlace(item: ViewerItem | null = this.selected()): boolean {
@@ -737,8 +746,8 @@ export class AssetViewerLogic {
     await this.navigate(l, true, true).catch(() => undefined);
     const again = sel ? this.listing()?.items.find(i => api.placeKey(i, i.ref) === api.placeKey(sel, sel.ref)) ?? null : null;
     this.selected.set(again);
-    this.keepRdrOpen = true;
-    try { await this.showPreview(again); } finally { this.keepRdrOpen = false; }
+    this.refreshing = true;
+    try { await this.showPreview(again); } finally { this.refreshing = false; }
     void this.refreshUnsaved();
   }
 
@@ -826,15 +835,88 @@ export class AssetViewerLogic {
 
   async setPoint(name: string, fields: { newName?: string; team?: number; kind?: string; position?: number[] }): Promise<void> {
     const p = this.preview();
-    if (p?.type !== 'mps' || !p.session) { return; }
+    if (p?.type === 'mps' && p.session) { await this.sessionEdit(p.session, { op: 'setPoint', name, ...fields }, `Changed point ${name}`); }
+  }
+
+  /** One ASSET_EDIT through a package session (the editors' ops), then the listing and preview again. */
+  private async sessionEdit(session: string, op: Record<string, unknown>, done: string): Promise<boolean> {
+    if (this.editBusy()) { return false; }
+    this.editBusy.set(true);
     try {
-      const { client } = this.clientFor(p.session);
-      await client.edit({ op: 'setPoint', name, ...fields });
-      this.editSession.set(p.session);
-      this.editStatus.set(await client.status() as unknown as EditStatus);
-      this.say(`Changed point ${name}`);
+      const { client, textures } = this.clientFor(session);
+      await client.edit(op);
+      const status = await client.status();
+      textures.invalidate(status.revision);
+      this.editSession.set(session);
+      this.editStatus.set(status as unknown as EditStatus);
+      this.say(done);
       await this.refreshAfterEdit();
-    } catch (err) { this.say(errText(err), true); }
+      return true;
+    } catch (err) {
+      this.say(errText(err), true);
+      return false;
+    } finally {
+      this.editBusy.set(false);
+    }
+  }
+
+  // Palettes: 256 colours set through the package session (textures using them redraw).
+  canEditPalette(): boolean {
+    const s = this.selected();
+    const l = this.listing();
+    return s?.kind === 'palette' && !!s.ref && !!l?.session && !l.session.startsWith('ca');
+  }
+
+  async setPalette(rgba: number[], what: string): Promise<void> {
+    const s = this.selected();
+    if (!s?.ref || !this.canEditPalette()) { return; }
+    await this.sessionEdit(this.listing()!.session!, { op: 'setPalette', archive: s.ref.archive, id: s.ref.id, rgba, label: `${what} in texpal_${s.ref.id}` }, `${what} in texpal_${s.ref.id}`);
+  }
+
+  async paletteFromImage(): Promise<void> {
+    const s = this.selected();
+    if (!s?.ref || !this.canEditPalette()) { return; }
+    const picked = await host.pickImage();
+    if (!picked) { return; }
+    await this.sessionEdit(this.listing()!.session!, { op: 'setPalette', archive: s.ref.archive, id: s.ref.id, pngBase64: picked.base64, label: `texpal_${s.ref.id} from ${picked.name}` }, `texpal_${s.ref.id} from ${picked.name}`);
+  }
+
+  // Clutter: the Map Builder's ops on the package session. Yaw and scale only when changed (they drop any tilt).
+  async moveClutter(index: number, position: number[], turn?: { yaw: number; scale: number }): Promise<void> {
+    const p = this.preview();
+    if (p?.type === 'clutter' && p.session) { await this.sessionEdit(p.session, { op: 'moveClutter', clutterIndex: index, position, ...turn }, `Moved clutter #${index}`); }
+  }
+
+  async addClutter(model: string, position: number[]): Promise<void> {
+    const p = this.preview();
+    if (p?.type === 'clutter' && p.session) { await this.sessionEdit(p.session, { op: 'addClutter', model, position }, `Added ${model}`); }
+  }
+
+  async deleteClutter(index: number): Promise<void> {
+    const p = this.preview();
+    if (p?.type === 'clutter' && p.session) { await this.sessionEdit(p.session, { op: 'deleteClutter', clutterIndex: index }, `Removed clutter #${index}`); }
+  }
+
+  // GEO scene nodes: the nparams and model_name records of the selected GEO archive.
+  setGeoNode(nparams: number, fields: { matrix?: number[]; min?: number[]; max?: number[]; kind?: number; flags?: number }): Promise<boolean> {
+    return this.applyEdit({ op: 'nparams', node: nparams, ...fields });
+  }
+
+  setModelName(node: number, name: string): Promise<boolean> { return this.applyEdit({ op: 'modelName', node, name }); }
+
+  // ZANIM effects: one shown in full, its fields and argument words written in place.
+  async showEffect(index: number): Promise<void> {
+    this.zanimEffect.set(index);
+    this.refreshing = true;
+    try { await this.showPreview(this.selected()); } finally { this.refreshing = false; }
+  }
+
+  setZanimField(sequence: number, offset: number, field: string, value: number | number[] | boolean): Promise<boolean> {
+    return this.applyEdit({ op: 'zanimField', node: sequence, offset, field, fieldValue: value });
+  }
+
+  setZanimWord(sequence: number, offset: number, word: number, value: number): Promise<boolean> {
+    return this.applyEdit({ op: 'zanimWord', node: sequence, offset, word, wordValue: value });
   }
 
   setText(text: string): Promise<boolean> { return this.applyEdit({ op: 'text', text }); }
@@ -848,17 +930,7 @@ export class AssetViewerLogic {
     const picked = await host.pickImage();
     if (!picked) { return; }
     if (s.kind === 'texture' && s.ref) {
-      const session = this.listing()!.session!;
-      try {
-        const { client, textures } = this.clientFor(session);
-        await client.edit({ op: 'replaceTexture', texture: s.ref.name, namespace: s.ref.namespace ?? undefined, pngBase64: picked.base64 });
-        const status = await client.status();
-        textures.invalidate(status.revision);
-        this.editSession.set(session);
-        this.editStatus.set(status as unknown as EditStatus);
-        this.say(`Replaced ${s.name} with ${picked.name}`);
-        await this.refreshAfterEdit();
-      } catch (err) { this.say(errText(err), true); }
+      await this.sessionEdit(this.listing()!.session!, { op: 'replaceTexture', texture: s.ref.name, namespace: s.ref.namespace ?? undefined, pngBase64: picked.base64 }, `Replaced ${s.name} with ${picked.name}`);
       return;
     }
     await this.applyEdit({ op: 'image', pngBase64: picked.base64 });

@@ -35,3 +35,7 @@ Each `vis` entry under `visuals` has a `vparams` record. Its first u32 is the vi
 A map's scene is the GEO namespace that has a `worldmodel` node (normally the map's own, `m51`). `worldmodel` draws `WORL_MDL.ZED` and places the map's props: every scene node below it that resolves to a model is an instance at its world transform. The `models` list also holds prototypes (trees, crates, windows) defined at the origin, which are drawn only where something references them. Clutter is placed separately (see [Clutter](clutter.md)).
 
 Scene names resolve to MDL records loosely (`GeoNames.Variants`): lowercase, an alphanumeric-only form, with `_LO` and a trailing `_<digits>` stripped, and with a `MESH_` prefix added, for the name as stored and its braced part. One alias is built in: M51 places `iw80a2` instances that resolve to the `m16a2` mesh.
+
+## Editing
+
+`Geo/GeoEdits.cs` changes one record and splices it back (every other byte kept): `WithNodeParams` sets a node's transform, bounds, kind and flags (a short record without words 22–23 grows to 96 bytes when they are set), `WithModelName` a `model_name` (zero-padded to its old size when the new name fits). The Asset Viewer's GEO editor uses them through `VIEWER_EDIT` `nparams` / `modelName`.

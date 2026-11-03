@@ -55,6 +55,21 @@ export const RDR_ROOT = 'r';
 
 export interface MpsPoint { name: string; team: number; kind: string; x: number; z: number; cellX: number; cellZ: number }
 
+/** A GEO scene node: its nparams record (transform column-major, bounds, kind, flags) and model reference. */
+export interface GeoNode {
+  name: string; nparams: number; matrix: number[]; min: number[]; max: number[]; kind: number; flags: number;
+  modelName: { node: number; text: string } | null; visuals: number; children: GeoNode[];
+}
+
+export interface ClutterPlacement { model: string; position: number[]; yaw: number; scale: number; tilted: boolean; layout: string }
+
+export interface ZanimField { name: string; kind: 'f32' | 'i32' | 'u16' | 'object' | 'name' | 'vec3' | 'bit' | 'bool16'; value: number | number[] | boolean; shown: string; readOnly: boolean }
+export interface ZanimInstruction { offset: number; op: number; name: string; depth: number; condition: boolean; words: string[]; fields: ZanimField[] }
+export interface ZanimEffect {
+  name: string; set: string; sequence: number; names: string[]; objects: Array<{ value: number; label: string }>;
+  tracks: Array<{ target: string; instructions: ZanimInstruction[] }>;
+}
+
 export type Preview = { name: string; facts: Fact[] } & (
   | { type: 'folder' | 'info' }
   | { type: 'movie'; canConvert: boolean; url: string | null }
@@ -70,6 +85,9 @@ export type Preview = { name: string; facts: Fact[] } & (
   | { type: 'text'; text: string; truncated: boolean }
   | { type: 'hex'; kind: ItemKind; note: string | null; bytes: string; strings: string[] }
   | { type: 'palette'; rgba: number[]; is16: boolean }
+  | { type: 'geo'; models: GeoNode[] }
+  | { type: 'clutter'; session: string | null; placements: ClutterPlacement[]; models: string[] }
+  | { type: 'zanim'; effects: Array<{ name: string; set: string; tracks: number; instructions: number; spawns: string[] }>; effect: ZanimEffect | null }
 );
 
 const json = (value: unknown) => JSON.stringify(value);
@@ -78,7 +96,7 @@ export function list(place: Place): Promise<Listing> {
   return command('VIEWER_LIST', { InputPath: place.path, AssetJson: json({ inner: place.inner }) });
 }
 
-export function preview(place: Place, options: { sample?: number; rate?: number } = {}): Promise<Preview> {
+export function preview(place: Place, options: { sample?: number; rate?: number; effect?: number } = {}): Promise<Preview> {
   return command('VIEWER_PREVIEW', { InputPath: place.path, AssetJson: json({ inner: place.inner, ...options }) });
 }
 
@@ -98,7 +116,8 @@ export function sessions(): Promise<Array<Partial<EditStatus>>> {
   return command('ASSET_SESSIONS');
 }
 
-/** One VIEWER_EDIT on a file or record (rdrSet, rdrDuplicate, rdrRemove, mpsMap, text, bytes, image, iconSys). */
+/** One VIEWER_EDIT on a file or record (rdrSet, rdrDuplicate, rdrRemove, mpsMap, text, bytes, image, iconSys, nparams,
+ *  modelName, zanimField, zanimWord). */
 export function edit(place: Place, op: Record<string, unknown>): Promise<{ session: string; package: string; result: unknown; status: EditStatus }> {
   return command('VIEWER_EDIT', { InputPath: place.path, AssetJson: json({ ...op, inner: place.inner }) });
 }

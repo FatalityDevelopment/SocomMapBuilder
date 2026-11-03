@@ -30,7 +30,7 @@ namespace MapBuilder.Server.Services
 
         private static readonly Regex FamilyRx = new(@"^(?<ns>.+?)_(?<kind>MDL|TXR|PAL|GEO)(?:\([^)]+\))?\.ZED$", RegexOptions.IgnoreCase);
 
-        private sealed record ViewerRequest(int[]? Inner, int? Sample, int? Rate, string? Session, string? Archive, int? Palette);
+        private sealed record ViewerRequest(int[]? Inner, int? Sample, int? Rate, string? Session, string? Archive, int? Palette, int? Effect);
 
         // EntryPath: a .ZDB root entry's path in the package (what PACKAGE_EDIT names it by).
         private sealed record ViewerNode(string Name, long Size, Func<byte[]> Bytes, byte[]? Loaded, string? EntryPath = null);
@@ -426,10 +426,14 @@ namespace MapBuilder.Server.Services
             }
             try
             {
+                // Clutter and effect scripts have editors of their own.
+                if (place.Name.Equals(PackageEdits.ClutterLeaf, StringComparison.OrdinalIgnoreCase) && kind == "archive") return ClutterPreview(place, common);
+                if (place.Name.EndsWith("ZANIM.ZAR", StringComparison.OrdinalIgnoreCase) && kind == "archive") return ZanimPreview(place, req, common);
                 return kind switch
                 {
                     "package" => PackagePreview(place, common),
-                    "models" or "textures" or "palettes" or "geo" or "clips" or "archive" => ArchivePreview(place, kind, common),
+                    "geo" => GeoPreview(place, common),
+                    "models" or "textures" or "palettes" or "clips" or "archive" => ArchivePreview(place, kind, common),
                     "rdr" => RdrPreview(place, common),
                     "mps" => MpsPreview(place, common),
                     "sound" => SoundPreview(place, common),
