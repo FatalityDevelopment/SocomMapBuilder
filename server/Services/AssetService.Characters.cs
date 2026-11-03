@@ -119,7 +119,7 @@ namespace MapBuilder.Server.Services
             {
                 dryRun, pack = pack.ToUpperInvariant(), written,
                 files = r.Files.Select(f => new { path = f.Path, size = f.Data.Length }),
-                mesh = r.Mesh, skeleton = r.Skeleton, textures = r.Textures,
+                mesh = r.Mesh, skeleton = r.Skeleton, textures = r.Textures, renamed = r.Renamed,
                 palettes = r.Palettes.ToDictionary(kv => kv.Key.ToString(), kv => kv.Value), warnings = r.Warnings,
             };
         }

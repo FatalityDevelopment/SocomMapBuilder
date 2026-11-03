@@ -146,7 +146,11 @@ namespace MapBuilder.Tests
                 var d = Describe(packed, "MESH_con_pow01");
                 var source = Describe(s, Seal);
                 Assert.Equal(source.GetProperty("chunks").GetArrayLength(), d.GetProperty("chunks").GetArrayLength());
-                Assert.Contains(d.GetProperty("chunks").EnumerateArray(), c => c.GetProperty("texture").GetString() == "packtest.tif");
+                // Textures take pack-unique names, so a map's own texture of the same name cannot stand in.
+                string gear = r.GetProperty("renamed").GetProperty("packtest.tif").GetString()!;
+                Assert.StartsWith("mtest1", gear);
+                Assert.Contains(d.GetProperty("chunks").EnumerateArray(), c => c.GetProperty("texture").GetString() == gear);
+                Assert.DoesNotContain(d.GetProperty("chunks").EnumerateArray(), c => c.GetProperty("texture").GetString() == "seal_A_woodland_torso_LO.tif");
                 Assert.All(d.GetProperty("textures").EnumerateArray(), t =>
                 {
                     Assert.True(t.GetProperty("found").GetBoolean(), t.GetProperty("name").GetString());
@@ -320,6 +324,25 @@ namespace MapBuilder.Tests
         }
 
         [Fact]
+        public void Conform_lifts_gear_out_of_the_chest_and_leaves_what_already_clears_it()
+        {
+            string? path = Environment.GetEnvironmentVariable("MB_MAP_ZDB");
+            if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
+            var pkg = ZipperPackage.Open(path);
+            // A plate set into the chest (its front is about z −1.25 here) and, apart from it, a pouch well clear of it.
+            var input = MeshShapes.Build(JsonDocument.Parse("[{\"kind\":\"box\",\"min\":[-0.8,13,-1.2],\"max\":[0.8,14.5,-1.0],\"radius\":0.05}," +
+                                                            "{\"kind\":\"box\",\"min\":[1.5,13,-4],\"max\":[1.8,13.4,-3.7]}]").RootElement);
+            var fit = CharacterEdits.Conform(pkg, "CLIB_MDL.ZED", Seal, input, 0.06f, 0.5f);
+            Assert.True(fit.Moved > 0 && fit.MaxPush > 0.05f, $"moved {fit.Moved}, max push {fit.MaxPush}");
+            for (int i = 0; i < input.Positions.Count; i++)
+                if (input.Positions[i][2] < -3.5f) Assert.Equal(input.Positions[i], fit.Mesh.Positions[i]);
+            // Fitted, it clears the surface: a second fit has next to nothing to do.
+            var again = CharacterEdits.Conform(pkg, "CLIB_MDL.ZED", Seal, fit.Mesh, 0.06f, 0);
+            Assert.True(again.MaxPush < 0.03f, $"a second fit still pushes {again.MaxPush}");
+            Assert.Equal(input.Triangles, fit.Mesh.Triangles);
+        }
+
+        [Fact]
         public void ScaleBones_names_its_bones_and_keeps_vertices_in_reach()
         {
             if (OpenMap() is not { } s) return;
@@ -371,6 +394,24 @@ namespace MapBuilder.Tests
         }
 
         private const string Torso = "seal_A_woodland_torso_LO.tif";
+
+        [Fact]
+        public void Paint_lands_where_the_renderer_samples_v_flipped()
+        {
+            // The renderer samples a top-down texture at V' = 1 - V: a triangle near v = 0.9 is in the top rows.
+            var top = new TexturePaint.Triangle("t", new[] { 0.1f, 0.9f, 0.4f, 0.9f, 0.25f, 0.97f });
+            var rows = TexturePaint.Masks(new[] { top }, 16, 16, 0)["t"].Select(i => i / 16).ToList();
+            Assert.NotEmpty(rows);
+            Assert.All(rows, r => Assert.True(r <= 2, $"row {r}"));
+
+            // A region's uv rectangle is in UV space too: only the part of the triangle with v >= 0.93 is painted.
+            byte[] rgba = new byte[16 * 16 * 4];
+            var painted = TexturePaint.Paint(rgba, 16, 16, new[] { top },
+                new[] { new TexturePaint.Region(new HashSet<string> { "t" }, new byte[] { 255, 0, 0 }, Fill: true, Uv: new[] { 0f, 0.93f, 1f, 1f }) });
+            Assert.True(painted[0] > 0);
+            for (int i = 0; i < 16 * 16; i++)
+                if (rgba[i * 4] > 0) Assert.True(i / 16 <= 1, $"pixel {i} (row {i / 16}) is below the rectangle");
+        }
 
         [Fact]
         public void The_uv_layout_names_the_body_parts_a_skin_covers()

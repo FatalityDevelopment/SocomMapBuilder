@@ -30,6 +30,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             public List<string> Textures { get; } = new();
             /// <summary>Old palette id → the pack's.</summary>
             public Dictionary<int, int> Palettes { get; } = new();
+            /// <summary>Texture names the pack gave its own (old → new).</summary>
+            public Dictionary<string, string> Renamed { get; } = new(StringComparer.OrdinalIgnoreCase);
             public List<string> Warnings { get; } = new();
         }
 
@@ -70,6 +72,16 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             {
                 var found = pkg.FindTexture(tif, ns);
                 if (found == null) { result.Warnings.Add($"Texture {tif} is not in the package; the pack leaves it out"); continue; }
+                // A pack-unique name, so a map holding a texture of the same name (seal_A_woodland_torso_LO.tif) cannot
+                // stand in for this one. Name fields keep their size: a shorter old name keeps its name.
+                string packed = $"{pack.ToLowerInvariant()}{textures.Count + 1:x}.tif";
+                if (packed.Length <= tif.Length)
+                {
+                    mdl = RenameTexture(mdl, tif, packed);
+                    result.Renamed[tif] = packed;
+                }
+                else result.Warnings.Add($"{tif} is shorter than a pack name ({packed}) and keeps its name: a map texture of that name could stand in for it");
+                string shipped = result.Renamed.GetValueOrDefault(tif, tif);
                 byte[] texdat = WeaponPack.Renumber(found.Value.Texdat, textures.Count + 1);
                 var header = ZedTextureFile.ParseHeader(texdat);
                 if (header.IsIndexed)
@@ -89,8 +101,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
                     }
                     if (result.Palettes.TryGetValue(old, out id)) texdat = WithPalette(texdat, header, id);
                 }
-                textures.Add(new ZedTree.Record(tif, Array.Empty<byte>(), new[] { new ZedTree.Record("texdat", texdat) }));
-                result.Textures.Add(tif);
+                textures.Add(new ZedTree.Record(shipped, Array.Empty<byte>(), new[] { new ZedTree.Record("texdat", texdat) }));
+                result.Textures.Add(shipped);
             }
 
             var lib = Library(pkg, m.Namespace);
@@ -99,6 +111,28 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             string upper = pack.ToUpperInvariant();
             result.Files.AddRange(files.Select(f => ($"RUN\\MP\\{upper}\\{f.Item1}", f.Item2)));
             return result;
+        }
+
+        // A skinned mesh's section names are where its chain's cnt tags point (a field may follow a block's MSCNT word,
+        // so a byte scan for "name\0" after a NUL misses it): each one naming `from` is rewritten, NUL padded.
+        private static ZedTree.Record RenameTexture(ZedTree.Record mesh, string from, string to)
+        {
+            var startRecord = mesh.Children.FirstOrDefault(c => c.Name.EndsWith("_START", StringComparison.Ordinal) && c.Data.Length >= 4)
+                ?? throw new InvalidDataException($"{mesh.Name} has no _START");
+            byte[] data = (byte[])mesh.Data.Clone();
+            int start = BitConverter.ToInt32(startRecord.Data, 0);
+            int count = (int)(BitConverter.ToUInt32(data, start) & 0xFFFF);
+            byte[] old = System.Text.Encoding.Latin1.GetBytes(from), name = System.Text.Encoding.Latin1.GetBytes(to);
+            for (int t = 1; t <= count && start + t * 16 + 16 <= data.Length; t++)
+            {
+                int o = start + t * 16;
+                if ((BitConverter.ToUInt32(data, o) >> 28 & 7) != 1) continue;
+                int addr = BitConverter.ToInt32(data, o + 4);
+                if (addr < 0 || addr + old.Length >= data.Length || !data.AsSpan(addr, old.Length).SequenceEqual(old) || data[addr + old.Length] != 0) continue;
+                Array.Clear(data, addr, old.Length);
+                name.CopyTo(data, addr);
+            }
+            return mesh with { Data = data };
         }
 
         private static (string Leaf, int Index)? Skeleton(ZipperPackage pkg, string preferred, string name)

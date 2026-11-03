@@ -68,7 +68,9 @@ namespace MapBuilder.Server.Services
         private static readonly (string, Dictionary<string, object>)[] MeshInput =
         {
             Arr("shapes", "object", "[{kind: lathe {profile: [[along, radius]], caps?} | cylinder {start, end, radius, radiusEnd?, caps?} | ring {at, inner, outer, thickness?} | " +
-                "sphere {radius, scale?, rings?} | box {min, max, lean?}, material (0-7), axis?: x|y|z (default x), center?, segments?, squash?: [u, w]}]."),
+                "sphere {radius, scale?, rings?} | box {min, max, lean?, radius? (rounded edges), bevelSegments? (1-4), puff? (bulge the faces' middles: a stuffed pouch), divisions?, faceUv?: {\"-z\": rect, ...}} | " +
+                "strap {path: [[x, y, z]], width, thickness?, around?: [x, y, z] (wraps round it) | outward?: [x, y, z], steps? (curve pieces per span), caps?}, " +
+                "material (0-7), uvRect?: [u0, v0, u1, v1] (map into that rectangle of a painted texture instead of the material strip; v up), axis?: x|y|z (default x), center?, segments?, squash?: [u, w]}]."),
             Vec("light", 3, "shapes: the light the shades are baked from (default [0.35, 0.85, 0.45])."),
             F("obj", "string", "OBJ text."), F("objPath", "string", "An OBJ file (instead of obj)."), F("yUp", "boolean", "OBJ is Y up (default true)."),
             F("scale", "number", "OBJ scale."), Vec("offset", 3, "OBJ offset."), F("primitive", "object", "{kind: cube | plane, size?, center?}."),
@@ -102,7 +104,8 @@ namespace MapBuilder.Server.Services
                 new[] { "texture", "model", "regions" },
                 new[] { F("texture", "string", "The .tif to paint."), F("model", "string", "The model whose parts pick the places (MESH_seal_A_woodland_LO)."),
                     F("archive", "string", "The model's *_MDL.ZED (default: found by name)."),
-                    Arr("regions", "object", "[{parts: [bone or visual names] | all: true, color: [r, g, b] 0-255, fill?: false (tint, keeping shading), strength?: 0-1 (default 1)}], applied in order."),
+                    Arr("regions", "object", "[{parts: [bone or visual names] | all: true, color: [r, g, b] 0-255, fill?: false (tint, keeping shading), strength?: 0-1 (default 1), " +
+                        "uv?: [u0, v0, u1, v1] (only there: part of a bone's area, such as the lower face; assets_uv_layout gives each part's bounds)}], applied in order."),
                     F("namespace", "string", "TXR namespace to prefer (default the model's).") }),
             new("retexture", "Point a model's sections at another texture.", new[] { "archive", "model", "from", "to" },
                 new[] { Archive, Model, F("from", "string", "The texture now named."), F("to", "string", "The texture to name (must exist)."), F("visual", "string", "Only this visual.") }),
@@ -126,7 +129,8 @@ namespace MapBuilder.Server.Services
                 new[] { "archive", "model", "texture" },
                 new[] { Archive, Model, F("bone", "string", "Optional: a skeleton bone (assets_describe_model skeleton) to follow rigidly; vertices stay within 8 units of it."),
                     F("texture", "string", "A texture in the character's TXR namespace (addTexture materials for shapes), at most 15 characters."),
-                    F("lowDetail", "boolean", "Also add it to the character's lower-detail mesh (MESH_x_1 / MESH_x_1_LO) when there is one (default true).") }.Concat(MeshInput).ToArray()),
+                    F("lowDetail", "boolean", "Also add it to the character's lower-detail mesh (MESH_x_1 / MESH_x_1_LO) when there is one (default true)."),
+                    F("conform", "object", "true | {offset? (default 0.06), reach? (default 0.5)}: first push vertices behind or within offset of the body's surface out to offset above it, each carrying its piece within reach along, so a vest panel or band takes the chest's curve instead of floating or cutting in.") }.Concat(MeshInput).ToArray()),
             new("scaleBones", "Grow or thin a skinned character's body parts: each named bone's vertex parts scaled in that bone's own frame about its joint, so the change fades across joints with no seam. Use this to reshape a body (thicker arms, broader chest, bigger head). On limbs and the spine use thickness (scale and length also stretch the part past the next joint); scale suits end bones (head, hands). The lower-detail mesh follows.",
                 new[] { "archive", "model", "bones" },
                 new[] { Archive, Model,

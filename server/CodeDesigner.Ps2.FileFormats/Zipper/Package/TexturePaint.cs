@@ -5,13 +5,16 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
     /// <summary>
     /// Where a model draws a texture, and painting by those places: the model's triangles that use the texture, in
     /// texture space, each labelled by its body part (a character's heaviest bone, else the visual). The renderer
-    /// samples rows top-down with V as given (flipY off), so a UV lands on pixel (u·W, v·H), wrapping.
+    /// uploads the decoded rows top-down (flipY off) and samples at V' = 1 − V (viewport-core chunkGeometry), so a UV
+    /// lands on pixel (u·W, (1 − v)·H), wrapping.
     /// </summary>
     public static class TexturePaint
     {
         public sealed record Triangle(string Label, float[] Uv);   // 6 floats: u0 v0 u1 v1 u2 v2
 
-        public sealed record Region(IReadOnlySet<string> Labels, byte[] Color, bool Fill = false, float Strength = 1);
+        /// <summary>A paint region: the parts' pixels, within <see cref="Uv"/> [u0, v0, u1, v1] when given (part of a
+        /// bone's area, such as the lower face).</summary>
+        public sealed record Region(IReadOnlySet<string> Labels, byte[] Color, bool Fill = false, float Strength = 1, float[]? Uv = null);
 
         /// <summary>The model's triangles drawn with <paramref name="texture"/>, labelled.</summary>
         public static List<Triangle> Triangles(ModelMesh mesh, string texture)
@@ -50,7 +53,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             foreach (var t in triangles)
             {
                 if (!masks.TryGetValue(t.Label, out var m)) masks[t.Label] = m = new HashSet<int>();
-                float[] x = { t.Uv[0] * w, t.Uv[2] * w, t.Uv[4] * w }, y = { t.Uv[1] * h, t.Uv[3] * h, t.Uv[5] * h };
+                float[] x = { t.Uv[0] * w, t.Uv[2] * w, t.Uv[4] * w }, y = { (1 - t.Uv[1]) * h, (1 - t.Uv[3]) * h, (1 - t.Uv[5]) * h };
                 int x0 = (int)MathF.Floor(x.Min()) - bleed, x1 = (int)MathF.Ceiling(x.Max()) + bleed;
                 int y0 = (int)MathF.Floor(y.Min()) - bleed, y1 = (int)MathF.Ceiling(y.Max()) + bleed;
                 if ((long)(x1 - x0) * (y1 - y0) > 4L * w * h) continue;   // a degenerate or wildly tiled triangle
@@ -63,6 +66,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
         }
 
         private static int Mod(int a, int n) => ((a % n) + n) % n;
+
+        private static bool InRect(float[] r, float u, float v) => u >= r[0] && u <= r[2] && v >= r[1] && v <= r[3];
 
         // Inside the triangle, or within `bleed` pixels of it.
         private static bool Near(float[] x, float[] y, float px, float py, int bleed)
@@ -98,7 +103,9 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             var counts = new List<int>();
             foreach (var r in regions)
             {
-                var pixels = masks.Where(kv => r.Labels.Contains(kv.Key)).SelectMany(kv => kv.Value).ToHashSet();
+                var pixels = masks.Where(kv => r.Labels.Contains(kv.Key)).SelectMany(kv => kv.Value)
+                    .Where(i => r.Uv == null || InRect(r.Uv, (i % w + 0.5f) / w, 1 - (i / w + 0.5f) / h))
+                    .ToHashSet();
                 counts.Add(pixels.Count);
                 if (pixels.Count == 0) continue;
                 float Lum(int i) => 0.299f * rgba[i * 4] + 0.587f * rgba[i * 4 + 1] + 0.114f * rgba[i * 4 + 2];
@@ -155,7 +162,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             {
                 var c = colours[t.Label];
                 for (int e = 0; e < 3; e++)
-                    Line(img, W, H, t.Uv[e * 2] * W, t.Uv[e * 2 + 1] * H, t.Uv[(e + 1) % 3 * 2] * W, t.Uv[(e + 1) % 3 * 2 + 1] * H, c);
+                    Line(img, W, H, t.Uv[e * 2] * W, (1 - t.Uv[e * 2 + 1]) * H, t.Uv[(e + 1) % 3 * 2] * W, (1 - t.Uv[(e + 1) % 3 * 2 + 1]) * H, c);
             }
             return (img, W, H);
         }

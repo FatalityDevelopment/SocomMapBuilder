@@ -152,6 +152,126 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             return result;
         }
 
+        public sealed record Fitted(MeshTopology.InputMesh Mesh, int Moved, float MaxPush);
+
+        /// <summary>
+        /// Gear fitted to the body before <see cref="AddMesh"/>: each vertex closer than <paramref name="offset"/> to the
+        /// surface under it (the plane of its nearest body vertices, which takes in gear already added), or behind it, is
+        /// pushed out along the surface's normal to <paramref name="offset"/> above it. A pushed vertex carries the rest of
+        /// its piece within <paramref name="reach"/> with it, fading with distance, so a pouch moves whole while a band laid
+        /// round the ribs takes their curve. Pieces are the mesh's connected parts (welded by position).
+        /// </summary>
+        public static Fitted Conform(ZipperPackage pkg, string archive, string modelName, MeshTopology.InputMesh input, float offset, float reach,
+            byte[]? archiveBytes = null)
+        {
+            var (_, _, payload, start, skeleton) = Open(pkg, archive, modelName, archiveBytes);
+            var body = Vertices(payload, start, skeleton, new Selection());
+            if (body.Count == 0) throw new InvalidOperationException($"{modelName} has no body vertices to fit to");
+            int n = input.Positions.Count;
+            var pos = input.Positions.Select(p => (float[])p.Clone()).ToList();
+            var piece = Pieces(input);
+            // The first pass carries pieces along; later ones settle what the new place still leaves under the surface.
+            for (int pass = 0; pass < 4; pass++)
+            {
+                var (need, dirs) = Clearance(body, pos, offset);
+                var pushed = Enumerable.Range(0, n).Where(i => need[i] > 1e-4f).ToList();
+                if (pushed.Count == 0) break;
+                var next = new List<float[]>(n);
+                for (int i = 0; i < n; i++)
+                {
+                    var g = pos[i];
+                    // The strongest carry onto this vertex from a pushed one in its piece (itself at full strength).
+                    float push = need[i];
+                    float[] dir = dirs[i];
+                    if (reach > 0 && pass == 0)
+                        foreach (int j in pushed)
+                        {
+                            if (j == i || piece[j] != piece[i]) continue;
+                            var h = pos[j];
+                            float dx = h[0] - g[0], dy = h[1] - g[1], dz = h[2] - g[2], d = MathF.Sqrt(dx * dx + dy * dy + dz * dz);
+                            if (d >= reach) continue;
+                            float carry = need[j] * (1 - d / reach);
+                            if (carry > push) { push = carry; dir = dirs[j]; }
+                        }
+                    next.Add(new[] { g[0] + dir[0] * push, g[1] + dir[1] * push, g[2] + dir[2] * push });
+                }
+                pos = next;
+            }
+            var output = new MeshTopology.InputMesh();
+            output.Positions.AddRange(pos);
+            int moved = 0;
+            float maxPush = 0;
+            for (int i = 0; i < n; i++)
+            {
+                float[] a = input.Positions[i], b = pos[i];
+                float d = MathF.Sqrt((a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]));
+                if (d > 1e-5f) { moved++; maxPush = Math.Max(maxPush, d); }
+            }
+            output.Normals.AddRange(input.Normals);
+            output.Uvs.AddRange(input.Uvs);
+            output.Colors.AddRange(input.Colors);
+            output.Triangles.AddRange(input.Triangles);
+            return new Fitted(output, moved, maxPush);
+        }
+
+        // Per vertex, how far it must move out to sit offset above the surface under it (the plane of its nearest few
+        // body vertices, inverse-distance weighted: steadier than one vertex's normal), and that surface's normal.
+        private static (float[] Need, float[][] Dirs) Clearance(List<(float[] Position, float[] Normal, List<Part> Parts)> body, List<float[]> pos, float offset)
+        {
+            const int Near = 4;
+            var need = new float[pos.Count];
+            var dirs = new float[pos.Count][];
+            for (int i = 0; i < pos.Count; i++)
+            {
+                var g = pos[i];
+                var best = new (float D, int I)[Near];
+                Array.Fill(best, (float.MaxValue, -1));
+                for (int v = 0; v < body.Count; v++)
+                {
+                    var p = body[v].Position;
+                    float dx = p[0] - g[0], dy = p[1] - g[1], dz = p[2] - g[2], d = dx * dx + dy * dy + dz * dz;
+                    if (d >= best[Near - 1].D) continue;
+                    int k = Near - 1;
+                    for (; k > 0 && best[k - 1].D > d; k--) best[k] = best[k - 1];
+                    best[k] = (d, v);
+                }
+                float[] at = new float[3], nrm = new float[3];
+                float total = 0;
+                foreach (var (d, v) in best)
+                {
+                    if (v < 0) continue;
+                    float w = 1 / (MathF.Sqrt(d) + 1e-3f);
+                    var bn = Normalize(body[v].Normal);
+                    for (int k = 0; k < 3; k++) { at[k] += body[v].Position[k] * w; nrm[k] += bn[k] * w; }
+                    total += w;
+                }
+                for (int k = 0; k < 3; k++) at[k] /= total;
+                nrm = Normalize(nrm);
+                float above = (g[0] - at[0]) * nrm[0] + (g[1] - at[1]) * nrm[1] + (g[2] - at[2]) * nrm[2];
+                need[i] = Math.Max(0, offset - above);
+                dirs[i] = nrm;
+            }
+            return (need, dirs);
+        }
+
+        // Each vertex's connected part: joined by triangles and by sharing a position (a box's faces have their own vertices).
+        private static int[] Pieces(MeshTopology.InputMesh m)
+        {
+            int n = m.Positions.Count;
+            var parent = Enumerable.Range(0, n).ToArray();
+            int Find(int x) { while (parent[x] != x) x = parent[x] = parent[parent[x]]; return x; }
+            void Join(int a, int b) { a = Find(a); b = Find(b); if (a != b) parent[a] = b; }
+            foreach (var (a, b, c) in m.Triangles) { Join(a, b); Join(b, c); }
+            var welded = new Dictionary<(int, int, int), int>();
+            for (int i = 0; i < n; i++)
+            {
+                var p = m.Positions[i];
+                var key = ((int)MathF.Round(p[0] * 1e4f), (int)MathF.Round(p[1] * 1e4f), (int)MathF.Round(p[2] * 1e4f));
+                if (welded.TryGetValue(key, out int other)) Join(i, other); else welded[key] = i;
+            }
+            return Enumerable.Range(0, n).Select(Find).ToArray();
+        }
+
         /// <summary>Bones a vertex of new geometry may follow when its weights come from the body (retail: up to 3).</summary>
         public const int MaxInfluences = 3;
 

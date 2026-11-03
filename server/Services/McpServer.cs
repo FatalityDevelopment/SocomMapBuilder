@@ -745,7 +745,8 @@ namespace MapBuilder.Server.Services
                 "- deleteFaces / duplicateFaces {archive, model, faces:{geometryOffset:[triangle…]}, …}\n" +
                 "- addMesh {archive, model, visual:\"N000_000\", texture, replace?, shapes | obj | objPath | mesh | meshPath | primitive:{kind:cube|plane, size, center}}: " +
                 "shapes [{kind: lathe {profile:[[along,radius]]} | cylinder {start,end,radius,radiusEnd?} | ring {at,inner,outer,thickness?} | sphere {radius,scale?} | " +
-                "box {min,max,lean?}, material 0-7, axis? x|y|z (default x), center?, segments?, squash?, caps?}] build a mesh shaded from a materials skin (addTexture materials)\n" +
+                "box {min,max,lean?,radius? (rounded),bevelSegments?,puff? (stuffed),divisions?,faceUv?} | strap {path:[[x,y,z]],width,thickness?,around?|outward?,steps?}, " +
+                "material 0-7, uvRect? [u0,v0,u1,v1] (a painted atlas instead of the material strip), axis? x|y|z (default x), center?, segments?, squash?, caps?}] build a mesh shaded from a materials skin (addTexture materials)\n" +
                 "- hideVisual {archive, model, visual} (it draws nothing; addMesh can fill it again)\n" +
                 "- newWeapon {template, name, archive?} (copies the weapon's visuals and GEO definition - LODs, firepoint, aimpoint - to reshape with addMesh / hideVisual)\n" +
                 "- importModel {source (package path) | sourceSession, archive, name, targetArchive?, newName?}\n" +

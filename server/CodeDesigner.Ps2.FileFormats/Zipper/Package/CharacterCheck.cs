@@ -15,8 +15,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
         /// it for any reasonable value; a hard-edged selection does not).</summary>
         public const float MaxStretch = 1.4f, MinStretch = 0.6f;
 
-        /// <summary>Added vertices further than this from every body vertex float off the body.</summary>
-        public const float MaxGap = 1.5f;
+        /// <summary>Added vertices further than this from every body vertex float off the body (a backpack stands out about 2).</summary>
+        public const float MaxGap = 2.5f;
 
         public sealed record Spot(string Bone, float Ratio, float[] At);
 

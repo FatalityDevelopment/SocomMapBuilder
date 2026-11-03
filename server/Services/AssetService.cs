@@ -259,12 +259,24 @@ namespace MapBuilder.Server.Services
                     bool lowDetail = !(a.TryGetProperty("lowDetail", out var ld) && ld.ValueKind == JsonValueKind.False);
                     string lowName = CharacterEdits.LowDetailName(model);
                     bool hasLow = lowDetail && pkg.FindModel(archive, lowName) != null;
+                    // conform: true | {offset?, reach?}: fit the gear onto the body's surface first.
+                    (float Offset, float Reach)? conform = null;
+                    if (a.TryGetProperty("conform", out var cf))
+                    {
+                        if (cf.ValueKind == JsonValueKind.True) conform = (0.06f, 0.5f);
+                        else if (cf.ValueKind == JsonValueKind.Object)
+                            conform = (cf.TryGetProperty("offset", out var co) && co.ValueKind == JsonValueKind.Number ? co.GetSingle() : 0.06f,
+                                       cf.TryGetProperty("reach", out var cr) && cr.ValueKind == JsonValueKind.Number ? Math.Max(0, cr.GetSingle()) : 0.5f);
+                        else if (cf.ValueKind != JsonValueKind.False) throw new ArgumentException("\"conform\" is true or {offset?, reach?}");
+                    }
                     CharacterEdits.Result? made = null, low = null;
+                    CharacterEdits.Fitted? fitted = null;
                     var result = ApplyEdit(s, Str(a, "label") ?? $"add {what} to {model}{(hasLow ? " and " + lowName : "")} on {bone ?? "the body's skin"}", p =>
                     {
-                        made = CharacterEdits.AddMesh(p, archive, model, bone, texture, input);
+                        var mesh = conform is { } c ? (fitted = CharacterEdits.Conform(p, archive, model, input, c.Offset, c.Reach)).Mesh : input;
+                        made = CharacterEdits.AddMesh(p, archive, model, bone, texture, mesh);
                         if (!hasLow) return made.Changed;
-                        low = CharacterEdits.AddMesh(p, archive, lowName, bone, texture, input, made.Changed[p.Entry(archive)!.Leaf]);
+                        low = CharacterEdits.AddMesh(p, archive, lowName, bone, texture, mesh, made.Changed[p.Entry(archive)!.Leaf]);
                         return low.Changed;
                     });
                     return new
@@ -272,6 +284,7 @@ namespace MapBuilder.Server.Services
                         result, bone = bone == null ? null : made!.Bone, matrixId = bone == null ? (int?)null : made!.MatrixId,
                         bones = made!.Bones.Distinct().ToList(), groups = made.Groups, vertices = made.Vertices, triangles = made.Triangles,
                         lowDetail = low == null ? null : new { model = lowName, groups = low.Groups },
+                        conformed = fitted == null ? null : new { moved = fitted.Moved, maxPush = MathF.Round(fitted.MaxPush, 3) },
                         check = CheckReport(s, model),
                     };
                 }
@@ -502,7 +515,9 @@ namespace MapBuilder.Server.Services
                         if (labels.FirstOrDefault(l => !known.Contains(l)) is { } unknown)
                             throw new ArgumentException($"{m.Name} draws no part {unknown} with {tif} (parts: {string.Join(", ", known.OrderBy(x => x))})");
                         float strength = r.TryGetProperty("strength", out var st) ? Math.Clamp(Number(st, "regions[].strength"), 0, 1) : 1;
-                        regions.Add(new TexturePaint.Region(labels, color, r.TryGetProperty("fill", out var fl) && fl.ValueKind == JsonValueKind.True, strength));
+                        float[]? uv = Floats(r, "uv");
+                        if (uv != null && (uv.Length != 4 || uv[0] > uv[2] || uv[1] > uv[3])) throw new ArgumentException("regions[].uv is [u0, v0, u1, v1] with u0 <= u1, v0 <= v1");
+                        regions.Add(new TexturePaint.Region(labels, color, r.TryGetProperty("fill", out var fl) && fl.ValueKind == JsonValueKind.True, strength, uv));
                     }
                     string? ns = Str(a, "namespace") ?? pkg.TextureNamespace(m.Namespace);
                     var decoded = pkg.DecodeTexture(tif, ns) ?? throw new KeyNotFoundException($"Texture {tif} not found");
