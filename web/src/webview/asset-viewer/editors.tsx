@@ -81,6 +81,9 @@ export function RdrEditor({ c, p }: { c: C; p: Extract<Preview, { type: 'rdr' }>
 function RdrRow({ c, node, label, path, depth, editable, inList }: { c: C; node: RdrTree; label: string; path: string; depth: number; editable: boolean; inList: boolean }) {
   const [more, setMore] = useState(false);
   const atom = node[0];
+  const markAtom = c.aiMark()?.atom;
+  const marked = markAtom != null && (atom === markAtom || (isField(node) && (node[3][0][0] === markAtom || node[3][1][0] === markAtom)));
+  const rowClass = marked ? ' av-ai-mark' : '';
   const open = c.rdrOpen().has(path);
   const toggle = () => toggleOpen(c, path);
   const actions = editable && inList && (
@@ -96,19 +99,19 @@ function RdrRow({ c, node, label, path, depth, editable, inList }: { c: C; node:
     const name = <EditableValue className="av-rdr-key" value={String(nameNode[2])} editable={editable} title="Field name. " onCommit={t => void c.setRdrValue(nameNode[0], t)} />;
     if (valueNode[1] !== 'list') {
       return (
-        <div className="av-rdr-row" style={{ paddingLeft: depth * 14 + 16 }}>
+        <div className={`av-rdr-row${rowClass}`} style={{ paddingLeft: depth * 14 + 16 }}>
           {name}<span className="av-rdr-sep">:</span>
           {valueNode[1] === 'shared' ? <SharedList node={valueNode} /> : <RdrValue c={c} node={valueNode} editable={editable} />}
           {actions}
         </div>
       );
     }
-    return <RdrList c={c} node={valueNode as [number, 'list', number, RdrTree[]]} labelNode={name} path={path} depth={depth} editable={editable} actions={actions} />;
+    return <RdrList c={c} node={valueNode as [number, 'list', number, RdrTree[]]} labelNode={name} path={path} depth={depth} editable={editable} actions={actions} marked={marked} />;
   }
 
   if (node[1] !== 'list') {
     return (
-      <div className="av-rdr-row" style={{ paddingLeft: depth * 14 + 16 }}>
+      <div className={`av-rdr-row${rowClass}`} style={{ paddingLeft: depth * 14 + 16 }}>
         <span className="av-rdr-key">{label}</span>
         {node[1] === 'shared' ? <SharedList node={node} /> : <RdrValue c={c} node={node} editable={editable} />}
         {actions}
@@ -119,7 +122,7 @@ function RdrRow({ c, node, label, path, depth, editable, inList }: { c: C; node:
   const list = children.slice(0, more ? children.length : PAGE);
   return (
     <>
-      <div className="av-rdr-row av-rdr-branch" style={{ paddingLeft: depth * 14 }} onClick={toggle}>
+      <div className={`av-rdr-row av-rdr-branch${rowClass}`} style={{ paddingLeft: depth * 14 }} onClick={toggle}>
         <span className="av-rdr-caret">{open ? '▾' : '▸'}</span>
         <span className="av-rdr-key">{label}</span>
         <span className="lm-muted">[{children.length}]</span>
@@ -137,14 +140,14 @@ function SharedList({ node }: { node: RdrTree }) {
 }
 
 // A field whose value is a list: the field's name on the branch row.
-function RdrList({ c, node, labelNode, path, depth, editable, actions }: { c: C; node: [number, 'list', number, RdrTree[]]; labelNode: JSX.Element; path: string; depth: number; editable: boolean; actions: false | JSX.Element }) {
+function RdrList({ c, node, labelNode, path, depth, editable, actions, marked }: { c: C; node: [number, 'list', number, RdrTree[]]; labelNode: JSX.Element; path: string; depth: number; editable: boolean; actions: false | JSX.Element; marked: boolean }) {
   const [more, setMore] = useState(false);
   const open = c.rdrOpen().has(path);
   const toggle = () => toggleOpen(c, path);
   const children = node[3];
   return (
     <>
-      <div className="av-rdr-row av-rdr-branch" style={{ paddingLeft: depth * 14 }} onClick={toggle}>
+      <div className={`av-rdr-row av-rdr-branch${marked ? ' av-ai-mark' : ''}`} style={{ paddingLeft: depth * 14 }} onClick={toggle}>
         <span className="av-rdr-caret">{open ? '▾' : '▸'}</span>
         {labelNode}
         <span className="lm-muted">[{children.length}]</span>
@@ -170,7 +173,7 @@ export function MpsEditor({ c, p }: { c: C; p: Extract<Preview, { type: 'mps' }>
       <div className="me-card-title">AI maps</div>
       <table className="av-table av-edit-table">
         <thead><tr><th>Name</th><th>Grid</th><th>Bounds and cell scale (X Y Z)</th><th /></tr></thead>
-        <tbody>{p.maps.map((m, i) => <MapRow key={m.offset} c={c} index={i} map={m} editable={editable} />)}</tbody>
+        <tbody>{p.maps.map((m, i) => <MapRow key={m.offset} c={c} index={i} map={m} editable={editable} marked={c.aiMark()?.map === i} />)}</tbody>
       </table>
       <div className="lm-muted me-note">The grid size is fixed: the cells after each header depend on it.</div>
       {p.points && (
@@ -187,7 +190,7 @@ export function MpsEditor({ c, p }: { c: C; p: Extract<Preview, { type: 'mps' }>
   );
 }
 
-function MapRow({ c, index, map, editable }: { c: C; index: number; map: Extract<Preview, { type: 'mps' }>['maps'][number]; editable: boolean }) {
+function MapRow({ c, index, map, editable, marked }: { c: C; index: number; map: Extract<Preview, { type: 'mps' }>['maps'][number]; editable: boolean; marked: boolean }) {
   const initial = useMemo(() => ({ name: map.name, min: map.min.map(short), max: map.max.map(short), scale: map.scale.map(short) }), [map]);
   const [d, setD] = useState(initial);
   useEffect(() => setD(initial), [initial]);
@@ -212,7 +215,7 @@ function MapRow({ c, index, map, editable }: { c: C; index: number; map: Extract
     void c.setMap(index, fields);
   };
   return (
-    <tr>
+    <tr className={marked ? 'av-ai-mark' : undefined}>
       <td><input className="me-input" value={d.name} maxLength={31} disabled={!editable} onChange={e => setD({ ...d, name: e.target.value })} /></td>
       <td>{map.width} × {map.height}</td>
       <td>{vec('min', 'Min')}{vec('max', 'Max')}{vec('scale', 'Cell')}</td>

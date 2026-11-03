@@ -20,7 +20,14 @@ export interface AiActivity {
   at: number;
 }
 
-export interface AiFocus { geoIndex?: number | null; clutterIndex?: number | null; point?: string | null }
+/** Where the Asset Viewer goes: a place to list (open) or an item to select (path + inner), a palette of the changed
+ *  package (archive + palette), and what to mark there (an RDR atom, a GEO record, a ZANIM instruction, an AI map). */
+export interface ViewerFocus {
+  path?: string; inner?: number[]; open?: boolean; archive?: string | null; palette?: number | null;
+  atom?: number; record?: number; sequence?: number; offset?: number | null; map?: number;
+}
+
+export interface AiFocus { geoIndex?: number | null; clutterIndex?: number | null; point?: string | null; viewer?: ViewerFocus | null }
 
 export interface AiChange {
   seq: number;

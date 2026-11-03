@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Icon } from '../../shared/Icon';
 import { PageHeader } from '../../shared/PageHeader';
 import { openRequest, useSignals } from '../../shared';
-import { aiChange } from '../../shared/aiBridge';
+import { aiChange, provideAiState } from '../../shared/aiBridge';
 import { LIGHTINGS } from '../zipper-core/viewport-core';
 import { AssetViewerLogic, KIND_LABEL, formatBytes } from './asset-viewer-page';
 import { placeKey, type ItemKind, type Preview, type ViewerItem } from './viewer-client';
@@ -39,9 +39,15 @@ export function AssetViewerPage() {
 
   // ui_show page "viewer" with a path: open it here.
   const change = aiChange();
+  useEffect(() => { if (change) { void c.followAi(change); } }, [change, c]);
+  useEffect(() => provideAiState('viewer', () => c.aiState()), [c]);
+  // What the AI changed or asked to see: bring its row into view once the editor has drawn it.
+  const mark = c.aiMark();
   useEffect(() => {
-    if (change?.page === 'viewer' && change.path && change.path.toLowerCase() !== c.listing()?.path.toLowerCase()) { void c.openPath(change.path); }
-  }, [change, c]);
+    if (!mark) { return; }
+    const t = window.setTimeout(() => document.querySelector('.av-app .av-ai-mark')?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 200);
+    return () => window.clearTimeout(t);
+  }, [mark]);
 
   const l = c.listing();
   const sel = c.selected();

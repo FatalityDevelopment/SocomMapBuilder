@@ -87,7 +87,7 @@ export type Preview = { name: string; facts: Fact[] } & (
   | { type: 'palette'; rgba: number[]; is16: boolean }
   | { type: 'geo'; models: GeoNode[] }
   | { type: 'clutter'; session: string | null; placements: ClutterPlacement[]; models: string[] }
-  | { type: 'zanim'; effects: Array<{ name: string; set: string; tracks: number; instructions: number; spawns: string[] }>; effect: ZanimEffect | null }
+  | { type: 'zanim'; effects: Array<{ name: string; set: string; sequence: number; tracks: number; instructions: number; spawns: string[] }>; effect: ZanimEffect | null }
 );
 
 const json = (value: unknown) => JSON.stringify(value);

@@ -10,7 +10,7 @@ namespace MapBuilder.Server.Services
     /// changed so they follow along: the Map Builder reloads and frames the moved prop, the Model Editor opens the
     /// edited model.
     /// </summary>
-    internal sealed class McpServer
+    internal sealed partial class McpServer
     {
         private const string ServerVersion = "0.1.0";
         private static readonly string[] ProtocolVersions = { "2025-06-18", "2025-03-26", "2024-11-05" };
@@ -30,9 +30,12 @@ namespace MapBuilder.Server.Services
             "and assets_history lists what undo would take back. Prefabs (assets_save_prefab, assets_list_prefabs, assets_edit placePrefab) " +
             "reuse groups of props across maps. assets_edit placeInstance adds props and " +
             "setPoint renames / retypes spawn points; fs_list finds packages; weapons_* builds weapons from a template archive; " +
-            "package_* changes package files on disk. The user watches the app while you work: " +
+            "package_* changes package files on disk. viewer_list / viewer_preview / viewer_edit browse and change any disc file or " +
+            "archive record in place as the Asset Viewer does (RDR tables, AI maps, text, icons, GEO scene nodes, ZANIM effect scripts), " +
+            "undone and saved with assets_undo / assets_save on the session viewer_edit answers. The user watches the app while you work: " +
             "every call's `reason` is shown in its AI activity panel, and edits make the page follow (Map Builder reloads and frames " +
-            "the edited item, the Model Editor opens the edited model). ui_screenshot shows you what the user sees; ui_show, " +
+            "the edited item, the Model Editor opens the edited model, the Asset Viewer opens the edited record and marks the change). " +
+            "ui_screenshot shows you what the user sees; ui_state what each page has open; ui_show, " +
             "ui_focus and ui_view move the page.";
 
         private sealed record Tool(string Name, string Label, string Description, Dictionary<string, object> InputSchema, bool ReadOnly,
@@ -189,7 +192,7 @@ namespace MapBuilder.Server.Services
         private static readonly HashSet<string> Destructive = new(StringComparer.Ordinal)
         {
             "assets_save", "assets_close", "assets_entry", "assets_export", "package_edit", "weapons_create", "mapbuilder_command",
-            "assets_delete_prefab",
+            "assets_delete_prefab", "viewer_extract",
         };
 
         private static readonly JsonElement EmptyObject = JsonDocument.Parse("{}").RootElement.Clone();
@@ -357,6 +360,7 @@ namespace MapBuilder.Server.Services
                     int? clutter = first.ValueKind == JsonValueKind.Object && first.TryGetProperty("newClutterIndex", out var c) && c.ValueKind == JsonValueKind.Number ? c.GetInt32() : null;
                     return ("map", null, geo != null ? new { geoIndex = geo } : clutter != null ? new { clutterIndex = clutter } : null);
                 }
+                case "setPalette": return ("viewer", null, new { viewer = new { archive = Str(op, "archive"), palette = IntOpt(op, "id") } });
                 case "addAnimation":
                 case "deleteAnimation":
                 case "renameAnimation":
@@ -576,6 +580,8 @@ namespace MapBuilder.Server.Services
                 "- importModel {source (package path) | sourceSession, archive, name, targetArchive?, newName?}\n" +
                 "- importTexture {source | sourceSession, name, sourceNamespace?, namespace?, newName?}\n" +
                 "- addTexture {name, pngBase64 | imagePath, namespace?, maxSize?} / addPalette {pngBase64 | imagePath, namespace?, is16?}\n" +
+                "- setPalette {archive (a _PAL.ZED), id, rgba:[1024 numbers] | pngBase64 | imagePath} (256 colours in place, keeping the depth; " +
+                "the Asset Viewer opens the palette)\n" +
                 "- addAnimation / deleteAnimation / renameAnimation / setAnimation / setAnimationKey (package clips)\n" +
                 "- placePrefab {prefab, position, yaw?} (every item of a saved prefab around position as one undo step; see assets_list_prefabs)\n" +
                 "- batch {label?, ops:[…]} (one undo step)\n" +
@@ -891,6 +897,7 @@ namespace MapBuilder.Server.Services
                     return ToolResult.Text("View changed.", string.Join(", ", parts));
                 });
 
+            tools.AddRange(BuildViewerTools());
             return tools;
         }
 

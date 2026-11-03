@@ -56,7 +56,7 @@ export function PaletteEditor({ c, p }: { c: C; p: Extract<Preview, { type: 'pal
   };
   return (
     <div className="av-pal-edit">
-      <div className="av-palette av-palette-edit">
+      <div className={`av-palette av-palette-edit${c.aiMark()?.palette != null ? ' av-ai-mark' : ''}`}>
         {Array.from({ length: 256 }, (_, i) => {
           const [r, g, b, a] = p.rgba.slice(i * 4, i * 4 + 4);
           return <span key={i} className={i === sel ? 'on' : ''} title={`#${i}: ${r}, ${g}, ${b}, alpha ${a}`} style={{ background: `rgba(${r}, ${g}, ${b}, ${a / 255})` }} onClick={() => setSel(i)} />;
@@ -178,6 +178,7 @@ export function GeoEditor({ c, p }: { c: C; p: Extract<Preview, { type: 'geo' }>
   const [sel, setSel] = useState<number | null>(p.models[0]?.nparams ?? null);
   const [open, setOpen] = useState<ReadonlySet<number>>(new Set());
   const [q, setQ] = useState('');
+  const mark = c.aiMark();
   const byId = useMemo(() => {
     const m = new Map<number, GeoNode>();
     walk(p.models, n => m.set(n.nparams, n));
@@ -186,7 +187,7 @@ export function GeoEditor({ c, p }: { c: C; p: Extract<Preview, { type: 'geo' }>
   const rows: ReactNode[] = [];
   const query = q.trim().toLowerCase();
   const row = (n: GeoNode, depth: number) => (
-    <div key={n.nparams} className={`av-geo-row${n.nparams === sel ? ' active' : ''}`} style={{ paddingLeft: 6 + depth * 14 }} onClick={() => setSel(n.nparams)}>
+    <div key={n.nparams} className={`av-geo-row${n.nparams === sel ? ' active' : ''}${mark?.record != null && (n.nparams === mark.record || n.modelName?.node === mark.record) ? ' av-ai-mark' : ''}`} style={{ paddingLeft: 6 + depth * 14 }} onClick={() => setSel(n.nparams)}>
       <span className="av-rdr-caret" onClick={e => { e.stopPropagation(); const next = new Set(open); if (next.has(n.nparams)) { next.delete(n.nparams); } else { next.add(n.nparams); } setOpen(next); }}>
         {n.children.length ? (open.has(n.nparams) ? '▾' : '▸') : ''}
       </span>
@@ -202,6 +203,20 @@ export function GeoEditor({ c, p }: { c: C; p: Extract<Preview, { type: 'geo' }>
     add(p.models, 0);
   }
   const node = sel !== null ? byId.get(sel) : undefined;
+  useEffect(() => {
+    if (mark?.record == null) { return; }
+    const chain: GeoNode[] = [];
+    const find = (nodes: GeoNode[]): boolean => nodes.some(n => {
+      chain.push(n);
+      if (n.nparams === mark.record || n.modelName?.node === mark.record || find(n.children)) { return true; }
+      chain.pop();
+      return false;
+    });
+    if (!find(p.models)) { return; }
+    setQ('');
+    setSel(chain[chain.length - 1].nparams);
+    setOpen(prev => new Set([...prev, ...chain.slice(0, -1).map(n => n.nparams)]));
+  }, [mark?.seq]);
   return (
     <div className="av-split">
       <div className="av-split-list">
@@ -285,7 +300,7 @@ export function ZanimEditor({ c, p }: { c: C; p: Extract<Preview, { type: 'zanim
         <input className="me-input av-split-filter" placeholder={`Filter ${p.effects.length} effects…`} value={q} onChange={e => setQ(e.target.value)} />
         <div className="av-scroll">
           {list.map(({ e, i }) => (
-            <button key={i} className={`me-row${i === current ? ' active' : ''}`} onClick={() => void c.showEffect(i)}>
+            <button key={i} className={`me-row${i === current ? ' active' : ''}${i === current && c.aiMark()?.sequence === e.sequence && c.aiMark()?.offset == null ? ' av-ai-mark' : ''}`} onClick={() => void c.showEffect(i)}>
               <span className="me-row-name">{e.name}</span>
               <span className="me-row-meta">{e.instructions}</span>
             </button>
@@ -323,7 +338,7 @@ function EffectView({ c, e, spawns }: { c: C; e: ZanimEffect; spawns: string[] }
 function InstructionRow({ c, e, i, editable }: { c: C; e: ZanimEffect; i: ZanimInstruction; editable: boolean }) {
   const [words, setWords] = useState(false);
   return (
-    <div className={`av-instr${i.condition ? ' cond' : ''}`} style={{ paddingLeft: 6 + i.depth * 16 }}>
+    <div className={`av-instr${i.condition ? ' cond' : ''}${c.aiMark()?.sequence === e.sequence && c.aiMark()?.offset === i.offset ? ' av-ai-mark' : ''}`} style={{ paddingLeft: 6 + i.depth * 16 }}>
       <span className={`av-instr-op${i.condition ? ' lm-muted' : ''}`} title={`0x${i.op.toString(16).toUpperCase()} at +${i.offset}`}>{i.name}</span>
       {i.fields.map(f => <FieldEdit key={f.name} c={c} e={e} i={i} f={f} editable={editable} />)}
       {i.words.length > 1 && <button className="lm-row-btn av-words-btn" title="The instruction's words" onClick={() => setWords(!words)}>{words ? '−' : '+'} words</button>}

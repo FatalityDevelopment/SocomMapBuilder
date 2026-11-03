@@ -77,6 +77,20 @@ Checked in the running app on M51: each editor's edits, undo of all of them, Rep
 the page's file input) and Save into a scratch folder (the saved copy reopens with the new texture). Saving a copy
 elsewhere leaves the edits counted as unsaved, as in the editors: only saving over the package clears them.
 
+## The AI (MCP) and the live page
+
+`McpServer.Viewer.cs` adds `viewer_list`, `viewer_preview`, `viewer_edit` and `viewer_extract` over the VIEWER_* commands
+(palettes and clutter stay on `assets_edit`: `setPalette`, `moveClutter` …). Previews are cut for a model's context: no
+pixels / sound / mesh, an RDR subtree (`atom`, `depth`), GEO nodes to a depth (`node`, `query`), clutter pages, ZANIM effects
+by index or `effectName`.
+
+The page follows through the existing event stream: viewer tools publish `show` / `changed` with `focus.viewer` (the place
+or item, and an RDR atom, GEO record, ZANIM sequence + offset, AI map or palette). `AssetViewerLogic.followAi` opens the
+place, selects the item, opens the effect, expands the RDR tree to the atom, and marks the row (`aiMark`, `.av-ai-mark`,
+scrolled into view). Any `changed` event on the package the viewer shows reloads it, so undo / redo and other pages' edits
+show too. `ui_state` reports the viewer (`aiState`). Checked live: an MCP client browsing M51, editing a ZANIM field, a
+deep sounds.rdr string, a GEO node and a palette, and undoing, with the page following each step.
+
 ## Still to do
 
 1. **Structural ZANIM edits** (add / remove / reorder instructions, new effects) would need sizes and IF term counts

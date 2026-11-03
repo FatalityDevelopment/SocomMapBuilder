@@ -169,3 +169,6 @@
 .av-words { display: inline-flex; flex-wrap: wrap; gap: 3px; align-items: center; }
 .av-word { width: 76px; }
 .av-words-btn { font-size: 11px; }
+/* What the AI just changed or asked to see */
+@keyframes av-ai-flash { from { background-color: rgba(62, 139, 255, 0.45); } to { background-color: rgba(62, 139, 255, 0.12); } }
+.av-ai-mark { animation: av-ai-flash 1.6s ease-out; background-color: rgba(62, 139, 255, 0.12); box-shadow: inset 2px 0 0 #3e8bff; }

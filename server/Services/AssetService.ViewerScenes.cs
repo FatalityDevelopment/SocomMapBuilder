@@ -110,6 +110,7 @@ namespace MapBuilder.Server.Services
                 effects = file.Animations.Select(a => new
                 {
                     a.Name, a.Set,
+                    sequence = a.SequenceIndex,
                     tracks = a.Tracks.Count,
                     instructions = a.Tracks.Sum(t => t.Instructions.Count),
                     spawns = a.Spawns.Distinct().ToList(),

@@ -13,6 +13,7 @@ import { MapViewport, type MapModel } from '../../viewport/mapViewport';
 import { loadMapModels } from '../zipper-core/map-models';
 import type { Lighting, Shading, ViewPreset, ViewportCore } from '../zipper-core/viewport-core';
 import type { ModelTexturePixels } from '../zipper-core/texture-pixels';
+import { samePath, type AiChange, type ViewerFocus } from '../../shared/aiBridge';
 import * as api from './viewer-client';
 import { RDR_ROOT, type EditStatus, type ItemKind, type Listing, type Place, type Preview, type ViewerItem } from './viewer-client';
 
@@ -95,6 +96,8 @@ export class AssetViewerLogic {
   readonly clipPlaying = signal(false);
   readonly clipTime = signal(0);
   readonly clipDuration = signal(0);
+  // What the AI last changed or asked to see in the preview (editors mark the matching row).
+  readonly aiMark = signal<(ViewerFocus & { seq: number }) | null>(null);
   // ZANIM archives: the effect shown in full (an index into the archive's effects).
   readonly zanimEffect = signal<number | null>(null);
   // RDR trees: expanded rows, by path of list indices ("r/0/3").
@@ -1137,6 +1140,122 @@ export class AssetViewerLogic {
   }
 
   say(text: string, error = false): void { this.message.set(text); this.messageError.set(error); }
+
+  // ------------------------------------------------------------------ following the AI
+
+  private markSeq = 0;
+
+  /** An AI change or show request: go where it points (with Follow AI on), and reload whenever the package shown changed. */
+  async followAi(change: AiChange): Promise<void> {
+    const v = change.focus?.viewer;
+    if (change.page === 'viewer' && v) { await this.reveal(v, change.path, change.edited); return; }
+    if (change.page === 'viewer' && change.path && !samePath(change.path, this.listing()?.path)) { await this.openPath(change.path); return; }
+    if (change.edited && this.showsPackage(change.path)) { await this.refreshAfterEdit(); await this.refreshEditStatus(); }
+  }
+
+  private showsPackage(path: string | null): boolean {
+    const l = this.listing();
+    const trim = (p: string | null | undefined) => p?.replace(/[\\/]+$/, '');
+    return !!l && !!path && [l.editPackage, l.package, l.path].some(p => samePath(trim(p), trim(path)));
+  }
+
+  private async refreshEditStatus(): Promise<void> {
+    const session = this.listing()?.editSession ?? this.editSession();
+    if (!session) { return; }
+    try {
+      this.editSession.set(session);
+      this.editStatus.set(await this.clientFor(session).client.status() as unknown as EditStatus);
+    } catch { /* the session closed */ }
+    void this.refreshUnsaved();
+  }
+
+  private async reveal(v: ViewerFocus, packagePath: string | null, edited: boolean): Promise<void> {
+    const go = async (place: Place) => {
+      const l = this.listing();
+      if (l && api.samePlace(l, place)) { if (edited) { await this.navigate(place, true, true).catch(() => undefined); } return true; }
+      return this.navigate(place).then(() => true, () => false);
+    };
+    let item: ViewerItem | undefined;
+    if (v.archive && v.palette != null && packagePath) {
+      // A palette of the package: its _PAL.ZED listing, then the palette.
+      const l = this.listing();
+      if (!(l?.kind === 'palettes' && l.name.toLowerCase() === v.archive.toLowerCase() && samePath(l.path, packagePath))) {
+        if (!await go({ path: packagePath, inner: [] })) { return; }
+        const archive = this.listing()?.items.find(i => i.name.toLowerCase() === v.archive!.toLowerCase());
+        if (!archive || !await go(archive)) { return; }
+      } else if (edited) { await go(l); }
+      item = this.listing()?.items.find(i => i.ref?.id === v.palette);
+    } else if (v.path) {
+      const place: Place = { path: v.path, inner: v.inner ?? [] };
+      if (v.open) { if (await go(place) && edited) { await this.refreshAfterEdit(); } return; }
+      if (v.palette != null) {
+        // viewer_preview of a palette: the _PAL.ZED listing itself, then the palette.
+        if (!await go(place)) { return; }
+        item = this.listing()?.items.find(i => i.ref?.id === v.palette);
+      } else {
+        const parent: Place = place.inner.length ? { path: place.path, inner: place.inner.slice(0, -1) } : { path: place.path.replace(/[\\/][^\\/]*$/, ''), inner: [] };
+        if (!await go(parent)) { return; }
+        item = this.listing()?.items.find(i => !i.ref && (place.inner.length ? api.samePlace(i, place) : samePath(i.path, place.path)));
+      }
+    }
+    if (!item) { return; }
+    const sel = this.selected();
+    if (sel && api.placeKey(sel, sel.ref) === api.placeKey(item, item.ref)) {
+      if (edited) { await this.refreshAfterEdit(); }
+    } else {
+      await this.select(item);
+    }
+    const p = this.preview();
+    if (v.sequence != null && p?.type === 'zanim') {
+      const index = p.effects.findIndex(e => e.sequence === v.sequence);
+      if (index >= 0 && (index !== this.zanimEffect() || edited)) { await this.showEffect(index); }
+    }
+    if (v.atom != null) { this.openRdrTo(v.atom); }
+    if (edited) { await this.refreshEditStatus(); }
+    this.aiMark.set({ ...v, seq: ++this.markSeq });
+  }
+
+  // Opens the RDR rows down to an atom (keys as RdrRow builds them: a field's list shares the field's path).
+  private openRdrTo(atom: number): void {
+    const p = this.preview();
+    if (p?.type !== 'rdr') { return; }
+    type ListNode = [number, 'list', number, api.RdrTree[]];
+    const isList = (n: api.RdrTree): n is ListNode => n[1] === 'list';
+    const isField = (n: api.RdrTree) => isList(n) && n[3].length === 2 && n[3][0][1] === 'string';
+    const find = (n: api.RdrTree, path: string): string[] | null => {
+      if (n[0] === atom) { return []; }
+      if (!isList(n)) { return null; }
+      let children = n[3];
+      if (isField(n)) {
+        if (children[0][0] === atom || children[1][0] === atom) { return []; }
+        if (!isList(children[1])) { return null; }
+        children = children[1][3];
+      }
+      for (let i = 0; i < children.length; i++) {
+        const below = find(children[i], `${path}/${i}`);
+        if (below) { return [path, ...below]; }
+      }
+      return null;
+    };
+    const keys = find(p.tree, RDR_ROOT);
+    if (keys) { this.rdrOpen.set(new Set([...this.rdrOpen(), ...keys])); }
+  }
+
+  /** What ui_state reports for the Asset Viewer. */
+  aiState(): unknown {
+    const l = this.listing();
+    const s = this.selected();
+    const p = this.preview();
+    const st = this.editStatus();
+    return {
+      listing: l ? { path: l.path, inner: l.inner, name: l.name, kind: l.kind, items: l.items.length, session: l.session, editable: l.editable } : null,
+      selected: s ? { name: s.name, kind: s.kind, path: s.path, inner: s.inner, ref: s.ref ?? null } : null,
+      stage: this.stage(),
+      preview: p ? { type: p.type, name: p.name, effect: p.type === 'zanim' && p.effect ? p.effect.name : undefined } : null,
+      edits: st ? { session: st.session, path: st.path, revision: st.revision, unsaved: st.dirty, canUndo: st.canUndo, canRedo: st.canRedo } : null,
+      unsavedElsewhere: this.unsavedElsewhere().map(x => ({ session: x.session, path: x.path, unsaved: x.dirty })),
+    };
+  }
 }
 
 function base64Bytes(b64: string): Uint8Array {
