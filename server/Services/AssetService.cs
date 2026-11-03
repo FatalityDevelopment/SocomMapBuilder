@@ -72,6 +72,7 @@ namespace MapBuilder.Server.Services
             reg.Add(c => WithSession(c.AssetSession, "ASSET_WEAPON_PACK", s => WeaponPackOf(s, c.AssetJson)), "ASSET_WEAPON_PACK");
             reg.Add(c => WithSession(c.AssetSession, "ASSET_CHARACTER_PACK", s => CharacterPackOf(s, c.AssetJson)), "ASSET_CHARACTER_PACK");
             reg.Add(c => WithSession(c.AssetSession, "ASSET_CHARACTER_CHECK", s => CharacterCheckOf(s, c.AssetJson)), "ASSET_CHARACTER_CHECK");
+            reg.Add(c => WithSession(c.AssetSession, "ASSET_UV_LAYOUT", s => UvLayout(s, c.AssetJson)), "ASSET_UV_LAYOUT");
             reg.Add(c => CaRoute(c, "ASSET_SAVE") ?? WithSession(c.AssetSession, "ASSET_SAVE", s => Save(s, c.AssetJson)), "ASSET_SAVE");
             reg.Add(c => WithSession(c.AssetSession, "ASSET_HISTORY", s => History(s)), "ASSET_HISTORY");
             RegisterPrefabs(reg);
@@ -476,6 +477,40 @@ namespace MapBuilder.Server.Services
                     byte[] rgba = PngDecoder.DecodeRgba(png, out int w, out int h);
                     string? ns = Str(a, "namespace");
                     return ApplyEdit(s, Str(a, "label") ?? $"replace {tif}", p => PackageEdits.ReplaceTexture(p, tif, ns, rgba, w, h));
+                }
+                case "paintTexture":
+                {
+                    // {texture, model, archive?, regions: [{parts?: [...], all?, color, fill?, strength?}], namespace?}: colour the
+                    // places the model draws the texture by body part (assets_uv_layout names them), keeping its shading unless fill.
+                    string tif = Str(a, "texture") ?? throw new ArgumentException("\"texture\" is required");
+                    string model = Str(a, "model") ?? throw new ArgumentException("\"model\" (whose parts pick the places) is required");
+                    if (!a.TryGetProperty("regions", out var rs) || rs.ValueKind != JsonValueKind.Array || rs.GetArrayLength() == 0)
+                        throw new ArgumentException("\"regions\" [{parts | all, color: [r, g, b], fill?, strength?}] is required");
+                    var (m, mesh) = MeshOf(s, model, Str(a, "archive"));
+                    var tris = TexturePaint.Triangles(mesh, tif);
+                    if (tris.Count == 0) throw new ArgumentException($"{m.Name} draws nothing with {tif}");
+                    var known = tris.Select(t => t.Label).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    var regions = new List<TexturePaint.Region>();
+                    foreach (var r in rs.EnumerateArray())
+                    {
+                        var color = Floats(r, "color") is { Length: 3 } c && c.All(x => x >= 0 && x <= 255) ? c.Select(x => (byte)MathF.Round(x)).ToArray()
+                            : throw new ArgumentException("regions[].color is [r, g, b], 0-255 each");
+                        bool all = r.TryGetProperty("all", out var al) && al.ValueKind == JsonValueKind.True;
+                        var labels = all ? known : r.TryGetProperty("parts", out var ps) && ps.ValueKind == JsonValueKind.Array
+                            ? ps.EnumerateArray().Select(x => x.GetString() ?? "").ToHashSet(StringComparer.OrdinalIgnoreCase)
+                            : throw new ArgumentException("regions[] needs parts [...] or all: true");
+                        if (labels.FirstOrDefault(l => !known.Contains(l)) is { } unknown)
+                            throw new ArgumentException($"{m.Name} draws no part {unknown} with {tif} (parts: {string.Join(", ", known.OrderBy(x => x))})");
+                        float strength = r.TryGetProperty("strength", out var st) ? Math.Clamp(Number(st, "regions[].strength"), 0, 1) : 1;
+                        regions.Add(new TexturePaint.Region(labels, color, r.TryGetProperty("fill", out var fl) && fl.ValueKind == JsonValueKind.True, strength));
+                    }
+                    string? ns = Str(a, "namespace") ?? pkg.TextureNamespace(m.Namespace);
+                    var decoded = pkg.DecodeTexture(tif, ns) ?? throw new KeyNotFoundException($"Texture {tif} not found");
+                    int w = decoded.Texture.Header.Width, h = decoded.Texture.Header.Height;
+                    byte[] rgba = (byte[])decoded.Texture.Rgba.Clone();
+                    var painted = TexturePaint.Paint(rgba, w, h, tris, regions);
+                    var result = ApplyEdit(s, Str(a, "label") ?? $"paint {tif} on {m.Name}", p => PackageEdits.ReplaceTexture(p, tif, decoded.Namespace, rgba, w, h));
+                    return new { result, pixels = painted };
                 }
                 case "addAnimation":
                 {

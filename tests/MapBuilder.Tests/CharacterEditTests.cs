@@ -370,6 +370,54 @@ namespace MapBuilder.Tests
             Assert.Contains("packtest.tif", check.GetProperty("addedTextures").ToString());
         }
 
+        private const string Torso = "seal_A_woodland_torso_LO.tif";
+
+        [Fact]
+        public void The_uv_layout_names_the_body_parts_a_skin_covers()
+        {
+            if (OpenMap() is not { } s) return;
+            var r = _b.Ok(new CommandMessage { Command = "ASSET_UV_LAYOUT", AssetSession = s, AssetJson = JsonSerializer.Serialize(new { model = Seal, texture = Torso }) });
+            var parts = r.GetProperty("info").GetProperty("parts").EnumerateArray().Select(x => x.GetProperty("part").GetString()).ToList();
+            Assert.Contains("spinehi", parts);
+            Assert.Contains("rbicep", parts);
+            Assert.DoesNotContain("rfoot", parts);
+            byte[] png = Convert.FromBase64String(r.GetProperty("png").GetString()!);
+            CodeDesigner.Ps2.FileFormats.Imaging.PngDecoder.DecodeRgba(png, out int w, out int h);
+            Assert.True(Math.Max(w, h) >= 512);
+        }
+
+        [Fact]
+        public void Painting_the_arms_red_leaves_the_chest_alone()
+        {
+            string? path = Environment.GetEnvironmentVariable("MB_MAP_ZDB");
+            if (OpenMap() is not { } s || path == null) return;
+            var arms = new[] { "rbicep", "rforearm", "lbicep", "lforearm" };
+            // The places, from the same triangles the op paints.
+            var pkg = ZipperPackage.Open(path);
+            var mesh = ZipperModelMesh.Build(pkg, pkg.FindModel("CLIB_MDL.ZED", Seal)!);
+            var tex = pkg.DecodeTexture(Torso, "clib")!.Value.Texture;
+            int w = tex.Header.Width, h = tex.Header.Height;
+            var masks = TexturePaint.Masks(TexturePaint.Triangles(mesh, Torso), w, h);
+            var armPixels = arms.Where(masks.ContainsKey).SelectMany(a => masks[a]).ToHashSet();
+            var chestOnly = masks["spinehi"].Where(i => !armPixels.Contains(i)).ToHashSet();
+            Assert.NotEmpty(armPixels);
+            Assert.NotEmpty(chestOnly);
+
+            byte[] before = Backend.Bytes(s, "CLIB_TXR.ZED");
+            var r = _b.Edit(s, new { op = "paintTexture", texture = Torso, model = Seal, regions = new[] { new { parts = arms, color = new[] { 200, 30, 30 } } } });
+            Assert.True(r.GetProperty("pixels")[0].GetInt32() > 0);
+            var after = _b.Ok(new CommandMessage { Command = "ASSET_TEXTURE", AssetSession = s, AssetName = Torso });
+            byte[] rgba = CodeDesigner.Ps2.FileFormats.Imaging.PngDecoder.DecodeRgba(Convert.FromBase64String(after.GetProperty("png").GetString()!), out _, out _);
+            double red = armPixels.Average(i => rgba[i * 4] - (rgba[i * 4 + 1] + rgba[i * 4 + 2]) / 2.0);
+            double drift = chestOnly.Average(i => Math.Abs(rgba[i * 4] - tex.Rgba[i * 4]) + Math.Abs(rgba[i * 4 + 1] - tex.Rgba[i * 4 + 1]) + Math.Abs(rgba[i * 4 + 2] - tex.Rgba[i * 4 + 2]));
+            Assert.True(red > 60, $"the arms are not red (red over green/blue {red:0})");
+            Assert.True(drift < 12, $"the chest changed by {drift:0.0} per pixel");
+
+            Assert.Contains("draws no part", _b.EditFails(s, new { op = "paintTexture", texture = Torso, model = Seal, regions = new[] { new { parts = new[] { "rfoot" }, color = new[] { 1, 2, 3 } } } }));
+            _b.Undo(s);
+            Assert.Equal(before, Backend.Bytes(s, "CLIB_TXR.ZED"));
+        }
+
         [Fact]
         public void TransformCharacter_is_one_undo_step_on_both_meshes()
         {

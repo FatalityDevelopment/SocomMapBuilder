@@ -1,4 +1,6 @@
 using System.Text.Json;
+using CodeDesigner.Ps2.FileFormats.Assets;
+using CodeDesigner.Ps2.FileFormats.Imaging;
 using CodeDesigner.Ps2.FileFormats.Zipper.Package;
 
 namespace MapBuilder.Server.Services
@@ -6,6 +8,51 @@ namespace MapBuilder.Server.Services
     // Characters as memory-card packs: a session's skinned mesh under a donor character's name (CharacterPack).
     internal sealed partial class ZipperAssetService
     {
+        // A model by name, with the texture namespace it draws from.
+        private static (ZipperPackage.ModelRef Model, ModelMesh Mesh) MeshOf(AssetSession s, string model, string? archive)
+        {
+            var m = (archive != null ? s.Package.FindModel(archive, model) : s.Package.Models().FirstOrDefault(x => x.Name.Equals(model, StringComparison.OrdinalIgnoreCase)))
+                ?? throw new KeyNotFoundException($"No model {model} (see assets_list_models)");
+            return (m, ZipperModelMesh.Build(s.Package, m));
+        }
+
+        /// <summary>
+        /// ASSET_UV_LAYOUT {model, texture, archive?}: where the model draws the texture - the texture dimmed with its
+        /// triangles outlined per body part (a character's bones, else visuals), and per part its colour, triangle count
+        /// and UV bounds (what paintTexture's parts take).
+        /// </summary>
+        private static object UvLayout(AssetSession s, string? json)
+        {
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(json) ? "{}" : json);
+            var a = doc.RootElement;
+            string model = Str(a, "model") ?? throw new ArgumentException("\"model\" is required");
+            string tif = Str(a, "texture") ?? throw new ArgumentException("\"texture\" is required");
+            lock (s.Gate)
+            {
+                var (m, mesh) = MeshOf(s, model, Str(a, "archive"));
+                var tris = TexturePaint.Triangles(mesh, tif);
+                if (tris.Count == 0)
+                    throw new ArgumentException($"{m.Name} draws nothing with {tif} (its textures: {string.Join(", ", mesh.Chunks.Select(c => c.Texture).Where(t => !string.IsNullOrEmpty(t)).Distinct())})");
+                var decoded = s.Package.DecodeTexture(tif, s.Package.TextureNamespace(m.Namespace)) ?? throw new KeyNotFoundException($"Texture {tif} not found");
+                int w = decoded.Texture.Header.Width, h = decoded.Texture.Header.Height;
+                var colours = TexturePaint.Colours(tris.Select(t => t.Label));
+                var (img, W, H) = TexturePaint.Layout(decoded.Texture.Rgba, w, h, tris, colours);
+                var parts = tris.GroupBy(t => t.Label).OrderBy(g => g.Key, StringComparer.Ordinal).Select(g => new
+                {
+                    part = g.Key,
+                    colour = "#" + Convert.ToHexString(colours[g.Key]).ToLowerInvariant(),
+                    triangles = g.Count(),
+                    uvMin = new[] { Math.Round(g.Min(t => Math.Min(t.Uv[0], Math.Min(t.Uv[2], t.Uv[4]))), 3), Math.Round(g.Min(t => Math.Min(t.Uv[1], Math.Min(t.Uv[3], t.Uv[5]))), 3) },
+                    uvMax = new[] { Math.Round(g.Max(t => Math.Max(t.Uv[0], Math.Max(t.Uv[2], t.Uv[4]))), 3), Math.Round(g.Max(t => Math.Max(t.Uv[1], Math.Max(t.Uv[3], t.Uv[5]))), 3) },
+                }).ToList();
+                return new
+                {
+                    info = new { model = m.Name, texture = tif, width = w, height = h, image = new { width = W, height = H }, parts },
+                    png = Convert.ToBase64String(PngEncoder.EncodeRgba(img, W, H)),
+                };
+            }
+        }
+
         /// <summary>
         /// ASSET_CHARACTER_CHECK {model}: what the session's edits did to a character, against the package on disk
         /// (CharacterCheck): stretched / folded surface by bone, weights, added gear's gap from the body.

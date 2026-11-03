@@ -32,7 +32,8 @@ namespace MapBuilder.Server.Services
             "reuse groups of props across maps. assets_edit placeInstance adds props; newProp copies a prop to reshape (addTexture materials, " +
             "addMesh shapes, hideVisual), fitBounds refits it, and placeInstance puts it in the map; addCharacterMesh puts gear on a " +
             "character, rigid on a bone (assets_describe_model lists its skeleton) or bending with the body without one, removeCharacterSection takes it off, scaleBones reshapes body parts " +
-            "(thicker, longer, bigger, blending across joints), transformCharacter moves whole sections, characters_check (also in those edits' " +
+            "(thicker, longer, bigger, blending across joints), transformCharacter moves whole sections, assets_uv_layout shows where a skin lands " +
+            "and paintTexture colours it by body part, characters_check (also in those edits' " +
             "replies) flags seams, folds and floating gear; characters_pack ships a " +
             "character as a memory-card pack under a donor name; " +
             "setPoint renames / retypes spawn points; fs_list finds packages; weapons_* builds weapons from a template archive; " +
@@ -1024,6 +1025,24 @@ namespace MapBuilder.Server.Services
                     args.Remove("session"); args.Remove("reason");
                     return FromCommand(new CommandMessage { Command = "ASSET_WEAPON_PACK", AssetSession = Session(a), AssetJson = args.ToJsonString() },
                         d => d.TryGetProperty("pack", out var p) ? $"{(Bool(a, "dryRun") ? "dry run: " : "")}{p.GetString()}.CDB" : null!);
+                });
+
+            AddSync("assets_uv_layout", "View UV layout",
+                "Where a model draws a texture: the texture with the model's triangles outlined and tinted per body part (a character's " +
+                "bones, else its visuals), returned as an image, with each part's colour, triangle count and UV bounds. Use it to see " +
+                "which part of a skin is a sleeve, the chest or the face before painting (paintTexture) or drawing a new image " +
+                "(replaceTexture). Risk: read-only.",
+                true, Schema(new[] { "session", "model", "texture" }, session, P("model", "string", "The model (MESH_seal_A_woodland_LO)."),
+                    P("texture", "string", "One of its textures (assets_describe_model lists them)."), P("archive", "string", "The model's *_MDL.ZED (optional).")), a =>
+                {
+                    var (ok, data, error) = Command(new CommandMessage { Command = "ASSET_UV_LAYOUT", AssetSession = Session(a),
+                        AssetJson = JsonSerializer.Serialize(new { model = Str(a, "model"), texture = Str(a, "texture"), archive = Str(a, "archive") }) });
+                    if (!ok || data == null) return ToolResult.Fail(error ?? "ASSET_UV_LAYOUT failed");
+                    using var d = JsonDocument.Parse(data);
+                    var r = new ToolResult { Summary = $"{Str(a, "texture")} on {Str(a, "model")}" };
+                    r.Content.Add(new { type = "image", data = d.RootElement.GetProperty("png").GetString(), mimeType = "image/png" });
+                    r.Content.Add(new { type = "text", text = d.RootElement.GetProperty("info").GetRawText() });
+                    return r;
                 });
 
             AddSync("characters_check", "Check character",
