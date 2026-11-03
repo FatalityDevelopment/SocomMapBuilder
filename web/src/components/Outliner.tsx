@@ -22,6 +22,8 @@ interface OutlinerProps {
   isModelHidden: (source: string) => boolean;
   toggleModel: (source: string) => void;
   layerCount: (layer: MapLayer) => number;
+  // A sky drawn inside the world model (most maps): listed under Sky, shown and hidden with it.
+  skyInWorld: ReadonlyArray<{ source: string; nodes: string[] }>;
   pickGroup: (g: ModelGroup, shift: boolean) => void;
   pickInstance: (i: number, shift: boolean) => void;
   pickPoint: (name: string) => void;
@@ -66,8 +68,15 @@ export function Outliner(props: OutlinerProps) {
                 </button>
               )}
               <span>{layer.label}</span>
-              <span className="lm-muted">{layer.id === 'points' ? points.length : props.layerCount(layer.id)}</span>
+              <span className="lm-muted">{layer.id === 'points' ? points.length : props.layerCount(layer.id) + (layer.id === 'sky' ? props.skyInWorld.length : 0)}</span>
             </div>
+            {isOpen('L:' + layer.id) && layer.id === 'sky' && props.skyInWorld.map(s => (
+              <div key={'W:' + s.source} className="me-tree-row mp-model" title={`Drawn inside ${s.source}`}>
+                <span className="mp-twist" />
+                <span>{s.nodes.join(', ')}</span>
+                <span className="lm-muted">in world model</span>
+              </div>
+            ))}
             {isOpen('L:' + layer.id) && (layer.id === 'points' ? (
               filteredPoints.map(p => (
                 <div key={p.name} className={`me-tree-row mp-model${selectedPoint === p.name ? ' sel' : ''}`}>

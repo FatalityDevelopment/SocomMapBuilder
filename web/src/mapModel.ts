@@ -13,10 +13,21 @@ export const LAYERS: Array<{ id: MapLayer; label: string }> = [
 
 export interface ModelGroup { source: string; model: string; indices: number[] }
 
+// Sky models go by many names (sky, sky_m72, mp62_sky, alaska4d_sky, sky_follow, sun); skylines and skylights are scenery.
+const SKY_NAME = /^(thesun|flare|mist)|^sun$|sky(?!line|light|scraper)/i;
+// Most maps draw their sky inside the world model: a skydome / sky / cloudlayer node, or a node with sky or cloud textures.
+const SKY_PART = /sky(?!line|light|scraper)|cloud|whispy/i;
+
+export const isSkyModel = (name: string) => SKY_NAME.test(name);
+
+/** Whether a world-model chunk is part of the sky, by its GEO node's name or its texture. */
+export const isSkyChunk = (chunk: { node?: string | null; texture: string | null }) =>
+  SKY_PART.test(chunk.node ?? '') || SKY_PART.test(chunk.texture ?? '');
+
 export function layerOf(inst: MapInstanceWire): MapLayer {
   if (inst.kind === 'clutter') { return 'clutter'; }
   if (inst.kind === 'model') { return 'world'; }
-  if (/^(sky|thesun|flare|mist)/i.test(inst.model)) { return 'sky'; }
+  if (isSkyModel(inst.model)) { return 'sky'; }
   return 'reference';
 }
 

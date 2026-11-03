@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MapInstanceWire } from './webview/model-editor/asset-client';
-import { addedClutter, deleteOps, duplicateOps, groupInstancesByLayer, layerOf, movable, pickDuplicates, placementOp, pointKindCounts, problemTarget, scaleOf, sortProblems, yawOf } from './mapModel';
+import { addedClutter, deleteOps, duplicateOps, groupInstancesByLayer, isSkyChunk, layerOf, movable, pickDuplicates, placementOp, pointKindCounts, problemTarget, scaleOf, sortProblems, yawOf } from './mapModel';
 
 // Column-major, translation in 12..14 (as GEO and clutter store it): yaw about Y, uniform scale.
 function matrix(yawDeg: number, scale: number, x = 0, y = 0, z = 0): number[] {
@@ -19,6 +19,27 @@ describe('layerOf', () => {
     expect(layerOf(inst({ model: 'SKYDOME' }))).toBe('sky');
     expect(layerOf(inst({ model: 'theSun01' }))).toBe('sky');
     expect(layerOf(inst({}))).toBe('reference');
+  });
+
+  it('knows the retail sky models by their names, but not skylines or skylights', () => {
+    for (const model of ['sky', 'sky_m72', 'mp62_sky', 'mp72_sky', 'alaska4d_sky', 'sky_follow', 'sun']) {
+      expect(layerOf(inst({ model }))).toBe('sky');
+    }
+    for (const model of ['obj_skylight', 'far_skyline', 'sunroof', 'crate']) {
+      expect(layerOf(inst({ model }))).toBe('reference');
+    }
+  });
+});
+
+describe('isSkyChunk', () => {
+  it('finds the sky drawn inside world models by node or texture', () => {
+    expect(isSkyChunk({ node: 'skydome', texture: 'sky01c.tif' })).toBe(true);
+    expect(isSkyChunk({ node: 'whispy_scroller', texture: 'cloud_whispy.tif' })).toBe(true);
+    expect(isSkyChunk({ node: 'g3', texture: 'gen_cloud_n_sun_256x256.tif' })).toBe(true);
+    expect(isSkyChunk({ node: 'ocean_3', texture: 'cuba1a_sky01.tif' })).toBe(true);
+    expect(isSkyChunk({ node: 'g21801_3', texture: 'far_skyline.tif' })).toBe(false);
+    expect(isSkyChunk({ node: 'm52', texture: 'concrete01.tif' })).toBe(false);
+    expect(isSkyChunk({ node: null, texture: null })).toBe(false);
   });
 });
 

@@ -884,7 +884,7 @@ namespace MapBuilder.Server.Services
             string ns = scene ?? s.Package.MapScene()?.Namespace ?? throw new InvalidOperationException("No map scene; pass \"scene\"");
             GeoScene geo = s.Package.Scene(ns) ?? throw new KeyNotFoundException($"No {ns}_GEO.ZED");
             var best = SceneInstances.Collect(geo.MapRoot, _ => true)
-                .Where(i => i.Kind == "reference" && i.Node?.Child("model_name") != null && !i.ModelName.Equals("sky", StringComparison.OrdinalIgnoreCase))
+                .Where(i => i.Kind == "reference" && i.Node?.Child("model_name") != null && !ZipperPackage.IsSkyName(i.ModelName))
                 .OrderBy(i => (i.Matrix[12] - x) * (i.Matrix[12] - x) + (i.Matrix[13] - y) * (i.Matrix[13] - y) + (i.Matrix[14] - z) * (i.Matrix[14] - z))
                 .FirstOrDefault() ?? throw new InvalidOperationException("The map places no references to copy from; duplicate an instance instead");
             return (ns, best.Node!);

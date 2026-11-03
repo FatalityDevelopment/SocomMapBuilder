@@ -192,10 +192,15 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             if (ns == "weap") return "weapon";
             if (ns is "clib" or "flib" || name.StartsWith("MESH_", StringComparison.OrdinalIgnoreCase)) return "character";
             if (ns == "worl") return "world";
-            if (Regex.IsMatch(name, "^(sky|thesun|flare|mist)", RegexOptions.IgnoreCase)) return "sky";
+            if (IsSkyName(name)) return "sky";
             if (ns.Equals(MapNamespace, StringComparison.OrdinalIgnoreCase)) return "prop";
             return "library";
         }
+
+        /// <summary>Sky models go by many names (sky, sky_m72, mp62_sky, alaska4d_sky, sky_follow, sun); skylines and
+        /// skylights are scenery. The Map Builder's layers use the same rule (mapModel.ts).</summary>
+        public static bool IsSkyName(string name) =>
+            Regex.IsMatch(name, "^(thesun|flare|mist)|^sun$|sky(?!line|light|scraper)", RegexOptions.IgnoreCase);
 
         public ModelRef? FindModel(string archiveLeaf, string name) =>
             Models().FirstOrDefault(m => m.Archive.Equals(archiveLeaf, StringComparison.OrdinalIgnoreCase) && m.Name == name);
