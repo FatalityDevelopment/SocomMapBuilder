@@ -30,7 +30,9 @@ async function post(name: string, body: Record<string, unknown>): Promise<Comman
     throw new Error(`${name}: cannot reach the backend (is MapBuilder.Server running?)`);
   }
   if (!(res.headers.get('content-type') ?? '').includes('json')) {
-    throw new Error(`${name}: backend answered HTTP ${res.status} (is MapBuilder.Server running?)`);
+    // The server is up but refused the request before running it; its first line says why.
+    const detail = (await res.text().catch(() => '')).split('\n')[0].trim().slice(0, 300);
+    throw new Error(`${name}: backend answered HTTP ${res.status}${detail ? `: ${detail}` : ' (is MapBuilder.Server running?)'}`);
   }
   const reply = (await res.json()) as CommandResponse;
   if (!reply.Success) { throw new Error(reply.Error ?? `${name} failed`); }
