@@ -34,10 +34,11 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
         /// Adds <paramref name="name"/> to the TXR of <paramref name="ns"/> (default: the map's) from an RGBA image.
         /// The size is <paramref name="width"/> × <paramref name="height"/> (powers of two, 8..512) or the image's
         /// rounded to powers of two and capped at <paramref name="maxSize"/>. <paramref name="paletteId"/> reuses
-        /// that palette instead of making one.
+        /// that palette instead of making one. <paramref name="templateTexdat"/> is the texdat to build on (its
+        /// wrap / clamp and filtering carry over) when it is 8-bit indexed; else one of the package's.
         /// </summary>
         public static Result AddTexture(ZipperPackage pkg, string name, string? ns, byte[] rgba, int srcWidth, int srcHeight,
-            int? width = null, int? height = null, int maxSize = 256, int? paletteId = null)
+            int? width = null, int? height = null, int maxSize = 256, int? paletteId = null, byte[]? templateTexdat = null)
         {
             name = TextureName(name);
             if (PackageImport.UsedTextureNames(pkg).Contains(name)) throw new ArgumentException($"This package already has a texture named {name}");
@@ -51,7 +52,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             if (!BitOperations.IsPow2(w) || !BitOperations.IsPow2(h) || w < 8 || h < 8 || w > 512 || h > 512)
                 throw new ArgumentException($"A texture is 8..512 pixels a side, powers of two ({w}×{h})");
 
-            byte[] template = Template(pkg, txr) ?? throw new InvalidOperationException("The package has no 8-bit indexed texture to build on");
+            byte[] template = (templateTexdat != null && Indexed8(templateTexdat) ? templateTexdat : null) ?? Template(pkg, txr)
+                ?? throw new InvalidOperationException("The package has no 8-bit indexed texture to build on");
             var templateHeader = ZedTextureFile.ParseHeader(template);
             bool template16 = template[0x0F] == 0x12;
             var result = new Result { Archive = txrEntry.Leaf, Texture = name, Width = w, Height = h };
@@ -172,14 +174,20 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
                 foreach (int i in PackageImport.TextureNodes(c))
                 {
                     byte[] d = c.Nodes[i].Data;
-                    ZedTextureFile.Header h;
-                    try { h = ZedTextureFile.ParseHeader(d); } catch (InvalidDataException) { continue; }
-                    if (!h.IsIndexed || h.Bpp != 8 || h.Gs == null || d[0x0F] is not (0x12 or 0x13)) continue;
+                    if (!Indexed8(d)) continue;
                     bool mips = PackageImport.Registers(d).Any(r => (r.Reg is RegMipTbp1 or RegMipTbp2 && r.Lo != 0) || (r.Reg == RegTex1 && ((r.Lo >> 2) & 7) != 0));
                     if (!mips) return d;
                     fallback ??= d;
                 }
             return fallback;
+        }
+
+        /// <summary>An 8-bit indexed texdat with GS registers and a 16- or 32-bit palette: one a new texture can build on.</summary>
+        private static bool Indexed8(byte[] texdat)
+        {
+            ZedTextureFile.Header h;
+            try { h = ZedTextureFile.ParseHeader(texdat); } catch (InvalidDataException) { return false; }
+            return h.IsIndexed && h.Bpp == 8 && h.Gs != null && texdat[0x0F] is 0x12 or 0x13;
         }
 
         /// <summary>The template resized to w × h (blank pixels) with the new index and palette in its registers.</summary>

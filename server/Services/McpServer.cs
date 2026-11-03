@@ -783,39 +783,31 @@ namespace MapBuilder.Server.Services
                 });
 
             AddSync("weapons_create", "Create weapon",
-                "Make a new weapon from a template in a weapon archive: re-encodes the template model (meshEdits: {perChunk: [{chunkIndex, " +
-                "transform?: {scaleX, scaleY, scaleZ, translateX, translateY, translateZ}, newTextureName?}]}), optionally a new texture " +
-                "from an image (imagePath or imageBase64, resampled to the template texture's size and depth, with a new palette when " +
-                "indexed), and adds them as new entries named newName (originals untouched), written to outputPath (default over the " +
-                "archive). Names already in the archive are refused. dryRun encodes everything and reports what it would add, writing " +
-                "nothing. Prefer an outputPath copy. Risk: writes disk.",
+                "Make a new weapon from a template in a weapon archive: copies the template model's record (visual chains included) " +
+                "with its vertices re-encoded (meshEdits: {perChunk: [{chunkIndex, transform?: {scaleX, scaleY, scaleZ, translateX, " +
+                "translateY, translateZ}, newTextureName?}]}) as newName, and optionally a new skin from an image (imagePath or " +
+                "imageBase64) at the size of the template texture it replaces (the one covering the most triangles), with a palette of " +
+                "its own. On the disc layout (WEAP_MDL.ZED with WEAP_TXR.ZED / WEAP_PAL.ZED beside it) the skin goes into the TXR / PAL " +
+                "pair and the model's texture fields point at it (textureEntryName, default <newName>.tif, no longer than the replaced " +
+                "name); the model archive is written to outputPath (default over the archive) and the changed TXR / PAL beside it. " +
+                "Originals are untouched; names in use are refused. The GEO definition (firepoint, aimpoint, LODs) is not made yet. " +
+                "dryRun reports every file and entry it would write, writing nothing. Prefer an outputPath copy. Risk: writes disk.",
                 false, Schema(new[] { "path", "template", "newName" }, P("path", "string", "The weapon archive (.ZED)."),
                     P("template", "string", "The template weapon model."), P("newName", "string", "The new model entry's name."),
                     P("outputPath", "string", "Where to write the archive (default over the source)."),
                     P("imagePath", "string", "Optional PNG / JPG for the new texture."), P("imageBase64", "string", "Optional PNG as base64 (instead of imagePath)."),
                     P("meshEdits", "object", "Optional {perChunk: [...]} model edits."),
-                    P("textureEntryName", "string", "Optional name for the new .tif entry."), P("paletteEntryName", "string", "Optional name for the new palette entry."),
+                    P("textureEntryName", "string", "Optional name for the new .tif (default <newName>.tif)."),
+                    P("paletteEntryName", "string", "Optional palette entry name; only for a texture inside the model archive (a PAL's palettes are texpal_<id>)."),
                     P("dryRun", "boolean", "Encode and check, writing nothing.")), a =>
                 {
-                    string path = Str(a, "path") ?? throw new ArgumentException("\"path\" is required");
-                    string template = Str(a, "template") ?? throw new ArgumentException("\"template\" is required");
                     string? edits = a.TryGetProperty("meshEdits", out var me) && me.ValueKind == JsonValueKind.Object ? me.GetRawText() : null;
-                    var (mok, mdata, merror) = Command(new CommandMessage { Command = "ZIPPER_ENCODE_WEAPON_MODEL", InputPath = path, WeaponName = template, WeaponMeshEditsJson = edits });
-                    if (!mok || mdata == null) return ToolResult.Fail(merror ?? "ZIPPER_ENCODE_WEAPON_MODEL failed");
-                    using var model = JsonDocument.Parse(mdata);
-                    string? tif = null, palette = null;
-                    if (Str(a, "imagePath") != null || Str(a, "imageBase64") != null)
-                    {
-                        var (tok, tdata, terror) = Command(new CommandMessage { Command = "ZIPPER_ENCODE_WEAPON_TEXTURE", InputPath = path, WeaponName = template, WeaponImagePath = Str(a, "imagePath"), WeaponImageData = Str(a, "imageBase64") });
-                        if (!tok || tdata == null) return ToolResult.Fail(terror ?? "ZIPPER_ENCODE_WEAPON_TEXTURE failed");
-                        using var texture = JsonDocument.Parse(tdata);
-                        tif = texture.RootElement.GetProperty("tif").GetString();
-                        palette = texture.RootElement.TryGetProperty("palette", out var pal) && pal.ValueKind == JsonValueKind.String ? pal.GetString() : null;
-                    }
                     return FromCommand(new CommandMessage
                     {
-                        Command = "ZIPPER_WRITE_WEAPON", InputPath = path, OutputPath = Str(a, "outputPath"), WeaponNewName = Str(a, "newName"),
-                        WeaponModelData = model.RootElement.GetProperty("mdl").GetString(), WeaponTextureData = tif, WeaponPaletteData = palette,
+                        Command = "ZIPPER_CREATE_WEAPON", InputPath = Str(a, "path") ?? throw new ArgumentException("\"path\" is required"),
+                        WeaponName = Str(a, "template") ?? throw new ArgumentException("\"template\" is required"),
+                        OutputPath = Str(a, "outputPath"), WeaponNewName = Str(a, "newName"), WeaponMeshEditsJson = edits,
+                        WeaponImagePath = Str(a, "imagePath"), WeaponImageData = Str(a, "imageBase64"),
                         WeaponTextureEntryName = Str(a, "textureEntryName"), WeaponPaletteEntryName = Str(a, "paletteEntryName"), DryRun = Bool(a, "dryRun"),
                     }, d => d.TryGetProperty("outputPath", out var o) ? $"{Str(a, "newName")} → {Path.GetFileName(o.GetString())}"
                         : d.TryGetProperty("wouldWrite", out var w) ? $"dry run: {Str(a, "newName")} → {Path.GetFileName(w.GetString())}" : null!);
