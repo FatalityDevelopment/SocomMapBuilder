@@ -100,9 +100,41 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
                 }
                 // Only sections this edit emptied go; retail's chunk-less sections stay.
                 v.Sections.RemoveAll(emptied.Contains);
-                if (!v.Sections.Any(s => s.Chunks.Count > 0)) throw new InvalidOperationException($"Deleting these faces would empty visual {v.Key}; hide it instead");
+                if (!v.Sections.Any(s => s.Chunks.Count > 0)) throw new InvalidOperationException($"Deleting these faces would empty visual {v.Key}; hide it instead (hideVisual)");
             }
             return Finish(ctx, archive, new HashSet<ModelLayout.Block>());
+        }
+
+        /// <summary>
+        /// Hides a visual: its geometry becomes one zero-area triangle in its first drawing section (a chain keeps a
+        /// chunk to draw), so it draws nothing and addMesh can still fill it.
+        /// </summary>
+        public static Result HideVisual(ZipperPackage pkg, string archive, string modelName, string visualKey)
+        {
+            var ctx = Open(pkg, archive, modelName);
+            var visual = ctx.Layout.Visuals.FirstOrDefault(v => v.Key.Equals(visualKey, StringComparison.OrdinalIgnoreCase))
+                ?? throw new ArgumentException($"{modelName} has no visual {visualKey} (visuals: {string.Join(", ", ctx.Layout.Visuals.Select(v => v.Key))})");
+            var placement = ctx.Mesh.Chunks.FirstOrDefault(c => string.Equals(c.Visual, visual.Key, StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidOperationException($"{visual.Key} has no geometry to take its placement from");
+            var section = visual.Sections.FirstOrDefault(s => s.Chunks.Count > 0)
+                ?? throw new InvalidOperationException($"{visual.Key} has no section that draws");
+            var templateChunk = section.Chunks[0];
+            var head = ModelLayout.ReadChunk(templateChunk.Geometry.Data);
+
+            var speck = new InputMesh();
+            for (int i = 0; i < 3; i++)
+            {
+                speck.Positions.Add(new[] { placement.Matrix[12], placement.Matrix[13], placement.Matrix[14] });
+                speck.Normals.Add(new[] { 0f, 1f, 0f });
+                speck.Uvs.Add(new[] { 0f, 0f });
+            }
+            speck.Triangles.Add((0, 1, 2));
+            var chunks = Encode(speck, placement, head, templateChunk).ToList();
+            visual.Sections.Clear();
+            section.Chunks.Clear();
+            section.Chunks.AddRange(chunks);
+            visual.Sections.Add(section);
+            return Finish(ctx, archive, new HashSet<ModelLayout.Block>(chunks.Select(c => c.Geometry), ReferenceEqualityComparer.Instance));
         }
 
         private static ModelLayout.LayoutChunk Subset(ModelLayout.ChunkData src, ModelLayout.LayoutChunk lc, List<int> keepTris)

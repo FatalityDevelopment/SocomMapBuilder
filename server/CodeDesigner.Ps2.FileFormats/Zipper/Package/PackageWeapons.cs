@@ -21,6 +21,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             public string? Texture { get; set; }
             public string? TextureArchive { get; set; }
             public string? PaletteArchive { get; set; }
+            /// <summary>The GEO archive the definition was copied into, or null when the template has none.</summary>
+            public string? GeoArchive { get; set; }
             public int? PaletteId { get; set; }
             public int Width { get; set; }
             public int Height { get; set; }
@@ -33,7 +35,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
         /// <paramref name="rgba"/>, a new texture <paramref name="textureName"/> (default <c>&lt;newName&gt;.tif</c>)
         /// replaces <paramref name="replaceTexture"/> (default the template texture covering the most triangles).
         /// </summary>
-        public static Result Create(ZipperPackage pkg, string mdlLeaf, string template, string newName, byte[] payload,
+        public static Result Create(ZipperPackage pkg, string mdlLeaf, string template, string newName, byte[]? payload = null,
             byte[]? rgba = null, int srcWidth = 0, int srcHeight = 0, string? textureName = null, string? replaceTexture = null)
         {
             var mdlEntry = pkg.Entry(mdlLeaf) is { Kind: "mdl" } e ? e : throw new ArgumentException($"{mdlLeaf} is not a model archive of this package");
@@ -48,6 +50,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             int at = PackageImport.TopLevel(mdl, template);
             if (at < 0) throw new KeyNotFoundException($"{template} is not a top-level record of {mdlEntry.Leaf}");
             ZedTree.Record copy = ZedTree.Copy(mdl.Nodes, at);
+            payload ??= copy.Data;
             if (payload.Length != copy.Data.Length)
                 throw new ArgumentException($"The new payload is {payload.Length} bytes, the template's {copy.Data.Length}: its visual chains point into the payload by offset");
             copy = copy with
@@ -95,8 +98,18 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
 
             PackageImport.AppendTop(mdl, copy);
             result.Changed[mdlEntry.Leaf] = mdl.ToBytes();
-            if (pkg.FindDefinition(model) == null) result.Warnings.Add($"{template} has no GEO definition; {newName} has none either");
-            else result.Warnings.Add($"{newName} has no GEO definition yet (firepoint, aimpoint, LODs): the game places weapons by theirs");
+
+            // The GEO definition (LOD nodes, firepoint, firepoint_shell, aimpoint, Gun_box) under the new name, as importModel copies it.
+            if (pkg.FindDefinition(model) is { } def && pkg.Archive(def.Namespace, "geo") is { } geoEntry)
+            {
+                var geo = ZedContainer.FromBytes(geoEntry.Data);
+                int models = PackageImport.TopLevel(geo, "models");
+                if (models < 0) throw new InvalidOperationException($"{geoEntry.Leaf} has no models list");
+                ZedTree.AppendChild(geo, models, ZedTree.Copy(pkg.Container(geoEntry.Leaf).Nodes, def.Node.Index) with { Name = newName });
+                result.Changed[geoEntry.Leaf] = geo.ToBytes();
+                result.GeoArchive = geoEntry.Leaf;
+            }
+            else result.Warnings.Add($"{template} has no GEO definition; {newName} has none either");
             return result;
         }
 

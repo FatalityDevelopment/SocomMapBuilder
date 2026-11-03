@@ -71,11 +71,12 @@ namespace MapBuilder.Tests
                 WeaponMeshEditsJson = "{\"perChunk\":[{\"chunkIndex\":0,\"transform\":{\"scaleZ\":1.5}}]}",
             });
             Assert.True(r.Success, r.Error);
-            Assert.Equal(new[] { "WEAP_MDL.ZED", "WEAP_PAL.ZED", "WEAP_TXR.ZED" }, Directory.GetFiles(outDir).Select(Path.GetFileName).OrderBy(n => n));
+            // The GEO archive too: the copy gets the template's definition (LODs, firepoint, aimpoint).
+            Assert.Equal(new[] { "WEAP_GEO.ZED", "WEAP_MDL.ZED", "WEAP_PAL.ZED", "WEAP_TXR.ZED" }, Directory.GetFiles(outDir).Select(Path.GetFileName).OrderBy(n => n));
 
             // Read back as the game folder it would be: the copy keeps its chains and draws with the new skin.
-            foreach (string f in new[] { "WEAP_GEO.ZED" }) File.Copy(Path.Combine(_dir, f), Path.Combine(outDir, f));
             var pkg = ZipperPackage.Open(outDir);
+            Assert.NotNull(pkg.FindDefinition(pkg.FindModel("WEAP_MDL.ZED", "raygun")!));
             var model = pkg.FindModel("WEAP_MDL.ZED", "raygun");
             Assert.NotNull(model);
             var decoded = pkg.DecodeModel(model!);
@@ -103,7 +104,7 @@ namespace MapBuilder.Tests
             var r = Run(new CommandMessage { Command = "ZIPPER_CREATE_WEAPON", InputPath = Mdl, WeaponName = "desert_eagle", WeaponNewName = "raygun", WeaponImageData = RedPng(), DryRun = true });
             Assert.True(r.Success, r.Error);
             using var d = JsonDocument.Parse(r.Data!);
-            Assert.Equal(3, d.RootElement.GetProperty("files").GetArrayLength());
+            Assert.Equal(4, d.RootElement.GetProperty("files").GetArrayLength());
             foreach (var (f, bytes) in before) Assert.Equal(bytes, File.ReadAllBytes(f));
         }
 
@@ -118,6 +119,68 @@ namespace MapBuilder.Tests
             });
             Assert.False(r.Success);
             Assert.Contains("at most 15 characters", r.Error);
+        }
+
+        [Fact]
+        public void A_loose_folder_session_reopens_by_the_path_its_status_reports()
+        {
+            if (!_ready) return;
+            new ZipperAssetService().Register(_reg);
+            // Opened by its folder, as the Asset Viewer and assets_open on a folder do.
+            var first = Run(new CommandMessage { Command = "ASSET_OPEN", InputPath = _dir });
+            Assert.True(first.Success, first.Error);
+            using var d = JsonDocument.Parse(first.Data!);
+            var status = d.RootElement.GetProperty("status");
+            string reported = status.GetProperty("path").GetString()!;
+            // <folder>\<folder name>: not on disk, yet what ui_show hands the Model Editor to open.
+            Assert.False(File.Exists(reported) || Directory.Exists(reported));
+            var again = Run(new CommandMessage { Command = "ASSET_OPEN", InputPath = reported });
+            Assert.True(again.Success, again.Error);
+            using var d2 = JsonDocument.Parse(again.Data!);
+            Assert.Equal(status.GetProperty("session").GetString(), d2.RootElement.GetProperty("status").GetProperty("session").GetString());
+            Run(new CommandMessage { Command = "ASSET_CLOSE", AssetSession = status.GetProperty("session").GetString() });
+        }
+
+        [Fact]
+        public void A_weapon_is_designed_from_shapes_with_edit_ops_alone()
+        {
+            if (!_ready) return;
+            new ZipperAssetService().Register(_reg);
+            var open = Run(new CommandMessage { Command = "ASSET_OPEN", InputPath = _dir });
+            Assert.True(open.Success, open.Error);
+            string session;
+            using (var d = JsonDocument.Parse(open.Data!)) session = d.RootElement.GetProperty("status").GetProperty("session").GetString()!;
+            CommandResponse Edit(string op)
+            {
+                var r = Run(new CommandMessage { Command = "ASSET_EDIT", AssetSession = session, AssetJson = op });
+                Assert.True(r.Success, r.Error);
+                return r;
+            }
+            try
+            {
+                Edit("{\"op\":\"newWeapon\",\"template\":\"desert_eagle\",\"name\":\"rpistol\"}");
+                Edit("{\"op\":\"addTexture\",\"name\":\"rpistol.tif\",\"namespace\":\"weap\",\"materials\":[{\"color\":[230,50,40]},{\"color\":[235,238,244]}]}");
+                Edit("{\"op\":\"addMesh\",\"archive\":\"WEAP_MDL.ZED\",\"model\":\"rpistol\",\"visual\":\"N000_000\",\"texture\":\"rpistol.tif\",\"replace\":true," +
+                     "\"shapes\":[{\"kind\":\"lathe\",\"center\":[0,0.6,0],\"profile\":[[-1.2,0.05],[-0.9,0.3],[0.4,0.15]],\"material\":0}," +
+                     "{\"kind\":\"cylinder\",\"center\":[0,0.6,0],\"start\":0.3,\"end\":1.9,\"radius\":0.08,\"material\":1,\"caps\":true}]}");
+                Edit("{\"op\":\"hideVisual\",\"archive\":\"WEAP_MDL.ZED\",\"model\":\"rpistol\",\"visual\":\"N000_001\"}");
+
+                var mesh = Run(new CommandMessage { Command = "ASSET_MODEL_MESH", AssetSession = session, AssetArchive = "WEAP_MDL.ZED", AssetName = "rpistol" });
+                Assert.True(mesh.Success, mesh.Error);
+                using var m = JsonDocument.Parse(mesh.Data!);
+                var chunks = m.RootElement.GetProperty("chunks").EnumerateArray().ToList();
+                Assert.All(chunks.Where(c => c.GetProperty("visual").GetString() == "N000_000"), c => Assert.Equal("rpistol.tif", c.GetProperty("texture").GetString()));
+                // The hidden visual keeps one triangle, which has no area.
+                var hidden = chunks.Where(c => c.GetProperty("visual").GetString() == "N000_001").ToList();
+                Assert.Equal(1, hidden.Sum(c => c.GetProperty("triangleCount").GetInt32()));
+                // The GEO definition came along: the weapon has its firepoint and aimpoint.
+                var locators = m.RootElement.GetProperty("locators").EnumerateArray().Select(l => l.GetProperty("name").GetString()).ToList();
+                Assert.Contains("firepoint", locators);
+                Assert.Contains("aimpoint", locators);
+                // The shapes span what they were given (x -1.2..1.9).
+                Assert.True(m.RootElement.GetProperty("boundsMax")[0].GetSingle() > 1.85f);
+            }
+            finally { Run(new CommandMessage { Command = "ASSET_CLOSE", AssetSession = session }); }
         }
 
         [Fact]

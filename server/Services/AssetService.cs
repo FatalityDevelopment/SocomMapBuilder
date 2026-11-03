@@ -240,12 +240,23 @@ namespace MapBuilder.Server.Services
                     bool replace = a.TryGetProperty("replace", out var rp) && rp.ValueKind == JsonValueKind.True;
                     MeshTopology.InputMesh input;
                     string what;
-                    if (Str(a, "obj") is { } obj)
+                    if (a.TryGetProperty("shapes", out var shapes) && shapes.ValueKind == JsonValueKind.Array)
+                    {
+                        input = MeshShapes.Build(shapes, Floats(a, "light"));
+                        what = $"{shapes.GetArrayLength()} shape(s)";
+                    }
+                    else if ((Str(a, "obj") ?? ReadFile(Str(a, "objPath"), "objPath")) is { } obj)
                     {
                         bool yUp = !(a.TryGetProperty("yUp", out var yu) && yu.ValueKind == JsonValueKind.False);
                         float scale = a.TryGetProperty("scale", out var sc) && sc.ValueKind == JsonValueKind.Number ? sc.GetSingle() : 1;
                         input = MeshTopology.ParseObj(obj, yUp, scale, Floats(a, "offset"));
                         what = "OBJ";
+                    }
+                    else if (ReadFile(Str(a, "meshPath"), "meshPath") is { } meshText)
+                    {
+                        using var meshDoc = JsonDocument.Parse(meshText);
+                        input = ArraysMesh(meshDoc.RootElement);
+                        what = "mesh";
                     }
                     else if (a.TryGetProperty("primitive", out var pr) && pr.ValueKind == JsonValueKind.Object)
                     {
@@ -259,8 +270,27 @@ namespace MapBuilder.Server.Services
                         input = ArraysMesh(me);
                         what = "mesh";
                     }
-                    else throw new ArgumentException("addMesh needs \"obj\" (OBJ text), \"primitive\" {kind, size, center} or \"mesh\" {positions, triangles, normals?, uvs?, colors?}");
+                    else throw new ArgumentException("addMesh needs \"shapes\" [{kind, material, ...}], \"obj\" / \"objPath\" (OBJ), \"mesh\" / \"meshPath\" {positions, triangles, normals?, uvs?, colors?} or \"primitive\" {kind, size, center}");
                     return ApplyTopology(s, Str(a, "label") ?? $"add {what} to {model} {visual}", p => MeshTopology.AddMesh(p, archive, model, visual, texture, input, replace));
+                }
+                case "hideVisual":
+                {
+                    string archive = Str(a, "archive") ?? throw new ArgumentException("\"archive\" is required");
+                    string model = Str(a, "model") ?? throw new ArgumentException("\"model\" is required");
+                    string visual = Str(a, "visual") ?? throw new ArgumentException("\"visual\" (an N<node>_<visual> key) is required");
+                    return ApplyTopology(s, Str(a, "label") ?? $"hide {model} {visual}", p => MeshTopology.HideVisual(p, archive, model, visual));
+                }
+                case "newWeapon":
+                {
+                    // {template, name, archive?}: the template's MDL record (visual chains) and GEO definition under a new name.
+                    string template = Str(a, "template") ?? throw new ArgumentException("\"template\" (the weapon to copy) is required");
+                    string name = Str(a, "name") ?? throw new ArgumentException("\"name\" (the new weapon) is required");
+                    string archive = Str(a, "archive") ?? pkg.Models().FirstOrDefault(m => m.Name == template)?.Archive
+                        ?? throw new ArgumentException($"No model {template}; give \"archive\"");
+                    PackageWeapons.Result? made = null;
+                    var result = ApplyEdit(s, Str(a, "label") ?? $"new weapon {name} from {template}", p => (made = PackageWeapons.Create(p, archive, template, name)).Changed);
+                    var visuals = pkg.FindModel(archive, template) is { } tm ? ZipperModelMesh.Build(pkg, tm).Chunks.Select(c => c.Visual).Distinct().ToList() : null;
+                    return new { result, archive = made!.Archive, name = made.Model, geoArchive = made.GeoArchive, visuals, warnings = made.Warnings };
                 }
                 case "importModel":
                 {
@@ -1034,10 +1064,23 @@ namespace MapBuilder.Server.Services
         /// <summary>An op's image as RGBA: "pngBase64" (the page converts JPG / BMP / WebP to PNG) or "imagePath" (a PNG).</summary>
         private static byte[] ImageRgba(JsonElement a, out int width, out int height)
         {
+            // A material-strip skin for shapes meshes (addMesh shapes pick their shades from it).
+            if (a.TryGetProperty("materials", out var mats) && mats.ValueKind == JsonValueKind.Array)
+            {
+                width = height = MeshShapes.SkinSize;
+                return MeshShapes.SkinRgba(mats);
+            }
             byte[] png = Str(a, "pngBase64") is { } b64 ? Convert.FromBase64String(b64)
                 : Str(a, "imagePath") is { } path ? File.ReadAllBytes(path)
-                : throw new ArgumentException("\"pngBase64\" or \"imagePath\" (a PNG) is required");
+                : throw new ArgumentException("\"pngBase64\", \"imagePath\" (a PNG) or \"materials\" [{color: [r, g, b]}] is required");
             return PngDecoder.DecodeRgba(png, out width, out height);
+        }
+
+        private static string? ReadFile(string? path, string name)
+        {
+            if (path == null) return null;
+            if (!File.Exists(path)) throw new ArgumentException($"\"{name}\": no file {path}");
+            return File.ReadAllText(path);
         }
 
         private static int? OptInt(JsonElement a, string name) =>
@@ -1097,6 +1140,9 @@ namespace MapBuilder.Server.Services
             {
                 AssetSession? existing = Sessions.Values.FirstOrDefault(s =>
                     s.OpenPath.Equals(full, StringComparison.OrdinalIgnoreCase) || s.Package.SourcePath.Equals(full, StringComparison.OrdinalIgnoreCase));
+                // A loose package's SourcePath (<folder>\<folder name>, what its status reports) is not on disk: stamp
+                // and reload it from where it was opened, or a page reopening it by that path finds no package.
+                if (existing != null && !File.Exists(full) && !Directory.Exists(full)) full = existing.OpenPath;
                 // A session whose file changed on disk since (another tool wrote it) is reloaded, unless it holds
                 // unsaved edits. It keeps its id and moves its revision on, so the pages polling it reload too.
                 AssetSession? reloaded = null;

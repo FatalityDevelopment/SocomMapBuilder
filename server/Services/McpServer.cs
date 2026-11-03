@@ -367,6 +367,7 @@ namespace MapBuilder.Server.Services
                 case "setAnimation":
                 case "setAnimationKey": return ("animations", null, null);
                 case "importModel":
+                case "newWeapon":
                 {
                     string? archive = result.ValueKind == JsonValueKind.Object && result.TryGetProperty("archive", out var ar) ? ar.GetString() : null;
                     string? name = result.ValueKind == JsonValueKind.Object && result.TryGetProperty("name", out var nm) ? nm.GetString() : null;
@@ -375,6 +376,42 @@ namespace MapBuilder.Server.Services
             }
             if (Str(op, "archive") is { } a && Str(op, "model") is { } model) return ("models", new { archive = a, name = model }, null);
             return (null, null, null);
+        }
+
+        // ui_show for a model: the page opens packages on its own, so wait for its state to have the model, or for the
+        // error it shows when the open failed (a missing path, a package it cannot read).
+        private async Task<ToolResult> ModelShown(string? path, string archive, string name)
+        {
+            for (int tries = 0; tries < 16; tries++)
+            {
+                await Task.Delay(500);
+                JsonElement state;
+                try { state = await _ui.Request("state", null, TimeSpan.FromSeconds(3)); }
+                catch (Exception ex) when (ex is TimeoutException or InvalidOperationException or TaskCanceledException) { continue; }
+                if (!state.TryGetProperty("pages", out var pages) || !pages.TryGetProperty("models", out var me) || me.ValueKind != JsonValueKind.Object) continue;
+                if (me.TryGetProperty("model", out var m) && m.ValueKind == JsonValueKind.Object
+                    && string.Equals(m.GetProperty("name").GetString(), name, StringComparison.Ordinal)
+                    && string.Equals(m.GetProperty("archive").GetString(), archive, StringComparison.OrdinalIgnoreCase)
+                    && SamePackage(me.TryGetProperty("path", out var pp) ? pp.GetString() : null, path))
+                    return ToolResult.Text($"Showing {name} in the Model Editor.", "models");
+                if (me.TryGetProperty("messageIsError", out var err) && err.ValueKind == JsonValueKind.True
+                    && me.TryGetProperty("message", out var msg) && msg.GetString() is { } text
+                    && (path == null || text.Contains(path, StringComparison.OrdinalIgnoreCase)))
+                    return ToolResult.Fail($"The Model Editor could not show {name}: {text}");
+            }
+            return ToolResult.Text($"Asked the Model Editor to show {name}; it has not opened it yet (ui_state shows what it has).", "models");
+        }
+
+        // The page's package is the one asked for: the same path, or for a loose package the same folder (its status path is
+        // <folder>\<folder name>; a request may name the folder, a file in it or that status path).
+        private static bool SamePackage(string? shown, string? requested)
+        {
+            if (requested == null) return true;
+            if (shown == null) return false;
+            if (string.Equals(shown, requested, StringComparison.OrdinalIgnoreCase)) return true;
+            static string? Folder(string p) => Directory.Exists(p) ? p.TrimEnd('\\', '/') : Path.GetDirectoryName(p);
+            return string.Equals(Folder(shown), Folder(requested), StringComparison.OrdinalIgnoreCase)
+                && !shown.EndsWith(".ZDB", StringComparison.OrdinalIgnoreCase) && !shown.EndsWith(".CDB", StringComparison.OrdinalIgnoreCase);
         }
 
         // ------------------------------------------------------------------ tools
@@ -576,10 +613,14 @@ namespace MapBuilder.Server.Services
                 "- transformVertices {archive, model, translate?, rotate? (degrees), scale?, pivot?, chunks?, vertices?, matrix?}\n" +
                 "- setVertices {archive, model, geometryOffset, vertices:[{i, position?, uv?, color?, normal?}]}\n" +
                 "- deleteFaces / duplicateFaces {archive, model, faces:{geometryOffset:[triangle…]}, …}\n" +
-                "- addMesh {archive, model, visual:\"N000_000\", texture, replace?, obj | primitive:{kind:cube|plane, size, center} | mesh}\n" +
+                "- addMesh {archive, model, visual:\"N000_000\", texture, replace?, shapes | obj | objPath | mesh | meshPath | primitive:{kind:cube|plane, size, center}}: " +
+                "shapes [{kind: lathe {profile:[[along,radius]]} | cylinder {start,end,radius,radiusEnd?} | ring {at,inner,outer,thickness?} | sphere {radius,scale?} | " +
+                "box {min,max,lean?}, material 0-7, axis? x|y|z (default x), center?, segments?, squash?, caps?}] build a mesh shaded from a materials skin (addTexture materials)\n" +
+                "- hideVisual {archive, model, visual} (it draws nothing; addMesh can fill it again)\n" +
+                "- newWeapon {template, name, archive?} (copies the weapon's visuals and GEO definition - LODs, firepoint, aimpoint - to reshape with addMesh / hideVisual)\n" +
                 "- importModel {source (package path) | sourceSession, archive, name, targetArchive?, newName?}\n" +
                 "- importTexture {source | sourceSession, name, sourceNamespace?, namespace?, newName?}\n" +
-                "- addTexture {name, pngBase64 | imagePath, namespace?, maxSize?} / addPalette {pngBase64 | imagePath, namespace?, is16?}\n" +
+                "- addTexture {name, pngBase64 | imagePath | materials:[{color:[r,g,b]}] (up to 8: a 64x64 shaded-strip skin for shapes), namespace?, maxSize?} / addPalette {pngBase64 | imagePath, namespace?, is16?}\n" +
                 "- setPalette {archive (a _PAL.ZED), id, rgba:[1024 numbers] | pngBase64 | imagePath} (256 colours in place, keeping the depth; " +
                 "the Asset Viewer opens the palette)\n" +
                 "- addAnimation / deleteAnimation / renameAnimation / setAnimation / setAnimationKey (package clips)\n" +
@@ -802,15 +843,23 @@ namespace MapBuilder.Server.Services
                     P("dryRun", "boolean", "Encode and check, writing nothing.")), a =>
                 {
                     string? edits = a.TryGetProperty("meshEdits", out var me) && me.ValueKind == JsonValueKind.Object ? me.GetRawText() : null;
-                    return FromCommand(new CommandMessage
+                    string path = Str(a, "path") ?? throw new ArgumentException("\"path\" is required");
+                    var result = FromCommand(new CommandMessage
                     {
-                        Command = "ZIPPER_CREATE_WEAPON", InputPath = Str(a, "path") ?? throw new ArgumentException("\"path\" is required"),
+                        Command = "ZIPPER_CREATE_WEAPON", InputPath = path,
                         WeaponName = Str(a, "template") ?? throw new ArgumentException("\"template\" is required"),
                         OutputPath = Str(a, "outputPath"), WeaponNewName = Str(a, "newName"), WeaponMeshEditsJson = edits,
                         WeaponImagePath = Str(a, "imagePath"), WeaponImageData = Str(a, "imageBase64"),
                         WeaponTextureEntryName = Str(a, "textureEntryName"), WeaponPaletteEntryName = Str(a, "paletteEntryName"), DryRun = Bool(a, "dryRun"),
                     }, d => d.TryGetProperty("outputPath", out var o) ? $"{Str(a, "newName")} → {Path.GetFileName(o.GetString())}"
                         : d.TryGetProperty("wouldWrite", out var w) ? $"dry run: {Str(a, "newName")} → {Path.GetFileName(w.GetString())}" : null!);
+                    // The new weapon is on disk, outside any session: the Model Editor opens the written archive on it.
+                    if (!result.IsError && !Bool(a, "dryRun"))
+                    {
+                        string written = Path.GetFullPath(Str(a, "outputPath") ?? path);
+                        _ui.Publish(new { type = "show", page = "models", path = written, model = new { archive = Path.GetFileName(written), name = Str(a, "newName") } });
+                    }
+                    return result;
                 });
 
             // ── the app
@@ -839,20 +888,24 @@ namespace MapBuilder.Server.Services
                     return ToolResult.Text(JsonSerializer.Serialize(new { pages = _ui.ClientCount, state = data }, Json), "read");
                 });
 
-            AddSync("ui_show", "Show page",
+            Add("ui_show", "Show page",
                 "Bring a page to the front, optionally opening a package (by session or path) and a model there: map (Map Builder), models " +
-                "(Model Editor, with archive + model), animations (Animation Editor), viewer (Asset Viewer). Risk: read-only.",
+                "(Model Editor, with archive + model), animations (Animation Editor), viewer (Asset Viewer). For a model it waits until the " +
+                "Model Editor has it open and fails with the page's own error when it could not open it. Risk: read-only.",
                 true, Schema(new[] { "page" }, E("page", "map, models, animations or viewer.", "map", "models", "animations", "viewer"), P("session", "string", "Optional session to show."),
                     P("path", "string", "Optional package path (instead of session)."), P("archive", "string", "Model Editor: the model's archive."),
-                    P("model", "string", "Model Editor: the model.")), a =>
+                    P("model", "string", "Model Editor: the model.")), async a =>
                 {
                     string page = Str(a, "page") ?? throw new ArgumentException("\"page\" is required");
                     if (page is not ("map" or "models" or "animations" or "viewer")) throw new ArgumentException("page is map, models, animations or viewer");
                     string? path = Str(a, "path");
                     if (path == null && Str(a, "session") is { } sid) path = Status(sid) is { } st && st.TryGetProperty("path", out var p) ? p.GetString() : throw new ArgumentException($"No session '{sid}'");
-                    object? model = Str(a, "archive") is { } ar && Str(a, "model") is { } m ? new { archive = ar, name = m } : null;
+                    string? archive = Str(a, "archive"), name = Str(a, "model");
+                    object? model = archive != null && name != null ? new { archive, name } : null;
                     _ui.Publish(new { type = "show", page, path, model, force = true });
-                    return ToolResult.Text(_ui.ClientCount > 0 ? $"Showing {page}." : "No page is open; nothing shown.", page);
+                    if (_ui.ClientCount == 0) return ToolResult.Text("No page is open; nothing shown.", page);
+                    if (page != "models" || model == null) return ToolResult.Text($"Showing {page}.", page);
+                    return await ModelShown(path, archive!, name!);
                 });
 
             AddSync("ui_focus", "Focus item",
