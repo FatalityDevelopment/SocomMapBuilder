@@ -575,6 +575,8 @@ export class ModelEditorPageLogic {
       path: s?.path ?? null, session: s?.session ?? null, revision: s?.revision ?? null, unsaved: s?.dirty ?? [],
       model: m ? { archive: m.archive, name: m.name, kind: m.kind } : null,
       shading: this.shading(), lighting: this.lighting(), selectMode: this.selectMode(), tool: this.tool(),
+      // The status line: what ui_show reports when the page could not open what it was asked.
+      message: this.message(), messageIsError: this.messageIsError(),
     };
   }
 

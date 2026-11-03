@@ -6,6 +6,7 @@ using System.Text.Json;
 using CodeDesigner.Ps2.FileFormats;
 using CodeDesigner.Ps2.FileFormats.Imaging;
 using CodeDesigner.Ps2.FileFormats.Zipper.Model;
+using CodeDesigner.Ps2.FileFormats.Zipper.Package;
 using CodeDesigner.Ps2.FileFormats.Zipper.Texture;
 using CodeDesigner.Ps2.FileFormats.Zipper.ZED;
 
@@ -45,6 +46,7 @@ namespace MapBuilder.Server.Services
                 c.InputPath, c.OutputPath, c.WeaponNewName,
                 c.WeaponModelData, c.WeaponTextureData, c.WeaponPaletteData,
                 c.WeaponTextureEntryName, c.WeaponPaletteEntryName, c.DryRun), "ZIPPER_WRITE_WEAPON");
+            reg.Add(HandleCreateWeapon, "ZIPPER_CREATE_WEAPON");
         }
 
         // -------------------------------------------------------------------
@@ -222,26 +224,45 @@ namespace MapBuilder.Server.Services
             {
                 using var zed = ZedContainer.Open(path);
                 var node = zed.FindNode(weaponName);
-                if (node == null) return Responses.Error($"Weapon '{weaponName}' not found.");
 
+                // A model's texture, or the entry itself; either may live in the TXR beside the archive.
                 ZedNode? tifNode = null;
-                if (ZedModelFile.LooksLikeModel(node.Data))
+                string? wanted = node == null ? weaponName : null;
+                if (node != null && ZedModelFile.LooksLikeModel(node.Data))
                 {
                     var model = ParseForInspection(zed, zed.Nodes.ToList().IndexOf(node));
-                    string? firstTifName = model.Chunks
+                    wanted = model.Chunks
                         .Select(c => c.TextureName)
                         .FirstOrDefault(n => !string.IsNullOrEmpty(n))
                         ?? model.TextureRefs.FirstOrDefault();
-                    if (firstTifName != null)
-                        tifNode = zed.FindNode(firstTifName);
+                    if (wanted != null)
+                        tifNode = zed.FindNode(wanted);
                 }
-                else if (node.Data.Length >= ZedTextureFile.HeaderSize)
+                else if (node != null && node.Data.Length >= ZedTextureFile.HeaderSize)
                 {
                     tifNode = node; // entry is itself a texture
                 }
 
                 if (tifNode == null)
-                    return Responses.Error($"No texture entry resolved for '{weaponName}'.");
+                {
+                    if (wanted != null && PackageTexture(path, wanted) is { } beside)
+                    {
+                        var h = beside.Texture.Header;
+                        return Responses.Ok("ZIPPER_WEAPON_TEXTURE_PNG", new
+                        {
+                            weapon = weaponName,
+                            textureEntry = wanted,
+                            textureNamespace = beside.Namespace,
+                            width = h.Width,
+                            height = h.Height,
+                            paletteResolved = beside.Texture.PaletteResolved,
+                            png = Convert.ToBase64String(PngEncoder.EncodeRgba(beside.Texture.Rgba, h.Width, h.Height)),
+                        });
+                    }
+                    return Responses.Error(node == null
+                        ? $"Weapon or texture '{weaponName}' not found."
+                        : $"No texture entry resolved for '{weaponName}'{(wanted != null ? $" ({wanted} is in no TXR archive beside it)" : "")}.");
+                }
 
                 // Look for a sibling palette. We try a few common conventions:
                 // an entry named "texpal_N" matching paletteId, or the next
@@ -563,6 +584,116 @@ namespace MapBuilder.Server.Services
         {
             int dot = name.LastIndexOf('.');
             return dot > 0 ? name.Substring(0, dot) : name;
+        }
+
+        // -------------------------------------------------------------------
+        // ZIPPER_CREATE_WEAPON — weapons_create in one step. On the disc the
+        // template's texture sits in the TXR / PAL pair beside the model
+        // archive (WEAP_MDL with WEAP_TXR / WEAP_PAL): the archives are opened
+        // as a loose package and PackageWeapons copies the template record
+        // (chains included) and adds the skin there. A texture inside the
+        // archive itself keeps the sibling-entry steps above.
+        // -------------------------------------------------------------------
+
+        private string HandleCreateWeapon(CommandMessage c)
+        {
+            string? err = RequireFile(c.InputPath, out string path);
+            if (err != null) return Responses.Error(err);
+            if (string.IsNullOrWhiteSpace(c.WeaponName))
+                return Responses.Error("WeaponName (the template) is required.");
+            if (string.IsNullOrWhiteSpace(c.WeaponNewName))
+                return Responses.Error("WeaponNewName is required.");
+            bool image = !string.IsNullOrWhiteSpace(c.WeaponImagePath) || !string.IsNullOrWhiteSpace(c.WeaponImageData);
+            string template = c.WeaponName!;
+
+            try
+            {
+                byte[] payload;
+                bool textureInArchive;
+                using (var zed = ZedContainer.Open(path))
+                {
+                    var node = zed.FindNode(template);
+                    if (node == null) return Responses.Error($"Weapon '{template}' not found.");
+                    var inspected = ParseForInspection(zed, zed.Nodes.ToList().IndexOf(node));
+                    textureInArchive = inspected.Chunks.Any(ch => !string.IsNullOrEmpty(ch.TextureName) && zed.FindNode(ch.TextureName!) != null);
+                    var edits = string.IsNullOrWhiteSpace(c.WeaponMeshEditsJson) ? null : ParseEdits(c.WeaponMeshEditsJson!);
+                    payload = ZedModelFile.Encode(ZedModelFile.Parse(node.Data), edits);
+                }
+
+                ZipperPackage? pkg = textureInArchive ? null : ZipperPackage.Open(path);
+                if (pkg?.FindModel(Path.GetFileName(path), template) == null)
+                    return CreateInArchive(c, path, payload, image);
+
+                byte[]? rgba = null;
+                int w = 0, h = 0;
+                if (image)
+                {
+                    byte[]? png = ReadImage(c.WeaponImagePath, c.WeaponImageData, out string? imageErr);
+                    if (png == null) return Responses.Error(imageErr!);
+                    rgba = PngDecoder.DecodeRgba(png, out w, out h);
+                }
+
+                var r = PackageWeapons.Create(pkg, Path.GetFileName(path), template, c.WeaponNewName!, payload, rgba, w, h, c.WeaponTextureEntryName);
+
+                // The model archive goes to OutputPath; the TXR / PAL it changed go beside it under their own names.
+                string saveTo = Path.GetFullPath(string.IsNullOrWhiteSpace(c.OutputPath) ? path : c.OutputPath!);
+                string dir = Path.GetDirectoryName(saveTo)!;
+                var writes = r.Changed.Select(kv => (Path: kv.Key.Equals(r.Archive, StringComparison.OrdinalIgnoreCase) ? saveTo : Path.Combine(dir, kv.Key), Bytes: kv.Value)).ToList();
+                foreach (var (to, _) in writes)
+                    if (ZipperAssetService.UnsavedSessionOn(to) is { } busy)
+                        return Responses.Error($"ZIPPER_CREATE_WEAPON: {Path.GetFileName(to)} has unsaved edits in session {busy}; save or close it first");
+
+                var files = writes.Select(x => new { path = x.Path, size = x.Bytes.Length }).ToList();
+                var added = new List<object> { new { name = r.Model, kind = "model", archive = r.Archive } };
+                if (r.Texture != null)
+                {
+                    added.Add(new { name = r.Texture, kind = "texture", archive = r.TextureArchive, width = r.Width, height = r.Height, replaces = r.ReplacedTexture });
+                    added.Add(new { name = $"texpal_{r.PaletteId}", kind = "palette", archive = r.PaletteArchive });
+                }
+                if (c.DryRun)
+                    return Responses.Ok("ZIPPER_CREATE_WEAPON", new { dryRun = true, wouldWrite = saveTo, files, added, warnings = r.Warnings });
+                foreach (var (to, bytes) in writes) SafeFile.Write(to, bytes);
+                return Responses.Ok("ZIPPER_CREATE_WEAPON", new { outputPath = saveTo, files, added, warnings = r.Warnings });
+            }
+            catch (Exception ex) when (ex is ArgumentException or KeyNotFoundException or InvalidOperationException or InvalidDataException or IOException)
+            {
+                return Responses.Error($"ZIPPER_CREATE_WEAPON error: {ex.Message}");
+            }
+        }
+
+        // Model, texture and palette as new entries of the one archive.
+        private string CreateInArchive(CommandMessage c, string path, byte[] payload, bool image)
+        {
+            string? tif = null, palette = null;
+            if (image)
+            {
+                var texture = JsonSerializer.Deserialize<CommandResponse>(HandleEncodeWeaponTexture(path, c.WeaponName, c.WeaponImagePath, c.WeaponImageData))!;
+                if (!texture.Success) return Responses.Error(texture.Error ?? "ZIPPER_ENCODE_WEAPON_TEXTURE failed");
+                using var d = JsonDocument.Parse(texture.Data!);
+                tif = d.RootElement.GetProperty("tif").GetString();
+                palette = d.RootElement.TryGetProperty("palette", out var p) && p.ValueKind == JsonValueKind.String ? p.GetString() : null;
+            }
+            return HandleWriteWeapon(path, c.OutputPath, c.WeaponNewName, Convert.ToBase64String(payload), tif, palette,
+                c.WeaponTextureEntryName, c.WeaponPaletteEntryName, c.DryRun);
+        }
+
+        private static byte[]? ReadImage(string? imagePath, string? imageDataB64, out string? error)
+        {
+            error = null;
+            if (!string.IsNullOrWhiteSpace(imagePath))
+            {
+                if (File.Exists(imagePath)) return File.ReadAllBytes(imagePath);
+                error = $"Image file does not exist: {imagePath}";
+                return null;
+            }
+            return Convert.FromBase64String(imageDataB64!);
+        }
+
+        // A texture from the TXR archives beside a loose archive (its folder opened as a package).
+        private static (ZedTextureFile.DecodedTexture Texture, string Namespace)? PackageTexture(string archivePath, string tifName)
+        {
+            try { return ZipperPackage.Open(archivePath).DecodeTexture(tifName, null); }
+            catch (Exception ex) when (ex is IOException or InvalidDataException) { return null; }
         }
 
         // -------------------------------------------------------------------

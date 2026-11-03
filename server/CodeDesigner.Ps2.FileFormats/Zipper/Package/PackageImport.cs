@@ -457,7 +457,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
 
         /// <summary>Rewrites every NUL-terminated occurrence of a texture name in a model payload (chain kind-6 fields,
         /// character section names). The new name has the old one's length, so it fits its field.</summary>
-        private static byte[] Rename(byte[] payload, string from, string to, out int fields)
+        internal static byte[] Rename(byte[] payload, string from, string to, out int fields)
         {
             fields = 0;
             byte[] a = Encoding.ASCII.GetBytes(from + "\0");
@@ -486,7 +486,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
                 foreach (string s in References(c)) yield return s;
         }
 
-        private static void AppendTop(ZedContainer c, ZedTree.Record record)
+        internal static void AppendTop(ZedContainer c, ZedTree.Record record)
         {
             int cursor = c.Nodes.Count;
             void Insert(ZedTree.Record r)

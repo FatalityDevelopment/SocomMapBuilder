@@ -21,10 +21,16 @@ export function AnimationEditorPage() {
     if (request?.page === 'animations') { void c.openPackage(request.path); }
   }, [request, c]);
 
-  // The AI (MCP) brought this page forward for another package: open it (edits to this one arrive by the poll).
+  // The AI (MCP) brought this page forward: open its package (edits to this one arrive by the poll) and the clip it read.
   const change = aiChange();
   useEffect(() => {
-    if (change?.page === 'animations' && change.path && !samePath(c.status()?.path, change.path)) { void c.openPackage(change.path); }
+    if (change?.page !== 'animations' || !change.path) { return; }
+    void (async () => {
+      if (!samePath(c.status()?.path, change.path)) { await c.openPackage(change.path!); }
+      const clip = change.focus?.clip;
+      const hit = clip ? c.clips().find(x => x.name === clip) : undefined;
+      if (hit && c.current()?.name !== hit.name) { await c.selectClip(hit); }
+    })();
   }, [change, c]);
 
   const s = c.status();

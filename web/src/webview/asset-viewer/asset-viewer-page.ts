@@ -1176,15 +1176,18 @@ export class AssetViewerLogic {
       return this.navigate(place).then(() => true, () => false);
     };
     let item: ViewerItem | undefined;
-    if (v.archive && v.palette != null && packagePath) {
-      // A palette of the package: its _PAL.ZED listing, then the palette.
+    if (v.archive && (v.palette != null || v.texture) && packagePath) {
+      // A palette or texture of the package: its _PAL / _TXR.ZED listing, then the item.
       const l = this.listing();
-      if (!(l?.kind === 'palettes' && l.name.toLowerCase() === v.archive.toLowerCase() && samePath(l.path, packagePath))) {
+      const kind = v.palette != null ? 'palettes' : 'textures';
+      if (!(l?.kind === kind && l.name.toLowerCase() === v.archive.toLowerCase() && samePath(l.path, packagePath))) {
         if (!await go({ path: packagePath, inner: [] })) { return; }
         const archive = this.listing()?.items.find(i => i.name.toLowerCase() === v.archive!.toLowerCase());
         if (!archive || !await go(archive)) { return; }
       } else if (edited) { await go(l); }
-      item = this.listing()?.items.find(i => i.ref?.id === v.palette);
+      item = v.palette != null
+        ? this.listing()?.items.find(i => i.ref?.id === v.palette)
+        : this.listing()?.items.find(i => i.name.toLowerCase() === v.texture!.toLowerCase());
     } else if (v.path) {
       const place: Place = { path: v.path, inner: v.inner ?? [] };
       if (v.open) { if (await go(place) && edited) { await this.refreshAfterEdit(); } return; }

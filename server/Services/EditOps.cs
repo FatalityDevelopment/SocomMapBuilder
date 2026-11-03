@@ -62,6 +62,8 @@ namespace MapBuilder.Server.Services
         private static readonly (string, Dictionary<string, object>) Scene = F("scene", "string", "GEO namespace (default: the map's).");
         private static readonly (string, Dictionary<string, object>) Image1 = F("pngBase64", "string", "The image as base64 PNG.");
         private static readonly (string, Dictionary<string, object>) Image2 = F("imagePath", "string", "A PNG file (instead of pngBase64).");
+        private static readonly (string, Dictionary<string, object>) Materials = Arr("materials", "object",
+            "Instead of an image: up to 8 [{color: [r, g, b]} | {light, dark}], a 64x64 skin of shaded strips that addMesh shapes' material indices pick.");
 
         private static (string, Dictionary<string, object>)[] With(IEnumerable<(string, Dictionary<string, object>)> a, params (string, Dictionary<string, object>)[] b) => a.Concat(b).ToArray();
 
@@ -84,8 +86,8 @@ namespace MapBuilder.Server.Services
                     Int("team", "Team byte.", 0, 255), OneOf("kind", "Point kind.", "start", "waypoint", "other"), Vec("position", 3, "World [x, y, z].") }),
             new("placePrefab", "Place a saved prefab around a position (one undo step).", new[] { "prefab", "position" },
                 new[] { F("prefab", "string", "From assets_list_prefabs."), Vec("position", 3, "World [x, y, z] of the prefab's origin."), F("yaw", "number", "Degrees about Y.") }),
-            new("replaceTexture", "Replace a texture's pixels from an image.", new[] { "texture" },
-                new[] { F("texture", "string", "The .tif."), Image1, Image2, F("namespace", "string", "TXR namespace to prefer.") }),
+            new("replaceTexture", "Replace a texture's pixels from an image (or a materials skin).", new[] { "texture" },
+                new[] { F("texture", "string", "The .tif."), Image1, Image2, Materials, F("namespace", "string", "TXR namespace to prefer.") }),
             new("retexture", "Point a model's sections at another texture.", new[] { "archive", "model", "from", "to" },
                 new[] { Archive, Model, F("from", "string", "The texture now named."), F("to", "string", "The texture to name (must exist)."), F("visual", "string", "Only this visual.") }),
             new("tintVertexColors", "Multiply / add the baked vertex colours.", new[] { "archive", "model" },
@@ -101,11 +103,19 @@ namespace MapBuilder.Server.Services
                 new[] { Archive, Model, F("faces", "object", "{geometryOffset: [triangle indices]}.") }),
             new("duplicateFaces", "Copy triangles, transformed.", new[] { "archive", "model", "faces" },
                 With(VertexTransform, Archive, Model, F("faces", "object", "{geometryOffset: [triangle indices]}."))),
-            new("addMesh", "Add geometry to a model visual: OBJ text, a primitive or raw arrays.", new[] { "archive", "model", "visual", "texture" },
-                new[] { Archive, Model, F("visual", "string", "An N<node>_<visual> key."), F("texture", "string", "The texture to use."),
-                    F("replace", "boolean", "Replace the visual's geometry."), F("obj", "string", "OBJ text."), F("yUp", "boolean", "OBJ is Y up (default true)."),
+            new("addMesh", "Add geometry to a model visual: shapes, OBJ, raw arrays or a primitive.", new[] { "archive", "model", "visual", "texture" },
+                new[] { Archive, Model, F("visual", "string", "An N<node>_<visual> key."), F("texture", "string", "The texture to use (for shapes: a materials skin, addTexture materials)."),
+                    F("replace", "boolean", "Replace the visual's geometry."),
+                    Arr("shapes", "object", "[{kind: lathe {profile: [[along, radius]], caps?} | cylinder {start, end, radius, radiusEnd?, caps?} | ring {at, inner, outer, thickness?} | " +
+                        "sphere {radius, scale?, rings?} | box {min, max, lean?}, material (0-7), axis?: x|y|z (default x), center?, segments?, squash?: [u, w]}]."),
+                    Vec("light", 3, "shapes: the light the shades are baked from (default [0.35, 0.85, 0.45])."),
+                    F("obj", "string", "OBJ text."), F("objPath", "string", "An OBJ file (instead of obj)."), F("yUp", "boolean", "OBJ is Y up (default true)."),
                     F("scale", "number", "OBJ scale."), Vec("offset", 3, "OBJ offset."), F("primitive", "object", "{kind: cube | plane, size?, center?}."),
-                    F("mesh", "object", "{positions, triangles, normals?, uvs?, colors?}.") }),
+                    F("mesh", "object", "{positions, triangles, normals?, uvs?, colors?}."), F("meshPath", "string", "A JSON file holding mesh (instead of mesh).") }),
+            new("hideVisual", "Hide a model visual (it keeps one zero-area triangle; addMesh can fill it again).", new[] { "archive", "model", "visual" },
+                new[] { Archive, Model, F("visual", "string", "An N<node>_<visual> key.") }),
+            new("newWeapon", "Copy a weapon (its visuals and GEO definition: LODs, firepoint, aimpoint) under a new name, to reshape with addMesh / hideVisual.", new[] { "template", "name" },
+                new[] { F("template", "string", "The weapon to copy (e.g. desert_eagle)."), F("name", "string", "The new weapon."), F("archive", "string", "The template's *_MDL.ZED (default: found by name).") }),
             new("importModel", "Copy a model (with its textures, palettes and definition) from another package.", new[] { "archive", "name" },
                 new[] { F("source", "string", "The other package's path."), F("sourceSession", "string", "Or an open session."),
                     F("archive", "string", "The source model's *_MDL.ZED."), F("name", "string", "The source model."),
@@ -113,8 +123,8 @@ namespace MapBuilder.Server.Services
             new("importTexture", "Copy a texture (and its palette) from another package.", new[] { "name" },
                 new[] { F("source", "string", "The other package's path."), F("sourceSession", "string", "Or an open session."), F("name", "string", "The source .tif."),
                     F("sourceNamespace", "string", "Its TXR namespace."), F("namespace", "string", "Where it goes here."), F("newName", "string", "A new name.") }),
-            new("addTexture", "Create a texture from an image.", new[] { "name" },
-                new[] { F("name", "string", "The new .tif (at most 15 characters for retail models)."), Image1, Image2, F("namespace", "string", "TXR namespace."),
+            new("addTexture", "Create a texture from an image, or a material-strip skin for addMesh shapes.", new[] { "name" },
+                new[] { F("name", "string", "The new .tif (at most 15 characters for retail models)."), Image1, Image2, Materials, F("namespace", "string", "TXR namespace."),
                     Int("width", "Power of two, 8-512.", 8, 512), Int("height", "Power of two, 8-512.", 8, 512), Int("maxSize", "Longest side when rounding (default 256).", 8, 512),
                     Int("paletteId", "Reuse this palette.", 0) }),
             new("addPalette", "Create a 256-colour palette from an image.", Array.Empty<string>(),

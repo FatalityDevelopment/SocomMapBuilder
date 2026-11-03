@@ -125,6 +125,22 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Conversion
             throw new InvalidDataException($"{zdb} {model}: no material block");
         }
 
+        /// <summary>
+        /// A retail HUD icon to build weapon icons on: MP61's RUN/COMMON/HUDW › sigcommando_icon.tif (128×32, 8-bit,
+        /// 32-bit palette; header, GIF tail) and the HUDW TXR / PAL header words. HUD icons live in a category 0x0C
+        /// library (the HUD's own VRAM pool).
+        /// </summary>
+        public (byte[] Texdat, ZedHeader Txr, ZedHeader Pal) HudIconTemplate()
+        {
+            var p = Package("MP61");
+            var txr = p.Container("HUDW_TXR.ZED");
+            int icon = Enumerable.Range(0, txr.Nodes.Count).FirstOrDefault(i => txr.Nodes[i].Name == "sigcommando_icon.tif", -1);
+            if (icon < 0) throw new InvalidDataException("MP61's HUDW_TXR has no sigcommando_icon.tif");
+            int texdat = ZedTree.Children(txr.Nodes, icon).FirstOrDefault(i => txr.Nodes[i].Name == "texdat", -1);
+            if (texdat < 0) throw new InvalidDataException("sigcommando_icon.tif has no texdat");
+            return (txr.Nodes[texdat].Data, ZedHeader.Of(txr), ZedHeader.Of(p.Container("HUDW_PAL.ZED")));
+        }
+
         public (ZedHeader Header, MotionClip Stand) ClipTemplate()
         {
             var zar = ZedContainer.FromBytes(File.ReadAllBytes(Path.Combine(RunDir, "MOTION_P.ZAR")));
