@@ -32,7 +32,8 @@ namespace MapBuilder.Server.Services
             "reuse groups of props across maps. assets_edit placeInstance adds props; newProp copies a prop to reshape (addTexture materials, " +
             "addMesh shapes, hideVisual), fitBounds refits it, and placeInstance puts it in the map; addCharacterMesh puts gear on a " +
             "character, rigid on a bone (assets_describe_model lists its skeleton) or bending with the body without one, removeCharacterSection takes it off, scaleBones reshapes body parts " +
-            "(thicker, longer, bigger, blending across joints), transformCharacter moves whole sections; characters_pack ships a " +
+            "(thicker, longer, bigger, blending across joints), transformCharacter moves whole sections, characters_check (also in those edits' " +
+            "replies) flags seams, folds and floating gear; characters_pack ships a " +
             "character as a memory-card pack under a donor name; " +
             "setPoint renames / retypes spawn points; fs_list finds packages; weapons_* builds weapons from a template archive; " +
             "package_* changes package files on disk. viewer_list / viewer_preview / viewer_edit browse and change any disc file or " +
@@ -1024,6 +1025,16 @@ namespace MapBuilder.Server.Services
                     return FromCommand(new CommandMessage { Command = "ASSET_WEAPON_PACK", AssetSession = Session(a), AssetJson = args.ToJsonString() },
                         d => d.TryGetProperty("pack", out var p) ? $"{(Bool(a, "dryRun") ? "dry run: " : "")}{p.GetString()}.CDB" : null!);
                 });
+
+            AddSync("characters_check", "Check character",
+                "What the session's edits did to a skinned character, against the package on disk: where the surface stretched or folded " +
+                "(edge length ratios outside 0.6-1.4, by bone and position: a seam, a drooping neck, a wavy limb), vertices whose skin " +
+                "weights do not sum to 1, and how far added gear reaches from the body. ok is false when anything needs a look. The " +
+                "character edits (addCharacterMesh, scaleBones, transformCharacter) answer the same check; look at it, and at ui_screenshot, " +
+                "before calling a reshape done. Risk: read-only.",
+                true, Schema(new[] { "session", "model" }, session, P("model", "string", "The character mesh (MESH_seal_A_woodland_LO).")), a =>
+                    FromCommand(new CommandMessage { Command = "ASSET_CHARACTER_CHECK", AssetSession = Session(a), AssetJson = JsonSerializer.Serialize(new { model = Str(a, "model") }) },
+                        d => d.TryGetProperty("ok", out var ok) ? (ok.GetBoolean() ? "ok" : $"{d.GetProperty("warnings").GetArrayLength()} warning(s)") : null!));
 
             AddSync("characters_pack", "Pack character",
                 "Package a session's character (a skinned MESH_* as edited: addCharacterMesh gear, removeCharacterSection, retexture) as " +

@@ -334,6 +334,43 @@ namespace MapBuilder.Tests
         }
 
         [Fact]
+        public void The_check_flags_the_hard_edged_reshape_and_passes_the_blended_one()
+        {
+            if (OpenMap() is not { } s) return;
+            const string Ter = "MESH_alban_ter01";
+            // The reshape the user saw go wrong: arms and head scaled with transformCharacter's hard-edged selection.
+            var bad = _b.Edit(s, new { op = "batch", ops = new object[]
+            {
+                new { op = "transformCharacter", archive = "CLIB_MDL.ZED", model = Ter, bones = new[] { "rbicep", "lbicep", "rforearm", "lforearm" }, scale = new[] { 1f, 1.3f, 1.3f } },
+                new { op = "transformCharacter", archive = "CLIB_MDL.ZED", model = Ter, bones = new[] { "head" }, scale = 0.85f },
+            } });
+            var check = _b.Ok(new CommandMessage { Command = "ASSET_CHARACTER_CHECK", AssetSession = s, AssetJson = JsonSerializer.Serialize(new { model = Ter }) });
+            Assert.False(check.GetProperty("ok").GetBoolean());
+            var near = check.GetProperty("problems").EnumerateArray().Select(x => x.GetProperty("bone").GetString()).ToList();
+            Assert.Contains(near, b => b is "rbicep" or "lbicep" or "rforearm" or "lforearm");
+            Assert.Contains(near, b => b is "head" or "neck");
+            _b.Undo(s);
+
+            var good = _b.Edit(s, new { op = "scaleBones", archive = "CLIB_MDL.ZED", model = Ter,
+                bones = new Dictionary<string, object> { ["rbicep"] = new { thickness = 1.25f }, ["lbicep"] = new { thickness = 1.25f }, ["head"] = 0.92f } });
+            Assert.True(good.GetProperty("check").GetProperty("ok").GetBoolean(), good.GetProperty("check").GetProperty("warnings").ToString());
+            Assert.True(good.GetProperty("check").GetProperty("changedVertices").GetInt32() > 0);
+        }
+
+        [Fact]
+        public void The_check_flags_gear_floating_off_the_body()
+        {
+            if (OpenMap() is not { } s) return;
+            _b.Edit(s, new { op = "addTexture", name = "packtest.tif", @namespace = "clib", materials = new[] { new { color = new[] { 80, 90, 50 } } } });
+            var r = _b.Edit(s, new { op = "addCharacterMesh", archive = "CLIB_MDL.ZED", model = Seal, bone = "head", texture = "packtest.tif",
+                primitive = new { kind = "cube", size = 1, center = new[] { 0f, 22.5f, 0f } } });
+            var check = r.GetProperty("check");
+            Assert.False(check.GetProperty("ok").GetBoolean());
+            Assert.Contains("float", check.GetProperty("warnings").ToString());
+            Assert.Contains("packtest.tif", check.GetProperty("addedTextures").ToString());
+        }
+
+        [Fact]
         public void TransformCharacter_is_one_undo_step_on_both_meshes()
         {
             if (OpenMap() is not { } s) return;

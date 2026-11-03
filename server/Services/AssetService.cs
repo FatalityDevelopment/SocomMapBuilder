@@ -71,6 +71,7 @@ namespace MapBuilder.Server.Services
             reg.Add(c => WeaponDefinition(c.AssetJson), "ASSET_WEAPON_DEFINITION");
             reg.Add(c => WithSession(c.AssetSession, "ASSET_WEAPON_PACK", s => WeaponPackOf(s, c.AssetJson)), "ASSET_WEAPON_PACK");
             reg.Add(c => WithSession(c.AssetSession, "ASSET_CHARACTER_PACK", s => CharacterPackOf(s, c.AssetJson)), "ASSET_CHARACTER_PACK");
+            reg.Add(c => WithSession(c.AssetSession, "ASSET_CHARACTER_CHECK", s => CharacterCheckOf(s, c.AssetJson)), "ASSET_CHARACTER_CHECK");
             reg.Add(c => CaRoute(c, "ASSET_SAVE") ?? WithSession(c.AssetSession, "ASSET_SAVE", s => Save(s, c.AssetJson)), "ASSET_SAVE");
             reg.Add(c => WithSession(c.AssetSession, "ASSET_HISTORY", s => History(s)), "ASSET_HISTORY");
             RegisterPrefabs(reg);
@@ -270,6 +271,7 @@ namespace MapBuilder.Server.Services
                         result, bone = bone == null ? null : made!.Bone, matrixId = bone == null ? (int?)null : made!.MatrixId,
                         bones = made!.Bones.Distinct().ToList(), groups = made.Groups, vertices = made.Vertices, triangles = made.Triangles,
                         lowDetail = low == null ? null : new { model = lowName, groups = low.Groups },
+                        check = CheckReport(s, model),
                     };
                 }
                 case "scaleBones":
@@ -301,7 +303,7 @@ namespace MapBuilder.Server.Services
                         catch (ArgumentException) { return made.Changed; }
                         return low.Changed;
                     });
-                    return new { result, parts = made!.Vertices, lowDetail = low == null ? null : new { model = lowName, parts = low.Vertices } };
+                    return new { result, parts = made!.Vertices, lowDetail = low == null ? null : new { model = lowName, parts = low.Vertices }, check = CheckReport(s, model) };
                 }
                 case "transformCharacter":
                 {
@@ -328,7 +330,7 @@ namespace MapBuilder.Server.Services
                         catch (ArgumentException) { return made.Changed; }
                         return low.Changed;
                     });
-                    return new { result, vertices = made!.Vertices, lowDetail = low == null ? null : new { model = lowName, vertices = low.Vertices } };
+                    return new { result, vertices = made!.Vertices, lowDetail = low == null ? null : new { model = lowName, vertices = low.Vertices }, check = CheckReport(s, model) };
                 }
                 case "removeCharacterSection":
                 {

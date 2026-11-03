@@ -52,7 +52,15 @@ Measured on M51's `MESH_seal_A_woodland_LO` (7 sections, 74 groups):
 
 `removeCharacterSection` takes material sections out of the chain, by texture or by number. Their blocks stay in the payload, drawn by nothing, so no offset moves. It removes gear added earlier, or a part of the body. `retexture` points a character's sections at another texture, as it does for static models.
 
-Character gear (`FLIB_MDL.ZED`: hats, goggles, pouches) are rigid models like weapons. `addMesh` and the texture ops change them in place. Nothing in a map package says which character wears which gear.
+`characters_check` (`Package/CharacterCheck.cs`) compares a session's character with the package on disk. Groups are matched by draw-block offset, which edits keep. It reports:
+
+- triangle edges whose length changed outside 0.6–1.4×, worst per bone, with a position;
+- vertices whose weights don't sum to 1;
+- how far added gear reaches from the nearest body vertex (over 1.5 units is flagged as floating).
+
+`addCharacterMesh`, `scaleBones` and `transformCharacter` include the same check in their reply. On alban_ter01, the first hard-edged reshape reports a 2.97× stretch under the chin and 0.17× folds at the shoulders; the `scaleBones` version passes (1.24× / 0.72×).
+
+Character gear (`FLIB_MDL.ZED`: hats, goggles, pouches) are rigid models like weapons. `addMesh` and the texture ops change them in place. Nothing in a map package says which character wears which gear. The chartype registry (`Mods/SOCOM2/bots/chartypes.tsv`) maps chartypes to models only, and the bots tooling finds worn gear as instance nodes attached at runtime (`socom_bots.py`). The choice is made in the game's code, out of this tool's reach.
 
 ## Packs (getting a character into the game)
 
