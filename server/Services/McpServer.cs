@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace MapBuilder.Server.Services
 {
@@ -191,7 +192,7 @@ namespace MapBuilder.Server.Services
         // Tools that write disk or throw work away (the rest change only the in-memory session or the view).
         private static readonly HashSet<string> Destructive = new(StringComparer.Ordinal)
         {
-            "assets_save", "assets_close", "assets_entry", "assets_export", "package_edit", "weapons_create", "mapbuilder_command",
+            "assets_save", "assets_close", "assets_entry", "assets_export", "package_edit", "weapons_create", "weapons_pack", "mapbuilder_command",
             "assets_delete_prefab", "viewer_extract",
         };
 
@@ -221,8 +222,130 @@ namespace MapBuilder.Server.Services
                 type = "activity", id = callId, phase = result.IsError ? "error" : "done", tool = tool.Name, label = tool.Label, reason,
                 summary = result.Summary, ms = sw.ElapsedMilliseconds,
             });
+            if (tool.ReadOnly && !result.IsError)
+            {
+                // Showing what was read is a courtesy: it never fails the read.
+                try { ShowRead(tool.Name, args, result); }
+                catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException or ArgumentException or IOException) { }
+            }
             return result;
         }
+
+        /// <summary>
+        /// What a read looked at, brought forward in the page that shows it, so the user sees what the AI sees: the model it
+        /// described in the Model Editor, the texture it decoded or the record it read in the Asset Viewer, the map it read in
+        /// the Map Builder, the clip in the Animation Editor. Not forced: it moves the pages only while Follow AI is on.
+        /// (viewer_list / viewer_preview move the Asset Viewer themselves; edits follow through Changed.)
+        /// </summary>
+        private void ShowRead(string tool, JsonElement a, ToolResult result)
+        {
+            JsonElement? Answer()
+            {
+                foreach (var c in result.Content)
+                {
+                    var e = JsonSerializer.SerializeToElement(c);
+                    if (e.TryGetProperty("type", out var t) && t.GetString() == "text" && e.TryGetProperty("text", out var text))
+                    {
+                        try { return JsonDocument.Parse(text.GetString() ?? "").RootElement.Clone(); } catch (JsonException) { return null; }
+                    }
+                }
+                return null;
+            }
+            string? SessionPath() => Str(a, "session") is { } s && Status(s) is { } st && st.TryGetProperty("path", out var p) ? p.GetString() : null;
+            void Show(string page, string? path, object? model = null, object? focus = null) =>
+                _ui.Publish(new { type = "show", page, path, model, focus });
+            void Viewer(string path, int[] inner, bool open, JsonObject? extra = null)
+            {
+                var v = extra ?? new JsonObject();
+                v["path"] = path;
+                v["inner"] = new JsonArray(inner.Select(i => (JsonNode?)i).ToArray());
+                v["open"] = open;
+                _ui.Publish(new { type = "show", page = "viewer", path, focus = new { viewer = v } });
+            }
+
+            switch (tool)
+            {
+                case "assets_list_models":
+                    Show("models", SessionPath());
+                    break;
+                case "assets_describe_model":
+                case "assets_model_mesh":
+                {
+                    string? archive = Str(a, "archive") ?? (Answer() is { } d && d.TryGetProperty("archive", out var ar) ? ar.GetString() : null);
+                    Show("models", SessionPath(), archive != null ? new { archive, name = Str(a, "model") } : null);
+                    break;
+                }
+                case "assets_weapon_fx":
+                {
+                    // The weapon's model, when the answer names it.
+                    var d = Answer();
+                    string? model = d is { } x && x.TryGetProperty("model", out var m) && m.ValueKind == JsonValueKind.String ? m.GetString() : null;
+                    string? archive = d is { } y && y.TryGetProperty("archive", out var ar) && ar.ValueKind == JsonValueKind.String ? ar.GetString() : null;
+                    if (model != null && archive != null) Show("models", SessionPath(), new { archive, name = model });
+                    break;
+                }
+                case "assets_texture":
+                {
+                    // The texture in its TXR listing: the package (a loose one by its folder), the archive, the item.
+                    var d = Answer();
+                    string? ns = d is { } x && x.TryGetProperty("namespace", out var n) ? n.GetString() : null;
+                    if (SessionPath() is not { } pkg || ns == null) break;
+                    Viewer(ViewerPackage(pkg), Array.Empty<int>(), false,
+                        new JsonObject { ["archive"] = $"{ns.ToUpperInvariant()}_TXR.ZED", ["texture"] = Str(a, "texture") });
+                    break;
+                }
+                case "assets_list_textures":
+                case "assets_list_palettes":
+                    if (SessionPath() is { } listed) Viewer(ViewerPackage(listed), Array.Empty<int>(), true);
+                    break;
+                case "assets_map_scene":
+                case "assets_map_points":
+                case "assets_validate":
+                    Show("map", SessionPath());
+                    break;
+                case "assets_list_animations":
+                    Show("animations", SessionPath());
+                    break;
+                case "assets_animation":
+                    Show("animations", SessionPath(), null, new { clip = Str(a, "name") });
+                    break;
+                case "weapons_list":
+                case "package_inspect":
+                    if (Str(a, "path") is { } file) Viewer(Path.GetFullPath(file), Array.Empty<int>(), true);
+                    break;
+                case "fs_list":
+                    if (Answer() is { } folder && folder.TryGetProperty("path", out var fp) && fp.GetString() is { } dir) Viewer(dir, Array.Empty<int>(), true);
+                    break;
+                case "weapons_template":
+                    if (Str(a, "path") is { } zed) Show("models", Path.GetFullPath(zed), new { archive = Path.GetFileName(zed), name = Str(a, "weapon") });
+                    break;
+                case "weapons_texture":
+                {
+                    if (Str(a, "path") is not { } textureZed) break;
+                    string full = Path.GetFullPath(textureZed);
+                    var d = Answer();
+                    string? entry = d is { } x && x.TryGetProperty("textureEntry", out var te) ? te.GetString() : null;
+                    // Beside the model archive (its namespace's TXR) or inside it.
+                    string archive = d is { } y && y.TryGetProperty("textureNamespace", out var tn) && tn.GetString() is { } tns
+                        ? $"{tns.ToUpperInvariant()}_TXR.ZED" : Path.GetFileName(full);
+                    if (entry != null) Viewer(Path.GetDirectoryName(full)!, Array.Empty<int>(), false, new JsonObject { ["archive"] = archive, ["texture"] = entry });
+                    break;
+                }
+                case "weapons_definition":
+                {
+                    // The donor's record in the disc's weapon table.
+                    if (Answer() is not { } d || !d.TryGetProperty("run", out var run) || run.GetString() is not { } runDir) break;
+                    var focus = new JsonObject();
+                    if (d.TryGetProperty("atom", out var atom) && atom.ValueKind == JsonValueKind.Number) focus["atom"] = atom.GetInt32();
+                    Viewer(Path.Combine(runDir, "ZWEAPON.ZAR"), new[] { 0 }, false, focus);
+                    break;
+                }
+            }
+        }
+
+        // The viewer opens a loose package by its folder: a loose session's path (<folder>\<folder name>) is not on disk.
+        private static string ViewerPackage(string path) =>
+            File.Exists(path) || Directory.Exists(path) ? path : Path.GetDirectoryName(path) ?? path;
 
         /// <summary>
         /// The arguments against the tool's schema: no unknown names, required ones present (a non-empty reason
@@ -860,6 +983,41 @@ namespace MapBuilder.Server.Services
                         _ui.Publish(new { type = "show", page = "models", path = written, model = new { archive = Path.GetFileName(written), name = Str(a, "newName") } });
                     }
                     return result;
+                });
+
+            AddSync("weapons_definition", "Read weapon definition",
+                "A weapon's definition as the game reads it: its zweapon.rdr fields (FireWait, Effective_Range, Maximum_Range, " +
+                "Ammo_Capacity, NumMags, Sound_Radius, Encumbrance, MaxFireMode, Muzzle_Velocity, ZoomMode0 ...), its ammo types' " +
+                "fields (ImpactDamage, Stun, Piercing, Explosion_Damage, Explosion_Radius) and the armory language entries showing " +
+                "it (short name, caption), from SOCOM II's RUN folder. Use it to pick a donor and values for weapons_pack. Risk: read-only.",
+                true, Schema(new[] { "donor" }, P("donor", "string", "A weapon: InternalName, DisplayName or ModelName (e.g. F57, Model 18, glock18)."),
+                    P("socom2Run", "string", "SOCOM II's RUN folder (default: the first drive that has it).")),
+                a => FromCommand(new CommandMessage { Command = "ASSET_WEAPON_DEFINITION", AssetJson = a.GetRawText() }, _ => Str(a, "donor")!));
+
+            AddSync("weapons_pack", "Pack custom weapon",
+                "Package a session's weapon (e.g. one made with newWeapon + addMesh shapes) as one memory-card pack <PACK>.CDB that " +
+                "takes over a donor weapon: RUN\\MP\\<PACK>\\ WEAP_* (the model, its GEO definition, textures, palettes), HUDX_* (a " +
+                "128x32 HUD icon drawn from the model), ZWEAPON.ZAR (the disc's weapon table with the donor pointed at the model and " +
+                "icon, its name / description and stats set; ammo values go to the donor's own copy of its ammo type) and, when a text " +
+                "changes, UIMNLOC.ZAR (the armory's short name, caption and given language keys). Written to outputDir (default " +
+                "Documents/CodeDesigner/Exports) with the archives loose beside it; folderCard installs it on a PCSX2 folder card. " +
+                "Loading it in game needs the loader code (not part of the pack). dryRun builds everything and writes nothing. Risk: writes disk.",
+                false, Schema(new[] { "session", "model", "donor", "pack" }, session,
+                    P("model", "string", "The session's weapon model."), P("donor", "string", "The weapon it takes over (weapons_definition shows one)."),
+                    P("pack", "string", "Pack name: m + up to 6 letters/digits (mrgun)."),
+                    P("name", "string", "Display name (also the armory's short name)."), P("caption", "string", "Armory caption (default: <KIND>: <DESCRIPTION>)."),
+                    P("description", "string", "Description (default: the name in capitals)."),
+                    P("stats", "object", "Weapon fields to set: {FireWait, Effective_Range, Maximum_Range, Ammo_Capacity, NumMags, Sound_Radius, Encumbrance, MaxFireMode, Muzzle_Velocity, ZoomMode0, RecoilPct ...}."),
+                    P("ammo", "object", "Damage on the weapon's own ammo: {ImpactDamage, Stun, Piercing, Explosion_Damage, Explosion_Radius}."),
+                    P("texts", "object", "Other language keys to rewrite: {\"_1225_SealPistolHasMags_MSG\": \"...\"}."),
+                    P("icon", "boolean", "Draw the HUD icon (default true)."), P("outputDir", "string", "Where the pack goes."),
+                    P("folderCard", "string", "A PCSX2 folder memory card to install into."), P("socom2Run", "string", "SOCOM II's RUN folder."),
+                    P("dryRun", "boolean", "Build and report, writing nothing.")), a =>
+                {
+                    var args = System.Text.Json.Nodes.JsonNode.Parse(a.GetRawText())!.AsObject();
+                    args.Remove("session"); args.Remove("reason");
+                    return FromCommand(new CommandMessage { Command = "ASSET_WEAPON_PACK", AssetSession = Session(a), AssetJson = args.ToJsonString() },
+                        d => d.TryGetProperty("pack", out var p) ? $"{(Bool(a, "dryRun") ? "dry run: " : "")}{p.GetString()}.CDB" : null!);
                 });
 
             // ── the app

@@ -174,6 +174,21 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.RDR
             return at;
         }
 
+        /// <summary>
+        /// Gives a list its own copy of its items (a new block at the end of the table) and answers the first: retail
+        /// files point many lists at one value (every "1", every shared name), so a value is owned before it is set.
+        /// </summary>
+        public int Own(int list)
+        {
+            if (TypeOf(list) != List) throw new InvalidOperationException($"Atom #{list} is not a list.");
+            var items = Children(list).ToList();
+            int block = _atoms.Count;
+            for (int i = 0; i < items.Count; i++) _atoms.Add((0, 0));
+            for (int i = 0; i < items.Count; i++) _atoms[block + i] = CopySubtree(items[i]);
+            _atoms[list] = (_atoms[list].Tag, (uint)(block * 8));
+            return block;
+        }
+
         /// <summary>Takes an item out of its list (what it held stays in the file, unreferenced).</summary>
         public void Remove(int item)
         {

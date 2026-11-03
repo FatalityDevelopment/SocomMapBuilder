@@ -68,6 +68,8 @@ namespace MapBuilder.Server.Services
             reg.Add(c => CaRoute(c, "ASSET_UNDO") ?? WithSession(c.AssetSession, "ASSET_UNDO", s => UndoRedo(s, undo: true)), "ASSET_UNDO");
             reg.Add(c => CaRoute(c, "ASSET_REDO") ?? WithSession(c.AssetSession, "ASSET_REDO", s => UndoRedo(s, undo: false)), "ASSET_REDO");
             reg.Add(c => CaRoute(c, "ASSET_EDIT") ?? WithSession(c.AssetSession, "ASSET_EDIT", s => Edit(s, c.AssetJson)), "ASSET_EDIT");
+            reg.Add(c => WeaponDefinition(c.AssetJson), "ASSET_WEAPON_DEFINITION");
+            reg.Add(c => WithSession(c.AssetSession, "ASSET_WEAPON_PACK", s => WeaponPackOf(s, c.AssetJson)), "ASSET_WEAPON_PACK");
             reg.Add(c => CaRoute(c, "ASSET_SAVE") ?? WithSession(c.AssetSession, "ASSET_SAVE", s => Save(s, c.AssetJson)), "ASSET_SAVE");
             reg.Add(c => WithSession(c.AssetSession, "ASSET_HISTORY", s => History(s)), "ASSET_HISTORY");
             RegisterPrefabs(reg);
