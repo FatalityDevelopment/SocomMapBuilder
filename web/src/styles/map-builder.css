@@ -45,3 +45,26 @@ app-map-editor-page { display: block; height: 100vh; }
 .mb-problem-warning .mb-problem-badge { color: #e2c08d; background: rgba(226, 192, 141, 0.14); }
 .mb-problem-info .mb-problem-badge { color: #75beff; background: rgba(117, 190, 255, 0.14); }
 .mb-problem-error { color: #f48771; }
+
+/* Assets panel (left): models and prefabs as thumbnail tiles, dragged onto the map. */
+.mb-assets { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+.mb-assets-import { font-size: 10px; padding: 1px 6px; text-transform: none; letter-spacing: 0; }
+.mb-tiles { flex: 1; overflow: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 6px; padding: 2px 8px 8px; align-content: start; }
+.mb-tile { position: relative; display: flex; flex-direction: column; align-items: stretch; gap: 3px; padding: 4px; background: rgba(255, 255, 255, 0.03); border: 1px solid var(--me-border); border-radius: 5px; color: inherit; font: inherit; cursor: grab; text-align: center; }
+.mb-tile:hover { background: var(--vscode-list-hoverBackground, #2a2d2e); }
+.mb-tile.active { border-color: var(--me-accent); background: var(--vscode-list-activeSelectionBackground, #04395e); }
+.mb-tile-thumb { display: flex; align-items: center; justify-content: center; aspect-ratio: 1; border-radius: 3px; background: radial-gradient(circle at 50% 40%, #3a3d41, #1e1e1e); overflow: hidden; }
+.mb-tile-thumb img { width: 100%; height: 100%; object-fit: contain; image-rendering: auto; }
+.mb-tile-name { font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mb-tile-del { position: absolute; top: 2px; right: 4px; color: var(--me-muted); font-size: 13px; line-height: 1; cursor: pointer; }
+.mb-tile-del:hover { color: #f48771; }
+.mb-prefab-save { padding: 0 10px 6px; }
+.mb-prefab-save form { display: flex; flex-wrap: wrap; gap: 4px; }
+.mb-prefab-save form .me-search { margin: 0; flex: 1 1 100%; }
+.mb-assets-hint { padding: 4px 10px 8px; }
+
+/* Item tab: align and distribute. */
+.mb-arrange { display: flex; flex-direction: column; gap: 4px; }
+.mb-arrange-row { display: grid; grid-template-columns: 14px repeat(4, 1fr); gap: 4px; align-items: center; }
+.mb-arrange-row .lm-tool-btn { padding: 2px 0; font-size: 11px; }
+.me-header select { margin-left: 6px; color: inherit; background: var(--me-panel, #252526); border: 1px solid var(--me-border); border-radius: 3px; padding: 1px 4px; }

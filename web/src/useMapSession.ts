@@ -21,6 +21,8 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
   const clientRef = useRef(new AssetClient());
   const texturesRef = useRef(new TextureCache(clientRef.current));
   const meshCacheRef = useRef(new Map<string, MapModel>());
+  // Models the asset browser decoded that the scene does not draw (see loadModel).
+  const browseCacheRef = useRef(new Map<string, MapModel>());
   const pixelCacheRef = useRef<Record<string, ModelTexturePixels>>({});
   const instancesRef = useRef<MapInstanceWire[]>([]);
   const pointsRef = useRef<MapPointWire[]>([]);
@@ -74,6 +76,7 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
     if (!vp) { return; }
     if (modelsChanged) {
       meshCacheRef.current.clear();
+      browseCacheRef.current.clear();
       pixelCacheRef.current = {};
       const s = statusRef.current;
       if (s) { texturesRef.current.invalidate(s.revision); }
@@ -168,6 +171,7 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
       savedRevisionRef.current = s.revision;
       texturesRef.current.invalidate(s.revision);
       meshCacheRef.current.clear();
+      browseCacheRef.current.clear();
       pixelCacheRef.current = {};
       setModels(await clientRef.current.listModels());
       await reload(false, false);
@@ -354,10 +358,20 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
     if (path) { void openPackage(path); }
   };
 
+  // A model for the asset browser's thumbnails and placement previews: the scene's own decoded mesh when the map
+  // draws it, else decoded into browseCacheRef (kept out of the scene's cache, which decides whether a reload rebuilds).
+  const loadModel = useCallback(async (source: string): Promise<MapModel | null> => {
+    const scene = meshCacheRef.current.get(source);
+    if (scene) { return scene; }
+    await loadMapModels(clientRef.current, texturesRef.current, [source], browseCacheRef.current, pixelCacheRef.current, () => undefined);
+    return browseCacheRef.current.get(source) ?? null;
+  }, []);
+
   return {
     client: clientRef.current, instancesRef, pointsRef, statusRef,
     status, setStatus, sceneNs, counts, instances, points, models, setModels, busy, progress, loading, sceneReady,
     loadWarnings, connectionIssue, message, messageIsError, say,
     reload, retryScene, edit, history, saveCopy, exportPack, openDialog,
+    loadModel, texturePixels: pixelCacheRef.current,
   };
 }
