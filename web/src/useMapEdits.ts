@@ -115,7 +115,7 @@ export function useMapEdits(session: ReturnType<typeof useMapSession>, viewportR
     for (const i of vp.selected) {
       const inst = instancesRef.current[i];
       if (!movable(inst)) { continue; }
-      const y = vp.groundBelow(i);
+        const y = vp.groundedOriginY(i);
       if (y === null) { continue; }
       const op = placementOp(inst, { position: [inst.matrix[12], y, inst.matrix[14]] });
       if (op) { ops.push(op); }

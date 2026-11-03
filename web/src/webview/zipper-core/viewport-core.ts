@@ -39,6 +39,10 @@ export interface MaterialSpec {
   texture: string | null;
   materialBlend: boolean | null;
   colors: Uint8Array | null;
+  // A see-through map effect drawn after the terrain, e.g. a sheet of fog.
+  translucentEffect?: boolean;
+  // Its reverse side already has an authored face with its own lighting and UVs.
+  frontOnly?: boolean;
   // Dynamically lit in game (characters: no baked colours, the VU lights them from their normals).
   lit?: boolean;
 }
@@ -284,10 +288,10 @@ export abstract class ViewportCore {
     const blended = !!t && (spec.materialBlend ?? t.pixels.alphaBlend ?? false) && (!!t.pixels.hasTransparency || vertexAlpha);
     // Scene-lit: characters always (the game lights them), everything in studio, and baked chunks that carry no colours.
     const lit = shading === 'textured' && (!!spec.lit || this.lighting === 'studio' || (this.lighting === 'baked' && !spec.colors));
-    const key = `${shading}|${this.lighting}|${this.backfaces}|${spec.texture ?? ''}|${blended}|${lit}`;
+    const side = this.backfaces && !spec.frontOnly ? THREE.DoubleSide : THREE.FrontSide;
+    const key = `${shading}|${this.lighting}|${side}|${spec.texture ?? ''}|${blended}|${lit}|${!!spec.translucentEffect}`;
     const hit = this.materials.get(key);
     if (hit) { return hit; }
-    const side = this.backfaces ? THREE.DoubleSide : THREE.FrontSide;
     let mat: THREE.Material;
     if (shading === 'solid') {
       mat = new THREE.MeshStandardMaterial({ color: 0xb4b4b4, roughness: 0.9, metalness: 0, flatShading: true, side });
@@ -302,6 +306,7 @@ export abstract class ViewportCore {
         color: t ? new THREE.Color(1.25, 1.25, 1.25) : 0x9a9a9a,
         side,
         transparent: blended,
+        depthWrite: !spec.translucentEffect,
         alphaTest: blended ? Math.max(t?.pixels.alphaTest ?? 0, 0.02) : gsTest,
       });
     } else {
@@ -315,7 +320,7 @@ export abstract class ViewportCore {
         side,
         transparent: blended || xray,
         opacity: xray ? 0.45 : 1,
-        depthWrite: !xray,
+        depthWrite: !xray && !spec.translucentEffect,
         alphaTest,
       });
     }

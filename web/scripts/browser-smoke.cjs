@@ -86,6 +86,42 @@ async function checkRendering(browser) {
     vp.frameAll();
     const boundsUpdated = Math.abs(vp.worldBox.max.x - 6100) < 0.001 && Math.abs(vp.controls.target.x - 3000) < 0.001;
     const fastUpdatePreserved = originalMesh === vp.content.children[0] && vp.flySpeed === 123;
+    const skyChunk = { ...ground.chunks[0], node: 'skydome', texture: 'cloud.tif',
+      positions: ground.chunks[0].positions.map((v, i) => i % 3 === 1 ? 500 : v) };
+    const stars = { ...skyChunk, node: 'star1_4', texture: 'star.tif' };
+    const skyWorld = { ...ground, chunks: [...ground.chunks, skyChunk, stars] };
+    vp.setScene([mixed[0]], new Map([['A_MDL.ZED:WORLD', { mesh: skyWorld, textureNamespace: null }]]), {},
+      [{ name: 'floor', kind: 'start', team: 0, x: 0, z: 0 },
+        { name: 'AI floor', kind: 'start', team: 0, x: 10, y: -5, z: 0 }], false);
+    const skyExcludedFromGround = vp.pointList()[0].y === 0 && vp.pointList()[1].y === -5 && vp.worldBox.max.y === 0;
+    const skyMeshes = vp.content.children.filter(mesh => mesh.userData.layer === 'sky');
+    const skyInitiallyHidden = skyMeshes.length === 2 && skyMeshes.every(mesh => !mesh.visible);
+    vp.setLayerHidden('sky', false);
+    const skyToggleWorks = skyMeshes.every(mesh => mesh.visible) && vp.pointList()[0].y === 0;
+    vp.setLayerHidden('sky', true);
+    const pointsRespectDepth = vp.pointGroup.children.every(group => group.children.every(object => object.material.depthTest && !object.material.depthWrite));
+    // A turret pivot is above its feet. At twice the scale its base is 12 units below the pivot.
+    const turret = { ...prop, chunks: [{ ...prop.chunks[0], positions: new Float32Array([-2,-6,0, 2,-6,0, 0,2,0]) }] };
+    const turretMatrix = [...identity]; turretMatrix[5] = 2; turretMatrix[13] = 40;
+    vp.setScene([mixed[0], { ...mixed[1], model: 'TURRET', source: 'A_MDL.ZED:TURRET', matrix: turretMatrix }],
+      new Map([...models, ['A_MDL.ZED:TURRET', { mesh: turret, textureNamespace: null }]]), {}, [], false);
+    const dropRestsBaseOnFloor = vp.groundedOriginY(1) === 12;
+    // A fog batch spanning the camera and the far side of the map used to occlude
+    // vertex-blended terrain when transparent objects were sorted by their centres.
+    const surface = { ...ground.chunks[0], texture: 'snow', materialBlend: true,
+      colors: new Uint8Array([128,128,128,128, 128,128,128,128, 128,128,128,128, 128,128,128,0]) };
+    const fog = { ...surface, texture: 'fog', colors: null,
+      positions: new Float32Array([-100,5,-100, 100,5,-100, 100,5,100, -100,-1000,100]) };
+    const pixel = alpha => ({ width: 1, height: 1, rgba: new Uint8Array([255,255,255,alpha]), hasTransparency: alpha < 255 });
+    vp.setScene([mixed[0]], new Map([['A_MDL.ZED:WORLD', { mesh: { ...ground, chunks: [fog, surface] }, textureNamespace: 'A' }]]),
+      { 'a:fog': pixel(64), 'a:snow': pixel(255) }, [], false);
+    const drawn = [];
+    for (const mesh of vp.content.children) {
+      mesh.onAfterRender = () => drawn.push(mesh.material.depthWrite ? 'surface' : 'fog');
+    }
+    vp.camera.position.set(0, 100, 1); vp.controls.target.set(0,0,0); vp.controls.update();
+    vp.render();
+    const fogOverTerrain = drawn[0] === 'surface' && drawn.at(-1) === 'fog';
     vp.dispose();
     const overlayRemoved = !host.querySelector('.me-boxselect');
     const { EditorViewport } = await import('/src/webview/model-editor/editor-viewport.ts');
@@ -102,7 +138,7 @@ async function checkRendering(browser) {
     editor.dispose();
     const editorCleanup = overlayDisposed && brushDisposed && !host.querySelector('.me-boxselect');
     host.remove();
-    return { editorCleanup, layersIndependent, lockedSelectionBlocked, unlockedSelectionWorks, lockedPointBlocked, boundsUpdated, fastUpdatePreserved, ghostVisible, exactPreview, lockedBlocked, readOnlyBlocked, cancelled, overlayRemoved, pixelRatio };
+    return { fogOverTerrain, dropRestsBaseOnFloor, skyExcludedFromGround, skyInitiallyHidden, skyToggleWorks, pointsRespectDepth, editorCleanup, layersIndependent, lockedSelectionBlocked, unlockedSelectionWorks, lockedPointBlocked, boundsUpdated, fastUpdatePreserved, ghostVisible, exactPreview, lockedBlocked, readOnlyBlocked, cancelled, overlayRemoved, pixelRatio };
   });
   for (const [name, value] of Object.entries(result)) assert(name === 'pixelRatio' ? value === 1 : value === true, `${name}: ${value}`);
   assert.deepEqual(errors, []);
@@ -238,7 +274,7 @@ async function checkEditorLoading(browser) {
     const map = page.locator('[data-editor="map"]');
     await map.locator('canvas').waitFor();
     assert.equal(await page.locator('[data-editor]').count(), 1);
-    assert(!requests.some(url => /\/(ModelEditorPage|AnimationEditorPage|ViewerPage)\.tsx/.test(url)));
+    assert(!requests.some(url => /\/(ModelEditorPage|AnimationEditorPage|AssetViewerPage)\.tsx/.test(url)));
     await map.locator('canvas').evaluate(canvas => { canvas.dataset.smokeIdentity = 'original-map'; });
     await navigation.getByRole('button', { name: 'Model Editor', exact: true }).click();
     const model = page.locator('[data-editor="models"]');
@@ -247,7 +283,7 @@ async function checkEditorLoading(browser) {
     await navigation.getByRole('button', { name: 'Animation Editor', exact: true }).click();
     await page.locator('[data-editor="animations"] canvas').waitFor();
     await navigation.getByRole('button', { name: 'Asset Viewer', exact: true }).click();
-    await page.locator('[data-editor="viewer"] .zip-shell').waitFor();
+    await page.locator('[data-editor="viewer"] .av-app').waitFor();
     await navigation.getByRole('button', { name: 'Model Editor', exact: true }).click();
     assert.equal(await model.locator('canvas').first().getAttribute('data-smoke-identity'), 'original-model');
     await navigation.getByRole('button', { name: 'Map Builder', exact: true }).click();

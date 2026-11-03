@@ -15,7 +15,9 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Geo
     {
         public sealed record Placement(float[] Matrix, ZedModelFile.PositionUnit? Unit, string NodeName);
 
-        private static readonly Regex KeyRx = new(@"^N(\d+)(?:_[A-Z]*\d+)*_[A-Z]*(\d+)$", RegexOptions.IgnoreCase);
+        // Retail visual stubs may end in _L (e.g. M71's light_round frame).
+        // It is a draw variant suffix, not another node/visual index.
+        private static readonly Regex KeyRx = new(@"^N(\d+)(?:_[A-Z]*\d+)*_[A-Z]*(\d+)(?:_L)?$", RegexOptions.IgnoreCase);
 
         public static (int Node, int Visual)? ParseKey(string key)
         {

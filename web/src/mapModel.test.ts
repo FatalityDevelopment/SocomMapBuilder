@@ -18,6 +18,7 @@ describe('layerOf', () => {
     expect(layerOf(inst({ kind: 'model' }))).toBe('world');
     expect(layerOf(inst({ model: 'SKYDOME' }))).toBe('sky');
     expect(layerOf(inst({ model: 'theSun01' }))).toBe('sky');
+    expect(layerOf(inst({ kind: 'model', model: 'SKYDOME' }))).toBe('sky');
     expect(layerOf(inst({}))).toBe('reference');
   });
 
@@ -40,6 +41,17 @@ describe('isSkyChunk', () => {
     expect(isSkyChunk({ node: 'g21801_3', texture: 'far_skyline.tif' })).toBe(false);
     expect(isSkyChunk({ node: 'm52', texture: 'concrete01.tif' })).toBe(false);
     expect(isSkyChunk({ node: null, texture: null })).toBe(false);
+  });
+
+  it('includes standalone celestial cards without hiding light fixtures or signs', () => {
+    for (const node of ['moon', 'star1', 'star1_4', 'stars']) {
+      expect(isSkyChunk({ node, texture: null })).toBe(true);
+    }
+    expect(isSkyChunk({ node: 'flare', texture: 'sunglow.tif' })).toBe(true);
+    for (const texture of ['gaslight_flare.tif', 'sign_northstar.tif', 'tex_redstar.tif', 'moonreflect.tif']) {
+      expect(isSkyChunk({ node: 'scenery', texture })).toBe(false);
+    }
+    expect(isSkyChunk({ node: 'streetlight', texture: 'lanternglass.tif' })).toBe(false);
   });
 });
 
