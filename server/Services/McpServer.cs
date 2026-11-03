@@ -30,8 +30,8 @@ namespace MapBuilder.Server.Services
             "(undoable, in memory; dryRun previews an edit) and write with assets_save only when the user asks. assets_validate lints a map " +
             "and assets_history lists what undo would take back. Prefabs (assets_save_prefab, assets_list_prefabs, assets_edit placePrefab) " +
             "reuse groups of props across maps. assets_edit placeInstance adds props; newProp copies a prop to reshape (addTexture materials, " +
-            "addMesh shapes, hideVisual), fitBounds refits it, and placeInstance puts it in the map; addCharacterMesh puts rigid gear on a " +
-            "character bone (assets_describe_model lists its skeleton), removeCharacterSection takes it off, scaleBones reshapes body parts " +
+            "addMesh shapes, hideVisual), fitBounds refits it, and placeInstance puts it in the map; addCharacterMesh puts gear on a " +
+            "character, rigid on a bone (assets_describe_model lists its skeleton) or bending with the body without one, removeCharacterSection takes it off, scaleBones reshapes body parts " +
             "(thicker, longer, bigger, blending across joints), transformCharacter moves whole sections; characters_pack ships a " +
             "character as a memory-card pack under a donor name; " +
             "setPoint renames / retypes spawn points; fs_list finds packages; weapons_* builds weapons from a template archive; " +

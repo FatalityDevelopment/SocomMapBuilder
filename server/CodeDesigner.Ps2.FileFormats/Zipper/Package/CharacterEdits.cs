@@ -23,6 +23,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             public Dictionary<string, byte[]> Changed { get; } = new(StringComparer.OrdinalIgnoreCase);
             public string Bone { get; set; } = string.Empty;
             public int MatrixId { get; set; }
+            /// <summary>Every bone a vertex batch of the added geometry follows (one per batch).</summary>
+            public List<string> Bones { get; } = new();
             public int Groups { get; set; }
             public int Vertices { get; set; }
             public int Triangles { get; set; }
@@ -30,11 +32,12 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
 
         /// <summary>
         /// Adds <paramref name="input"/> (character model space, the bind pose) to the skinned mesh
-        /// <paramref name="modelName"/>, drawn with <paramref name="texture"/> and moving rigidly with
-        /// <paramref name="boneName"/>. <paramref name="archiveBytes"/>: the archive as an earlier step of the same edit
-        /// left it (record indices are the package's), else the package's own bytes.
+        /// <paramref name="modelName"/>, drawn with <paramref name="texture"/>. With <paramref name="boneName"/> it moves
+        /// rigidly with that bone; without, each vertex takes the skin weights of the nearest body vertex (at most
+        /// <see cref="MaxInfluences"/> bones), so it bends with the body under it. <paramref name="archiveBytes"/>: the
+        /// archive as an earlier step of the same edit left it (record indices are the package's), else the package's own bytes.
         /// </summary>
-        public static Result AddRigidMesh(ZipperPackage pkg, string archive, string modelName, string boneName, string texture, MeshTopology.InputMesh input,
+        public static Result AddMesh(ZipperPackage pkg, string archive, string modelName, string? boneName, string texture, MeshTopology.InputMesh input,
             byte[]? archiveBytes = null)
         {
             var entry = pkg.Entry(archive) is { Kind: "mdl" } e ? e : throw new ArgumentException($"{archive} is not a model archive of this package");
@@ -46,7 +49,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             var geo = pkg.FindSkeleton(model.Namespace, CharacterMesh.SkeletonName(model.Name))
                 ?? throw new InvalidOperationException($"{modelName} has no skeleton {CharacterMesh.SkeletonName(model.Name)} in a GEO archive");
             var skeleton = CharacterMesh.SkeletonFromGeo(geo);
-            var bone = skeleton.Bones.FirstOrDefault(b => b.MatrixId >= 0 && b.Name.Equals(boneName, StringComparison.OrdinalIgnoreCase))
+            var bone = boneName == null ? null : skeleton.Bones.FirstOrDefault(b => b.MatrixId >= 0 && b.Name.Equals(boneName, StringComparison.OrdinalIgnoreCase))
                 ?? throw new ArgumentException($"{modelName} has no skinning bone {boneName} (bones: {string.Join(", ", skeleton.Bones.Where(b => b.MatrixId >= 0).Select(b => b.Name))})");
 
             texture = texture.Trim();
@@ -63,24 +66,30 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             if (start + 16 + count * 16 > payload.Length) throw new InvalidDataException($"{modelName}: its chain runs past the payload");
             byte[] gif = TemplateGif(payload, start, count) ?? throw new InvalidDataException($"{modelName} has no draw block to take GIF tags from");
 
-            // Bone-local, as the vertex batches store them (1/4096 units, int16).
-            float[] inverse = Matrix4.InverseAffine(bone.World);
             var normals = input.Normals.Count == input.Positions.Count ? input.Normals : FaceNormals(input);
-            var local = new List<short[]>(input.Positions.Count);
-            for (int i = 0; i < input.Positions.Count; i++)
+            var influences = bone != null
+                ? input.Positions.Select(_ => new List<(CharacterSkeleton.Bone Bone, int Weight)> { (bone, 32767) }).ToList()
+                : BodyWeights(input, Vertices(payload, start, skeleton, new Selection()));
+
+            // A vertex part as the batches store it: bone-local (1/4096 units, int16), the normal in the bone's frame.
+            var inverses = new Dictionary<string, float[]>();
+            short[] Local(int i, CharacterSkeleton.Bone b, bool weighted)
             {
+                if (!inverses.TryGetValue(b.Name, out var inv)) inverses[b.Name] = inv = Matrix4.InverseAffine(b.World);
                 var p = input.Positions[i];
-                var (x, y, z) = Matrix4.Apply(inverse, p[0], p[1], p[2]);
-                var n = normals[i];
-                float nx = inverse[0] * n[0] + inverse[4] * n[1] + inverse[8] * n[2];
-                float ny = inverse[1] * n[0] + inverse[5] * n[1] + inverse[9] * n[2];
-                float nz = inverse[2] * n[0] + inverse[6] * n[1] + inverse[10] * n[2];
-                float len = MathF.Sqrt(nx * nx + ny * ny + nz * nz);
-                if (len > 1e-6f) { nx /= len; ny /= len; nz /= len; } else { nx = 0; ny = 1; nz = 0; }
+                var (x, y, z) = Matrix4.Apply(inv, p[0], p[1], p[2]);
+                var n = Normalize(new[]
+                {
+                    inv[0] * normals[i][0] + inv[4] * normals[i][1] + inv[8] * normals[i][2],
+                    inv[1] * normals[i][0] + inv[5] * normals[i][1] + inv[9] * normals[i][2],
+                    inv[2] * normals[i][0] + inv[6] * normals[i][1] + inv[10] * normals[i][2],
+                });
                 float reach = MathF.Max(MathF.Abs(x), MathF.Max(MathF.Abs(y), MathF.Abs(z)));
-                if (reach * 4096 > 32767)
-                    throw new ArgumentException($"Vertex {i} is {reach:0.##} units from {bone.Name} along an axis; skinned vertices reach at most 7.99. Use a nearer bone or split the mesh.");
-                local.Add(new[] { Q(x * 4096), Q(y * 4096), Q(z * 4096), Q(nx * 32767), Q(ny * 32767), Q(nz * 32767) });
+                // A weight-0 entry (a first batch lists every slot) draws nothing from its bone: it is clamped, not refused.
+                if (weighted && reach * 4096 > 32767)
+                    throw new ArgumentException($"Vertex {i} is {reach:0.##} units from {b.Name} along an axis; skinned vertices reach at most 7.99. " +
+                        (bone != null ? "Use a nearer bone or split the mesh." : "Keep the mesh near the body."));
+                return new[] { Q(x * 4096), Q(y * 4096), Q(z * 4096), Q(n[0] * 32767), Q(n[1] * 32767), Q(n[2] * 32767) };
             }
 
             var data = new MemoryStream();
@@ -92,19 +101,35 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             data.Write(field);
             tags.Add(new uint[] { 0x10060000, (uint)nameAt, 0, 0 });
 
-            var result = new Result { Bone = bone.Name, MatrixId = bone.MatrixId, Vertices = input.Positions.Count, Triangles = input.Triangles.Count };
+            var result = new Result { Bone = bone?.Name ?? string.Empty, MatrixId = bone?.MatrixId ?? -1, Vertices = input.Positions.Count, Triangles = input.Triangles.Count };
             foreach (var (verts, tris) in Groups(input.Triangles))
             {
                 int n = verts.Count, t = tris.Count;
-                byte[] vertexBlock = VertexBlock(bone.MatrixId, t, verts.Select(v => local[v]).ToList());
-                int vertexAt = (int)data.Length;
-                data.Write(vertexBlock);
+                // One batch per bone, as retail: the first (the bone most vertices follow) lists every slot in order, weight
+                // 0 where it has none; the others list only their own slots. Flags: 2 first, 1 middle, 5 last, 6 alone.
+                var bones = verts.SelectMany(v => influences[v].Select(x => x.Bone)).GroupBy(b => b.MatrixId)
+                    .OrderByDescending(g => g.Count()).Select(g => g.First()).ToList();
+                for (int k = 0; k < bones.Count; k++)
+                {
+                    var b = bones[k];
+                    var entries = new List<(int Slot, short[] Local, int Weight)>();
+                    for (int slot = 0; slot < n; slot++)
+                    {
+                        int w = influences[verts[slot]].Where(x => x.Bone.MatrixId == b.MatrixId).Sum(x => x.Weight);
+                        if (w > 0 || k == 0) entries.Add((slot, Local(verts[slot], b, w > 0), w));
+                    }
+                    short flags = (short)(bones.Count == 1 ? 6 : k == 0 ? 2 : k == bones.Count - 1 ? 5 : 1);
+                    byte[] vertexBlock = VertexBlock(flags, b.MatrixId, t, entries);
+                    int vertexAt = (int)data.Length;
+                    data.Write(vertexBlock);
+                    tags.Add(new uint[] { 0x30090004, (uint)b.MatrixId, Stcycl101, UnpackMatrix });
+                    tags.Add(new uint[] { 0x300A0000u | (uint)(vertexBlock.Length / 16), (uint)vertexAt, (uint)b.MatrixId, (uint)entries.Count });
+                    result.Bones.Add(b.Name);
+                }
                 byte[] draw = DrawBlock(gif, n, tris, verts.Select(v => input.Uvs.Count > v ? input.Uvs[v] : new float[2]).ToList());
                 int drawAt = (int)data.Length;
                 data.Write(draw);
-                tags.Add(new uint[] { 0x30090004, (uint)bone.MatrixId, Stcycl101, UnpackMatrix });
-                tags.Add(new uint[] { 0x300A0000u | (uint)(vertexBlock.Length / 16), (uint)vertexAt, (uint)bone.MatrixId, (uint)n });
-                tags.Add(new uint[] { 0x300B0000u | (uint)(draw.Length / 16), (uint)drawAt, 2, 0 });
+                tags.Add(new uint[] { 0x300B0000u | (uint)(draw.Length / 16), (uint)drawAt, (uint)(2 * bones.Count), 0 });
                 result.Groups++;
             }
 
@@ -125,6 +150,35 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             }
             result.Changed[entry.Leaf] = bytes;
             return result;
+        }
+
+        /// <summary>Bones a vertex of new geometry may follow when its weights come from the body (retail: up to 3).</summary>
+        public const int MaxInfluences = 3;
+
+        // Per new vertex, the skin weights of the nearest body vertex: its parts summed per bone, the heaviest
+        // MaxInfluences kept, scaled to 32767 in Q15 (the heaviest takes the rounding).
+        private static List<List<(CharacterSkeleton.Bone Bone, int Weight)>> BodyWeights(MeshTopology.InputMesh input,
+            List<(float[] Position, float[] Normal, List<Part> Parts)> body)
+        {
+            if (body.Count == 0) throw new InvalidOperationException("The character has no body vertices to take skin weights from; give a bone");
+            var list = new List<List<(CharacterSkeleton.Bone, int)>>(input.Positions.Count);
+            foreach (var p in input.Positions)
+            {
+                var near = body[0];
+                float best = float.MaxValue;
+                foreach (var v in body)
+                {
+                    float dx = v.Position[0] - p[0], dy = v.Position[1] - p[1], dz = v.Position[2] - p[2], d = dx * dx + dy * dy + dz * dz;
+                    if (d < best) { best = d; near = v; }
+                }
+                var kept = near.Parts.GroupBy(x => x.Bone.MatrixId).Select(g => (Bone: g.First().Bone, Weight: g.Sum(x => x.Weight)))
+                    .Where(x => x.Weight > 0).OrderByDescending(x => x.Weight).Take(MaxInfluences).ToList();
+                float total = kept.Sum(x => x.Weight);
+                var q = kept.Select(x => (x.Bone, Weight: (int)MathF.Round(x.Weight / total * 32767))).ToList();
+                q[0] = (q[0].Bone, q[0].Weight + 32767 - q.Sum(x => x.Weight));
+                list.Add(q.Where(x => x.Weight > 0).ToList());
+            }
+            return list;
         }
 
         /// <summary>Which vertices of a skinned mesh an edit takes: all, or those of a section, a texture and / or whose
@@ -472,20 +526,17 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             if (tris.Count > 0) yield return (verts, tris);
         }
 
-        // STCYCL 0x101, UNPACK V4-16 @4: header (flags 6 = a group's only batch, triangles, matrix, count), then per
-        // vertex (x, y, z, slot*2)(nx, ny, nz, weight 1.0 in Q15); MSCNT; padded to a qword.
-        private static byte[] VertexBlock(int matrixId, int triangles, List<short[]> verts)
+        // STCYCL 0x101, UNPACK V4-16 @4: header (flags, triangles, matrix, count), then per entry (x, y, z, slot*2)
+        // (nx, ny, nz, weight in Q15); MSCNT; padded to a qword.
+        private static byte[] VertexBlock(short flags, int matrixId, int triangles, List<(int Slot, short[] Local, int Weight)> entries)
         {
             var m = new MemoryStream();
-            int qwords = 1 + 2 * verts.Count;
+            int qwords = 1 + 2 * entries.Count;
             m.Write(BitConverter.GetBytes(Stcycl101));
             m.Write(BitConverter.GetBytes(0x6D008004u | (uint)(qwords & 0xFF) << 16));
-            foreach (short h in new short[] { 6, (short)triangles, (short)matrixId, (short)verts.Count }) m.Write(BitConverter.GetBytes(h));
-            for (int i = 0; i < verts.Count; i++)
-            {
-                var v = verts[i];
-                foreach (short h in new[] { v[0], v[1], v[2], (short)(i * 2), v[3], v[4], v[5], (short)32767 }) m.Write(BitConverter.GetBytes(h));
-            }
+            foreach (short h in new short[] { flags, (short)triangles, (short)matrixId, (short)entries.Count }) m.Write(BitConverter.GetBytes(h));
+            foreach (var (slot, v, w) in entries)
+                foreach (short h in new[] { v[0], v[1], v[2], (short)(slot * 2), v[3], v[4], v[5], (short)w }) m.Write(BitConverter.GetBytes(h));
             m.Write(BitConverter.GetBytes(Mscnt));
             while (m.Length % 16 != 0) m.WriteByte(0);
             return m.ToArray();

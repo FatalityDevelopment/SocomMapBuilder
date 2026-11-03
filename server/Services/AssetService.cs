@@ -249,7 +249,8 @@ namespace MapBuilder.Server.Services
                     // {archive, model, bone, texture, shapes | obj | mesh | primitive ...}: rigid geometry on a skinned character's bone.
                     string archive = Str(a, "archive") ?? throw new ArgumentException("\"archive\" is required");
                     string model = Str(a, "model") ?? throw new ArgumentException("\"model\" is required");
-                    string bone = Str(a, "bone") ?? throw new ArgumentException("\"bone\" (a skeleton bone, see assets_describe_model) is required");
+                    // Without a bone, each vertex takes the skin weights of the body under it.
+                    string? bone = Str(a, "bone");
                     string texture = Str(a, "texture") ?? throw new ArgumentException("\"texture\" is required");
                     var input = InputMeshOf(a, out string what);
                     // The character's lower-detail mesh (drawn at a distance) gets the same geometry unless lowDetail is false.
@@ -257,16 +258,17 @@ namespace MapBuilder.Server.Services
                     string lowName = CharacterEdits.LowDetailName(model);
                     bool hasLow = lowDetail && pkg.FindModel(archive, lowName) != null;
                     CharacterEdits.Result? made = null, low = null;
-                    var result = ApplyEdit(s, Str(a, "label") ?? $"add {what} to {model}{(hasLow ? " and " + lowName : "")} on {bone}", p =>
+                    var result = ApplyEdit(s, Str(a, "label") ?? $"add {what} to {model}{(hasLow ? " and " + lowName : "")} on {bone ?? "the body's skin"}", p =>
                     {
-                        made = CharacterEdits.AddRigidMesh(p, archive, model, bone, texture, input);
+                        made = CharacterEdits.AddMesh(p, archive, model, bone, texture, input);
                         if (!hasLow) return made.Changed;
-                        low = CharacterEdits.AddRigidMesh(p, archive, lowName, bone, texture, input, made.Changed[p.Entry(archive)!.Leaf]);
+                        low = CharacterEdits.AddMesh(p, archive, lowName, bone, texture, input, made.Changed[p.Entry(archive)!.Leaf]);
                         return low.Changed;
                     });
                     return new
                     {
-                        result, bone = made!.Bone, matrixId = made.MatrixId, groups = made.Groups, vertices = made.Vertices, triangles = made.Triangles,
+                        result, bone = bone == null ? null : made!.Bone, matrixId = bone == null ? (int?)null : made!.MatrixId,
+                        bones = made!.Bones.Distinct().ToList(), groups = made.Groups, vertices = made.Vertices, triangles = made.Triangles,
                         lowDetail = low == null ? null : new { model = lowName, groups = low.Groups },
                     };
                 }

@@ -202,6 +202,80 @@ namespace MapBuilder.Tests
             Assert.True(still > 0 && moved > 0, $"{still} foot vertices, {moved} moved head-top vertices");
         }
 
+        // A tube around SEAL A's right arm, shoulder to wrist (bind pose), as an addCharacterMesh mesh.
+        private static (List<float[]> Positions, List<int[]> Triangles) Sleeve()
+        {
+            float[][] line = { new[] { 2.02f, 15.9f, 0.91f }, new[] { 4.67f, 13.86f, 1.4f }, new[] { 6.87f, 12.13f, 0.99f } };
+            var pos = new List<float[]>();
+            var tris = new List<int[]>();
+            const int Seg = 8, Rings = 9;
+            for (int r = 0; r < Rings; r++)
+            {
+                float t = r / (float)(Rings - 1) * 2;
+                int k = Math.Min(1, (int)t);
+                float f = t - k;
+                float[] c = { line[k][0] + (line[k + 1][0] - line[k][0]) * f, line[k][1] + (line[k + 1][1] - line[k][1]) * f, line[k][2] + (line[k + 1][2] - line[k][2]) * f };
+                for (int s = 0; s < Seg; s++)
+                {
+                    float a = s * MathF.PI * 2 / Seg;
+                    // Around the arm, which runs mostly along x: the ring lies in y / z.
+                    pos.Add(new[] { c[0], c[1] + 0.9f * MathF.Cos(a), c[2] + 0.9f * MathF.Sin(a) });
+                }
+            }
+            for (int r = 0; r + 1 < Rings; r++)
+                for (int s = 0; s < Seg; s++)
+                {
+                    int a = r * Seg + s, b = r * Seg + (s + 1) % Seg, c = a + Seg, d = b + Seg;
+                    tris.Add(new[] { a, c, b });
+                    tris.Add(new[] { b, c, d });
+                }
+            return (pos, tris);
+        }
+
+        // ASSET_MODEL_MESH arrays: base64 little-endian float32.
+        private static float[] Floats(JsonElement base64)
+        {
+            byte[] b = Convert.FromBase64String(base64.GetString()!);
+            var f = new float[b.Length / 4];
+            Buffer.BlockCopy(b, 0, f, 0, b.Length);
+            return f;
+        }
+
+        [Fact]
+        public void Gear_without_a_bone_takes_the_bodys_skin_and_bends_at_the_elbow()
+        {
+            if (OpenMap() is not { } s) return;
+            _b.Edit(s, new { op = "addTexture", name = "packtest.tif", @namespace = "clib", materials = new[] { new { color = new[] { 80, 90, 50 } } } });
+            var (positions, triangles) = Sleeve();
+            var r = _b.Edit(s, new { op = "addCharacterMesh", archive = "CLIB_MDL.ZED", model = Seal, texture = "packtest.tif", mesh = new { positions, triangles } });
+            Assert.Equal(JsonValueKind.Null, r.GetProperty("bone").ValueKind);
+            var bones = r.GetProperty("bones").EnumerateArray().Select(b => b.GetString()).ToList();
+            Assert.Contains("rbicep", bones);
+            Assert.Contains("rforearm", bones);
+
+            // Decoded back (the editors' decoder, which reads the batches as the game does), the sleeve sits where it was
+            // given, its weights sum to 1, and some vertices blend two bones.
+            var arrays = _b.Ok(new CommandMessage { Command = "ASSET_MODEL_MESH", AssetSession = s, AssetArchive = "CLIB_MDL.ZED", AssetName = Seal,
+                AssetJson = JsonSerializer.Serialize(new { arrays = true }) });
+            var sleeve = arrays.GetProperty("chunks").EnumerateArray().Where(c => c.GetProperty("texture").GetString() == "packtest.tif").ToList();
+            Assert.NotEmpty(sleeve);
+            int blended = 0;
+            foreach (var c in sleeve)
+            {
+                var p = Floats(c.GetProperty("positions"));
+                var w = Floats(c.GetProperty("skinWeights"));
+                for (int v = 0; v < p.Length / 3; v++)
+                {
+                    float nearest = positions.Min(q => (q[0] - p[v * 3]) * (q[0] - p[v * 3]) + (q[1] - p[v * 3 + 1]) * (q[1] - p[v * 3 + 1]) + (q[2] - p[v * 3 + 2]) * (q[2] - p[v * 3 + 2]));
+                    Assert.True(nearest < 0.01f * 0.01f * 4, $"a sleeve vertex decoded {MathF.Sqrt(nearest):0.000} from any given one");
+                    var ws = w.Skip(v * 4).Take(4).ToArray();
+                    Assert.InRange(ws.Sum(), 0.99f, 1.01f);
+                    if (ws.Count(x => x > 0.05f) >= 2) blended++;
+                }
+            }
+            Assert.True(blended > 0, "no sleeve vertex blends two bones");
+        }
+
         [Fact]
         public void A_thicker_bicep_blends_into_the_elbow_and_shoulder_without_a_seam()
         {
