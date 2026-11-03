@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text;
 
 namespace CodeDesigner.Ps2.FileFormats.Zipper.MPS
@@ -88,6 +89,34 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.MPS
             return new MpsFile { MapCount = mapCount, Maps = maps };
         }
 
+        /// <summary>
+        /// The file with one AI map's header changed: its name (+0x38, up to 31 characters), bounds (+0x04 min,
+        /// +0x10 max) or cell scale (+0x24 X, +0x28 Z). The grid's size stays: the cells after the header depend on it.
+        /// </summary>
+        public static byte[] WithMap(byte[] data, int index, string? name, float[]? min, float[]? max, float[]? scale)
+        {
+            var maps = Parse(data).Maps;
+            if (index < 0 || index >= maps.Count) throw new ArgumentOutOfRangeException(nameof(index), $"No AI map #{index}");
+            int o = (int)maps[index].Offset;
+            var output = (byte[])data.Clone();
+            if (name != null)
+            {
+                if (name.Length is 0 or > 31 || name.Any(c => c < 0x20 || c > 0x7E)) throw new ArgumentException("A map name is 1-31 printable characters.");
+                Array.Clear(output, o + 0x38, 0x20);
+                Encoding.ASCII.GetBytes(name).CopyTo(output, o + 0x38);
+            }
+            void Floats(float[]? v, int at, int count, bool positive)
+            {
+                if (v == null) return;
+                if (v.Length != count || v.Any(f => !float.IsFinite(f) || (positive && f <= 0))) throw new ArgumentException($"Expected {count} {(positive ? "positive " : "")}numbers.");
+                for (int i = 0; i < count; i++) BitConverter.GetBytes(v[i]).CopyTo(output, o + at + i * 4);
+            }
+            Floats(min, 0x04, 3, false);
+            Floats(max, 0x10, 3, false);
+            Floats(scale, 0x24, 2, true);
+            return output;
+        }
+
         private static bool IsFinitePositive(float value)
             => !float.IsNaN(value) && !float.IsInfinity(value) && value > 0f && value < 1_000_000f;
 
@@ -109,6 +138,31 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.MPS
     /// <summary>One AI map record inside an MPS file.</summary>
     public sealed class MpsMap
     {
+        /// <summary>
+        /// The floor height the AI walks on in cell (x, z), or null where the grid has no cell (outside every row's
+        /// span). After the header (+0x58) the grid has a sub-header whose +0x1C holds the cell count; at +0x50 the
+        /// cells follow, 8 bytes each in row-major order of the cells that exist (byte 0 and 3 flags, u16 at 1 whose
+        /// low 11 bits are the height between the grid's min and max y, u32 link to a stacked layer or 0xFFFFFFFF),
+        /// then one 12-byte entry per row: u16 first x, u16 end x (exclusive), u32 index of its first cell, and a
+        /// pointer the game fills when loading. Checked on every retail map: the rows add up to the cell count.
+        /// </summary>
+        public float? HeightAt(byte[] mps, int cellX, int cellZ)
+        {
+            int sub = (int)Offset + 0x58;
+            if (cellX < 0 || cellZ < 0 || cellX >= Width || cellZ >= Height || sub + 0x50 > mps.Length) return null;
+            uint count = BitConverter.ToUInt32(mps, sub + 0x1C);
+            long table = sub + 0x50, rows = table + count * 8L;
+            long row = rows + cellZ * 12L;
+            if (count == 0 || row + 12 > mps.Length) return null;
+            int first = BitConverter.ToUInt16(mps, (int)row), end = BitConverter.ToUInt16(mps, (int)row + 2);
+            uint index = BitConverter.ToUInt32(mps, (int)row + 4);
+            if (cellX < first || cellX >= end) return null;
+            long cell = table + (index + (cellX - first)) * 8L;
+            if (index + (cellX - first) >= count || cell + 8 > mps.Length) return null;
+            int level = BitConverter.ToUInt16(mps, (int)cell + 1) & 0x7FF;
+            return MinY + level / 2047f * (MaxY - MinY);
+        }
+
         public uint Offset { get; init; }
         public string Name { get; init; } = string.Empty;
         public uint Width { get; init; }

@@ -7,7 +7,6 @@ var registry = new CommandRegistry();
 new ZipperAssetService().Register(registry);
 new ZipperWeaponsService().Register(registry);
 new ZipperFileFormatsService().Register(registry);
-new ViewerService().Register(registry);
 new FileSystemService().Register(registry);
 new PackageFilesService().Register(registry);
 // The pages' event stream, and the MCP endpoint an AI drives the same sessions through (the pages follow along).
@@ -48,6 +47,15 @@ app.UseStaticFiles();
 app.MapGet("/api/health", () => Results.Ok(new { ok = true, commands = registry.Count, mcpTools = mcp.ToolCount, pages = ui.ClientCount }));
 
 app.MapGet("/api/events", ctx => ui.Stream(ctx));
+// Asset Viewer movies converted to MP4 (VIEWER_MOVIE), with ranges so the player can seek.
+app.MapGet("/api/viewer/movie/{name}", (string name) =>
+{
+    string file = Path.GetFileName(name);
+    string path = Path.Combine(ZipperAssetService.MovieCacheDir, file);
+    return file.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase) && File.Exists(path)
+        ? Results.File(path, "video/mp4", enableRangeProcessing: true)
+        : Results.NotFound();
+});
 app.MapPost("/api/ui/reply", (System.Text.Json.JsonElement body) => { ui.Reply(body); return Results.Ok(); });
 
 // MCP (Streamable HTTP): JSON-RPC requests on POST; there is no server-initiated stream, so GET is refused.

@@ -4,8 +4,8 @@
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react';
 import { AssetClient, type MapInstanceWire, type MapPointWire, type ModelSummary, type SessionStatus } from './webview/model-editor/asset-client';
 import { TextureCache } from './webview/model-editor/model-loader';
-import { decodeMesh, type MeshWire } from './webview/model-editor/mesh-data';
-import type { ModelTexturePixels } from './webview/zipper-workbench/zed-model-renderer';
+import { loadMapModels } from './webview/zipper-core/map-models';
+import type { ModelTexturePixels } from './webview/zipper-core/texture-pixels';
 import type { MapModel, MapViewport } from './viewport/mapViewport';
 import { errText } from './mapModel';
 import { host, openRequest, useSignals } from './shared';
@@ -89,34 +89,9 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
     ]);
     setSceneNs(scene.sceneNamespace);
     setCounts(scene.counts);
-    const sources = [...new Set(scene.instances.map(i => i.source).filter((s): s is string => !!s))].filter(s => !meshCacheRef.current.has(s));
-    let done = 0;
-    const failed: string[] = [];
-    const loadOne = async (source: string): Promise<void> => {
-      const cut = source.indexOf(':');
-      try {
-        const wire = await clientRef.current.mesh(source.slice(0, cut), source.slice(cut + 1)) as MeshWire;
-        const mesh = decodeMesh(wire);
-        const ns = wire.textureNamespace ?? null;
-        const names = [...new Set(mesh.chunks.map(c => c.texture).filter((t): t is string => !!t))];
-        await Promise.all(names.map(async n => {
-          const key = `${ns ?? ''}:${n}`.toLowerCase();
-          if (key in pixelCacheRef.current) { return; }
-          const p = await texturesRef.current.get(n, ns);
-          if (p) { pixelCacheRef.current[key] = p; }
-        }));
-        meshCacheRef.current.set(source, { mesh, textureNamespace: ns });
-      } catch (err) {
-        failed.push(`${source} (${errText(err)})`);
-      }
-      done++;
-      setProgress(`Loading models ${done}/${sources.length}…`);
-    };
-    // A few at a time: the backend answers in order anyway, and the progress stays readable.
-    const queue = [...sources];
-    await Promise.all(Array.from({ length: Math.min(6, queue.length) }, async () => {
-      while (queue.length) { await loadOne(queue.shift()!); }
-    }));
+    const sources = scene.instances.map(i => i.source).filter((s): s is string => !!s);
+    const failed = await loadMapModels(clientRef.current, texturesRef.current, sources, meshCacheRef.current, pixelCacheRef.current,
+      (done, total) => setProgress(`Loading models ${done}/${total}…`));
     setProgress('Preparing viewport…');
     instancesRef.current = scene.instances;
     pointsRef.current = pts.points;

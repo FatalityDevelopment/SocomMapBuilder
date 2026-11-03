@@ -107,6 +107,26 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             return (new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase) { [palEntry.Leaf] = pal.ToBytes() }, id, palEntry.Leaf);
         }
 
+        /// <summary>
+        /// Sets the 256 colours of <c>texpal_{id}</c> in <paramref name="archive"/> (a _PAL.ZED of the package) from
+        /// RGBA8888 entries, keeping its depth (16-bit palettes lose the low bits and keep 1-bit alpha). The buf keeps
+        /// its size, so it is spliced in place.
+        /// </summary>
+        public static Dictionary<string, byte[]> SetPalette(ZipperPackage pkg, string archive, int id, byte[] rgba)
+        {
+            if (rgba.Length < 1024) throw new ArgumentException("A palette is 256 RGBA colours (1024 bytes)");
+            var entry = pkg.Entry(archive) ?? throw new KeyNotFoundException($"No palette archive {archive}");
+            var nodes = ZedContainer.FromBytes(entry.Data).Nodes;
+            int at = Enumerable.Range(0, nodes.Count).FirstOrDefault(i => nodes[i].Name == $"texpal_{id}", -1);
+            if (at < 0) throw new KeyNotFoundException($"texpal_{id} is not in {archive}");
+            int buf = Enumerable.Range(at + 1, Math.Max(0, Math.Min(3, nodes.Count - at - 1))).FirstOrDefault(i => nodes[i].Name == "buf", -1);
+            if (buf < 0) throw new InvalidDataException($"texpal_{id} has no colours (buf)");
+            bool is16 = nodes[buf].Data.Length < 1024;
+            byte[] data = ZedTextureFile.EncodeClutBuffer(rgba[..1024], is16);
+            if (data.Length != nodes[buf].Data.Length) data = data.Concat(nodes[buf].Data.Skip(data.Length)).Take(nodes[buf].Data.Length).ToArray();
+            return new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase) { [entry.Leaf] = ZedSplice.Replace(entry.Data, buf, data) };
+        }
+
         // ------------------------------------------------------------------ helpers
 
         private static string TextureName(string name)

@@ -43,7 +43,7 @@ Open a game package and work across the map, its props and clutter, vehicles, ch
 
 ## Pages
 
-Use the activity bar to switch between tools. Editors load on their first visit, then remain mounted so their sessions, cameras and selections survive switching. The editors are connected: double-click a prop on the map to open it in the Model Editor, or right-click a model in the Asset Viewer to send it to the appropriate editor.
+Use the activity bar to switch between tools. Editors load on their first visit, then remain mounted so their sessions, cameras and selections survive switching. The editors are connected: double-click a prop on the map to open it in the Model Editor, or double-click a model in the Asset Viewer to open it there.
 
 ### Map Builder
 
@@ -90,13 +90,15 @@ Preview character clips on skinned models. Package-local `MOTION_S.ZAR` clips ar
 
 <img src="docs/screenshots/asset.png" alt="SOCOM Map Builder asset viewer for browsing package files and archives" width="850">
 
-Browse package contents and archives, preview assets, and send items directly to the editor that supports them.
+Browse a whole disc (or any folder) down into packages and archives, preview what is there, and send it to the editor that works on it. The page has the editors' layout: the browser on the left, the preview in the middle, what the selection is and what can be done with it on the right.
 
-- Browse .ZDB / .CDB / .ZAR / .ZED files and the archives inside them, in a list with icons and thumbnails, a path bar (Up / Backspace, breadcrumbs) and a filter.
-- Lists match the editors: model archives list models (characters, weapons), TXR archives textures (as a list or icons), PAL archives palettes (with a swatch preview), GEO archives definitions, CLUTTER.ZAR its clutter models with their placement counts. Records that hold records open like folders.
-- Previews: models (decoded by the server, textured), textures, palettes, GEO scenes with a spawn camera, RDR screens, AI maps, animations. The sidebar shows the textures of what is open.
-- **Right-click** an item to open it in the editor it needs (Model Editor, Animation Editor, Map Builder), export a texture as PNG, extract it, replace or remove it.
-- **Import…**: add .ZED / .ZAR / .MPS files to a package (or merge another package's files), or any file (an .RDR, say) to a .ZAR / .ZED archive. Replace and Remove work at both levels.
+- Open a folder (File › Open folder…, Ctrl+O) — the SOCOM II disc's drive, its RUN folder, or a folder of packages — and browse folders, .ZDB / .CDB packages and the .ZAR / .ZED archives inside them, with breadcrumbs, Back / Forward / Up, a filter and kind chips. Lists of thousands of records (RUN/SOUNDS/VAGSTORE.ZAR holds 10 942) scroll without slowing down.
+- Package archives list what the editors list, from the same asset session: models, textures, palettes, GEO definitions and animation clips (a loose RUN/MOTION_P.ZAR borrows a session from a package beside it).
+- Previews use the editors' own code: models in the Model Editor's viewport, a package's composed map in the Map Builder's (Show map), clips playing on a character in the Animation Editor's, textures through ASSET_TEXTURE.
+- Every file type on the retail disc previews: memory-card icons (.ICO, in 3D with their texture) and icon lists, sounds (.VAG and the VAGSTORE / BNKSTORE stores, .BNK / .BD banks sample by sample) played in the page, the RAW / RGB loading screens, RDR trees, AI maps, text (.CNF), programs (.ELF, .IRX: sections, IOP module name), movies (.PSS: picture size, frame rate, length, and **Convert for preview**, which takes out its sound track (the PS2's "SShd" PCM stream, which ffmpeg does not read) and has ffmpeg join it to the picture as an H.264 / AAC MP4, kept in `%LOCALAPPDATA%\MapBuilder\movies`, so it plays in the page; needs ffmpeg on the server: `winget install Gyan.FFmpeg` or `MAPBUILDER_FFMPEG`), and a hex dump with strings for anything else.
+- Actions: open in the Map Builder, Model Editor or Animation Editor; export a texture, screen or icon texture as PNG and a sound as WAV; extract any record as stored.
+- **Import… / Replace… / Remove**: change a package's files or an archive's records; the result is written to a file you choose.
+- **Edit in place** (Edit menu: Undo Ctrl+Z, Redo Ctrl+Y, Save changes… Ctrl+S): RDR values, strings and list items (duplicate / remove), AI map headers and points, text files, icon.sys titles, a byte patcher for any record, and pictures (textures, RAW / RGB screens, icon textures) replaced from an image. Edits go through the package's asset session (a .ZDB's, or a loose file's folder's) and are spliced into their archives in place, so every other byte stays as it was.
 
 Edits in the editors are undoable. SOCOM 3 / Combined Assault archives and GTA: San Andreas (.ISO or .IMG) open read-only.
 
@@ -188,7 +190,7 @@ The API can read and write any file your account can, so the server also only an
 | Shading | Z cycles textured, solid, wire, X-ray |
 | Lighting / backdrop | Baked · Studio · Unlit in the header / image icon in the activity bar |
 | Undo / redo / save copy | Ctrl+Z / Ctrl+Y / Ctrl+S |
-| Asset Viewer | Double-click / Enter opens · Backspace up · right-click for actions |
+| Asset Viewer | Double-click / Enter opens · Backspace up · Alt+Left / Right back / forward · arrows move · Space plays a clip |
 
 ## How it fits together
 
@@ -200,7 +202,7 @@ web/  React 18 + TypeScript + three.js ──POST /api/command──▶ server/ 
 ```
 
 - The backend owns the package. Every edit is an `ASSET_*` command on an in-memory session (one per package path, shared by all pages); the pages preview and send commands.
-- The Asset Viewer reads archives with `ZIPPER_*` commands and decodes most of them in the page; SOCOM II models are decoded by the server, the same mesh the editors draw.
+- The Asset Viewer lists and previews with `VIEWER_LIST` / `VIEWER_PREVIEW`; package archives come from an asset session, so models, textures, maps and clips are drawn with the editors' commands and viewports. It edits RDR tables, AI maps, text, icons, palettes, clutter placements, GEO scene nodes and ZANIM effect scripts in place (`VIEWER_EDIT`, or the session's `ASSET_EDIT` ops), with the editors' undo, redo and save. Disc formats only it reads (SPU ADPCM, memory-card icons, raw screens, PSS / ELF headers) are in `CodeDesigner.Ps2.FileFormats/Ps2`.
 - `web/src/webview/` mirrors CodeDesigner's webview folders: the viewports, decoders and players are shared files, and each page's logic runs on a small dependency-tracking signals shim (`web/src/shared/signals.ts`) under a React view.
 
 ```
@@ -217,7 +219,7 @@ web/src/
   MapPage.tsx, viewport/          Map Builder
   webview/model-editor/           Model Editor
   webview/animation-editor/       Animation Editor
-  webview/zipper-workbench/       Asset Viewer
+  webview/asset-viewer/           Asset Viewer
   shared/                         host (dialogs, file browser, import), signals, icons
 ```
 
@@ -234,13 +236,14 @@ The server is also a [Model Context Protocol](https://modelcontextprotocol.io) s
 claude mcp add --transport http mapbuilder http://127.0.0.1:8770/mcp
 ```
 
-The AI works on the same asset sessions as the pages, so you watch it work: the **AI activity** panel (activity bar, robot icon) lists every call with the reason the AI gave, and with **Follow AI** on, edits bring their page forward: the Map Builder reloads and frames the moved prop or point, the Model Editor opens the edited model. Edits stay undoable (`Ctrl+Z` undoes the AI's too) and nothing is written until a save.
+The AI works on the same asset sessions as the pages, so you watch it work: the **AI activity** panel (activity bar, robot icon) lists every call with the reason the AI gave, and with **Follow AI** on, edits bring their page forward: the Map Builder reloads and frames the moved prop or point, the Model Editor opens the edited model, the Asset Viewer opens the edited record (an RDR value, a GEO node, a ZANIM instruction, a palette) and marks it. Browsing with `viewer_list` / `viewer_preview` moves the Asset Viewer along, and any edit to the package it shows reloads it. Edits stay undoable (`Ctrl+Z` undoes the AI's too) and nothing is written until a save.
 
 | Tools | Do |
 |---|---|
 | `assets_open`, `assets_sessions`, `assets_status` | Open or join a package session |
 | `assets_list_models`, `assets_describe_model`, `assets_model_mesh`, `assets_list_textures`, `assets_list_palettes`, `assets_texture` (as an image), `assets_map_scene`, `assets_map_points`, `assets_list_animations`, `assets_animation`, `assets_weapons` | Read |
 | `assets_effects`, `assets_weapon_fx` | Read ZANIM effects and what firing a weapon plays |
+| `viewer_list`, `viewer_preview`, `viewer_edit`, `viewer_extract` | Browse any folder, file or archive record as the Asset Viewer does, read its typed preview (RDR subtrees, AI maps, GEO scene nodes, clutter pages, ZANIM effects decoded, palettes), change it in place (RDR values and list items, AI map headers, text, bytes, pictures, icon.sys, GEO nparams / model references, ZANIM fields and words) and copy a record out; edits are undone and saved with `assets_undo` / `assets_save` on the session `viewer_edit` answers. Palettes and clutter change with `assets_edit` (`setPalette`, `moveClutter` …) |
 | `assets_edit` (every `ASSET_EDIT` op; `dryRun: true` previews one without changing anything), `assets_undo`, `assets_redo`, `assets_save`, `assets_close` | Change, save and close |
 | `assets_save_prefab`, `assets_list_prefabs`, `assets_delete_prefab` | Save placed props and clutter as a reusable group; `assets_edit {op: placePrefab}` places one in any map (one undo step) |
 | `assets_validate`, `assets_history` | Lint a map (missing models, broken transforms, duplicate points, long texture names, VRAM budget); list the undo / redo steps |
@@ -273,6 +276,9 @@ All commands are `POST /api/command` with a JSON body `{ "Command": ..., ...fiel
 | `ASSET_HISTORY` / `ASSET_VALIDATE` | `AssetSession` (+ `AssetJson: {vramBudget?}` for validate) | The undo / redo steps; a map lint |
 | `PACKAGE_EDIT` | `InputPath`, `OutputPath`, `Data: [ops]`, `DryRun?` | Add / replace / remove package files and archive records (refused while an open session has unsaved edits on the file) |
 | `FS_PLACES` / `FS_LIST` | `InputPath` | Drives, common folders and folder listings |
+| `VIEWER_EDIT` | `InputPath`, `AssetJson: {inner, op: rdrSet / rdrDuplicate / rdrRemove / mpsMap / text / bytes / image / iconSys / nparams / modelName / zanimField / zanimWord, …}` | One in-place edit through the package's asset session (undo / redo / save with `ASSET_UNDO` / `ASSET_REDO` / `ASSET_SAVE`). `nparams {node, matrix?, min?, max?, kind?, flags?}` and `modelName {node, name}` change a GEO scene node; `zanimField {node, offset, field, fieldValue}` and `zanimWord {node, offset, word, wordValue}` an effect script instruction (node: its Seq_Data record) |
+| `VIEWER_MOVIE` | `InputPath` (a .PSS) | Converts a movie to MP4 once (ffmpeg) and answers its `/api/viewer/movie/…` stream URL |
+| `VIEWER_LIST` / `VIEWER_PREVIEW` / `VIEWER_EXTRACT` | `InputPath`, `AssetJson: {inner?: [entry indices], sample?, rate?, effect?}` (+ `OutputPath` for extract) | Asset Viewer: what a folder, file or archive holds; a typed preview of one file or record; a record's bytes as stored |
 
 Edit ops include `moveClutter`, `addClutter`, `deleteClutter`, `moveInstance`, `duplicateInstance`, `placeInstance`, `deleteInstance`, `movePoint`, `setPoint`, `setVertices`, `transformVertices`, `addMesh`, `deleteFaces`, `duplicateFaces`, `retexture`, `replaceTexture`, `tintVertexColors`, the animation ops, and:
 
@@ -282,6 +288,7 @@ Edit ops include `moveClutter`, `addClutter`, `deleteClutter`, `moveInstance`, `
 - `importTexture` `{sourceSession | source, name, sourceNamespace?, namespace?, newName?}`
 - `addTexture` `{name, pngBase64 | imagePath, namespace?, width?, height?, maxSize?, paletteId?}`
 - `addPalette` `{pngBase64 | imagePath, namespace?, is16?}`
+- `setPalette` `{archive, id, rgba: [1024 bytes] | pngBase64 | imagePath}`: sets texpal_{id}'s 256 colours in place, keeping its depth (an image gives its first 256 pixels, row by row)
 - `placePrefab` `{prefab, position, yaw?}`: every item of a saved prefab around the position, turned by yaw, as one batch (all or nothing)
 
 ## Format notes

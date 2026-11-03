@@ -11,13 +11,13 @@ import { MapPage } from './MapPage';
 
 const ModelEditorPage = lazy(() => import('./webview/model-editor/ModelEditorPage').then(module => ({ default: module.ModelEditorPage })));
 const AnimationEditorPage = lazy(() => import('./webview/animation-editor/AnimationEditorPage').then(module => ({ default: module.AnimationEditorPage })));
-const ViewerPage = lazy(() => import('./webview/zipper-workbench/ViewerPage').then(module => ({ default: module.ViewerPage })));
+const AssetViewerPage = lazy(() => import('./webview/asset-viewer/AssetViewerPage').then(module => ({ default: module.AssetViewerPage })));
 
 const PAGES: Array<{ id: PageId; label: string; icon: string; render: () => ReactNode }> = [
   { id: 'map', label: 'Map Builder', icon: 'globe', render: () => <MapPage /> },
   { id: 'models', label: 'Model Editor', icon: 'library', render: () => <ModelEditorPage /> },
   { id: 'animations', label: 'Animation Editor', icon: 'repeat', render: () => <AnimationEditorPage /> },
-  { id: 'viewer', label: 'Asset Viewer', icon: 'database', render: () => <ViewerPage /> },
+  { id: 'viewer', label: 'Asset Viewer', icon: 'database', render: () => <AssetViewerPage /> },
 ];
 
 // A page starts on its first visit and stays mounted afterwards, preserving its session, camera and selection.

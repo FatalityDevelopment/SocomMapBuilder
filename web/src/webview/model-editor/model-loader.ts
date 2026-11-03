@@ -1,7 +1,7 @@
 // Textures for the Model Editor, decoded by the bridge (TEX0.CBP palette, real
 // alpha) and cached per session revision so edits (replaceTexture) show up.
 
-import type { ModelTexturePixels } from '../zipper-workbench/zed-model-renderer';
+import type { ModelTexturePixels } from '../zipper-core/texture-pixels';
 import { AssetClient, pngToRgba } from './asset-client';
 
 export class TextureCache {

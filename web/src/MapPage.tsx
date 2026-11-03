@@ -278,6 +278,8 @@ export function MapPage() {
     return out;
   }, [instances]);
   const layerCount = (layer: MapLayer) => layerCounts.get(layer) ?? 0;
+  // Read after the viewport builds the scene (it runs before the instances state lands).
+  const skyInWorld = useMemo(() => viewportRef.current?.skyInWorld() ?? [], [instances]);
   const selectionSummary = useMemo(() => {
     const by = new Map<string, number>();
     for (const i of selection) { const m = instances[i]?.model ?? '?'; by.set(m, (by.get(m) ?? 0) + 1); }
@@ -593,6 +595,7 @@ export function MapPage() {
             isModelHidden={source => hidden.models.has(source)}
             toggleModel={toggleModel}
             layerCount={layerCount}
+            skyInWorld={skyInWorld}
             pickGroup={pickGroup}
             pickInstance={pickInstance}
             pickPoint={pickPoint}

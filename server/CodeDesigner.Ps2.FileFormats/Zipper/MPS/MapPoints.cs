@@ -6,7 +6,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.MPS
     /// The named points of AIMAPS.MPS: starts, hostage starts, waypoints (port of zed-spawn-points.ts). A table of
     /// <c>count</c> (u32), one more u32, then 24-byte records: name[16], team byte (0xFF on starts), kind byte
     /// (2 start, 1 waypoint, 0 spectator), two unused bytes, and a packed cell (u32: x = bits 6..18, z = bits 19..31)
-    /// in the first AI map's grid (<c>min + (cell + 0.5) × scale</c>). <see cref="Move"/> rewrites the cell.
+    /// in the first AI map's grid (<c>min + (cell + 0.5) × scale</c>; the height is the cell's floor in that grid).
+    /// <see cref="Move"/> rewrites the cell.
     /// </summary>
     public static class MapPoints
     {
@@ -19,6 +20,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.MPS
             public int CellX { get; init; }
             public int CellZ { get; init; }
             public float X { get; init; }
+            /// <summary>The floor height of its cell in the AI grid (<see cref="MpsMap.HeightAt"/>), or null.</summary>
+            public float? Y { get; init; }
             public float Z { get; init; }
             /// <summary>Offset of the 24-byte record in the MPS file.</summary>
             public int RecordOffset { get; init; }
@@ -53,6 +56,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.MPS
                         CellX = cx,
                         CellZ = cz,
                         X = grid.MinX + (cx + 0.5f) * grid.ScaleX,
+                        Y = grid.HeightAt(mps, cx, cz),
                         Z = grid.MinZ + (cz + 0.5f) * grid.ScaleZ,
                         RecordOffset = r,
                     });
@@ -93,8 +97,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.MPS
             var copy = (byte[])mps.Clone();
             if (newName != null)
             {
-                if (newName.Length is < 2 or > 15 || newName.Any(c => c < 0x21 || c > 0x7E))
-                    throw new ArgumentException("A point name is 2-15 printable characters without spaces");
+                if (newName.Length is < 2 or > 15 || newName.Any(c => c < 0x20 || c > 0x7E) || newName[0] == ' ' || newName[^1] == ' ')
+                    throw new ArgumentException("A point name is 2-15 printable characters (spaces only between words)");
                 if (points.Any(p => p != point && p.Name.Equals(newName, StringComparison.OrdinalIgnoreCase)))
                     throw new ArgumentException($"A point named {newName} already exists");
                 Array.Clear(copy, point.RecordOffset, 16);
@@ -125,10 +129,11 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.MPS
                 byte c = b[at + i];
                 if (ended) { if (c != 0) return null; continue; }
                 if (c == 0) { ended = true; continue; }
-                if (c < 0x21 || c > 0x7E) return null;
+                // Retail names hold spaces ("Demo Site 1", "Sniper Rifle" in M51), never at the start.
+                if (c < 0x20 || c > 0x7E || (c == 0x20 && sb.Length == 0)) return null;
                 sb.Append((char)c);
             }
-            return sb.Length >= 2 ? sb.ToString() : null;
+            return sb.Length >= 2 && sb[^1] != ' ' ? sb.ToString() : null;
         }
     }
 }

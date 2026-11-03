@@ -60,3 +60,5 @@ Anim_Sets
 - **Object operands.** 0 means none, `0xF9` the effect's own object, `0xFA` its owner (for example the weapon's firepoint). Anything else is an index into the node refs.
 
 Weapons fire their muzzle effects through these scripts. The firepoint locators and `ZWEAPON` muzzle names select which script runs and where.
+
+**Editing.** `ZanimFile.Layout` gives each decoded argument's offset and storage (f32, i32, u16, an object or name index byte, three floats, a flag bit); decoding and `WithField` both go through it, so a field writes back to the bytes it was read from. `WithWord` sets any argument word of an instruction (not word 0, the opcode and size). Sizes never change, so nothing else in the sequence moves; an IF / ELSEIF / WHILE term count shapes the track and is not written. The Asset Viewer's ZANIM editor uses them through `VIEWER_EDIT` `zanimField` / `zanimWord`. Every field of the disc's ZANIM archives writes back byte for byte (`SceneEditTests`).

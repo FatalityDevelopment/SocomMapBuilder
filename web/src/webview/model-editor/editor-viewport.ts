@@ -6,7 +6,7 @@
 // it to the bridge as an asset-session edit and reloads the mesh.
 
 import * as THREE from 'three';
-import type { ModelTexturePixels } from '../zipper-workbench/zed-model-renderer';
+import type { ModelTexturePixels } from '../zipper-core/texture-pixels';
 import { SELECT_COLOR, ViewportCore, chunkGeometry, disposeObjectResources, isIdentity, type MaterialSpec } from '../zipper-core/viewport-core';
 import type { EditorChunk, EditorMesh } from './mesh-data';
 

@@ -23,6 +23,14 @@ namespace MapBuilder.Server.Services
             foreach (var c in _clients.Values) c.Writer.TryWrite(json);
         }
 
+        /// <summary>A page's view of the events without a connection (tests): every event published from now on.</summary>
+        internal ChannelReader<string> Listen()
+        {
+            var channel = Channel.CreateUnbounded<string>();
+            _clients[Guid.NewGuid()] = channel;
+            return channel.Reader;
+        }
+
         /// <summary>Asks the pages for something and waits for the first answer.</summary>
         public async Task<JsonElement> Request(string kind, object? args, TimeSpan timeout)
         {

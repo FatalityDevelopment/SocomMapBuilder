@@ -394,7 +394,9 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZED
             int recordEnd = checked(firstRecordOffset + (entryCount * RecordSize));
 
             uint bodySize = Read32(data, 0x54);
-            int bodyStart = checked(data.Length - (int)bodySize);
+            // Sound stores (BNKSTORE / VAGSTORE.ZAR) record no body size: the body starts at the record table's end,
+            // aligned to their 2048-byte sectors (word 0x10).
+            int bodyStart = bodySize == 0 ? AlignUp(recordEnd, (int)Math.Max(HeaderWord10, DefaultDataAlignment)) : checked(data.Length - (int)bodySize);
             if (bodyStart < recordEnd)
                 throw new InvalidDataException("Record table overlaps the body region.");
 
@@ -449,7 +451,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZED
 
                 if (zero > cursor)
                 {
-                    string value = Encoding.ASCII.GetString(data, cursor, zero - cursor);
+                    string value = Encoding.Latin1.GetString(data, cursor, zero - cursor);
                     RememberName(value);
                 }
 
@@ -469,7 +471,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZED
 
             int zero = Array.IndexOf(data, (byte)0, stringOffset, stringTableEnd - stringOffset);
             if (zero < 0) zero = stringTableEnd;
-            return Encoding.ASCII.GetString(data, stringOffset, zero - stringOffset);
+            return Encoding.Latin1.GetString(data, stringOffset, zero - stringOffset);
         }
 
         private byte[] BuildStringTable(out Dictionary<string, uint> nameOffsets)
@@ -497,7 +499,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZED
             foreach (string name in orderedNames)
             {
                 nameOffsets[name] = (uint)ms.Position;
-                byte[] ascii = Encoding.ASCII.GetBytes(name);
+                byte[] ascii = Encoding.Latin1.GetBytes(name);
                 ms.Write(ascii, 0, ascii.Length);
                 ms.WriteByte(0);
             }

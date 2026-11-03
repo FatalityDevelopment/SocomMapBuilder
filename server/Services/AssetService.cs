@@ -71,6 +71,8 @@ namespace MapBuilder.Server.Services
             reg.Add(c => CaRoute(c, "ASSET_SAVE") ?? WithSession(c.AssetSession, "ASSET_SAVE", s => Save(s, c.AssetJson)), "ASSET_SAVE");
             reg.Add(c => WithSession(c.AssetSession, "ASSET_HISTORY", s => History(s)), "ASSET_HISTORY");
             RegisterPrefabs(reg);
+            RegisterViewer(reg);
+            RegisterMovies(reg);
             reg.Add(c => WithSession(c.AssetSession, "ASSET_VALIDATE", s => Validate(s, c.AssetJson)), "ASSET_VALIDATE");
             reg.Add(c => CaRoute(c, "ASSET_EXPORT") ?? WithSession(c.AssetSession, "ASSET_EXPORT", s => ExportToCa(s, c.AssetArchive, c.AssetName, c.AssetJson)), "ASSET_EXPORT");
         }
@@ -302,6 +304,18 @@ namespace MapBuilder.Server.Services
                     string archive = string.Empty;
                     var result = ApplyEdit(s, Str(a, "label") ?? "add palette", p => { var r = PackageTextures.AddPalette(p, Str(a, "namespace"), rgba, is16); id = r.PaletteId; archive = r.Archive; return r.Changed; });
                     return new { result, archive, paletteId = id, palette = "texpal_" + id };
+                }
+                case "setPalette":
+                {
+                    // {archive, id, rgba: [1024 bytes] | pngBase64 | imagePath}: 256 colours set in place (an image gives
+                    // its first 256 pixels, row by row: a 16 × 16 swatch image maps one to one)
+                    string archive = Str(a, "archive") ?? throw new ArgumentException("\"archive\" (the _PAL.ZED) is required");
+                    int id = Int(a, "id");
+                    byte[] rgba = a.TryGetProperty("rgba", out var colours) && colours.ValueKind == JsonValueKind.Array
+                        ? colours.EnumerateArray().Select(v => (byte)Math.Clamp(v.GetInt32(), 0, 255)).ToArray()
+                        : ImageRgba(a, out _, out _);
+                    if (rgba.Length < 1024) throw new ArgumentException("A palette needs 256 colours (an image of at least 256 pixels)");
+                    return ApplyEdit(s, Str(a, "label") ?? $"set palette texpal_{id}", p => PackageTextures.SetPalette(p, archive, id, rgba));
                 }
                 case "importTexture":
                 {
@@ -870,7 +884,7 @@ namespace MapBuilder.Server.Services
             string ns = scene ?? s.Package.MapScene()?.Namespace ?? throw new InvalidOperationException("No map scene; pass \"scene\"");
             GeoScene geo = s.Package.Scene(ns) ?? throw new KeyNotFoundException($"No {ns}_GEO.ZED");
             var best = SceneInstances.Collect(geo.MapRoot, _ => true)
-                .Where(i => i.Kind == "reference" && i.Node?.Child("model_name") != null && !i.ModelName.Equals("sky", StringComparison.OrdinalIgnoreCase))
+                .Where(i => i.Kind == "reference" && i.Node?.Child("model_name") != null && !ZipperPackage.IsSkyName(i.ModelName))
                 .OrderBy(i => (i.Matrix[12] - x) * (i.Matrix[12] - x) + (i.Matrix[13] - y) * (i.Matrix[13] - y) + (i.Matrix[14] - z) * (i.Matrix[14] - z))
                 .FirstOrDefault() ?? throw new InvalidOperationException("The map places no references to copy from; duplicate an instance instead");
             return (ns, best.Node!);
@@ -1067,27 +1081,36 @@ namespace MapBuilder.Server.Services
                 if (TryOpenCa(full) is string ca) return ca;
                 // GTA: San Andreas (the disc image or GTA3.IMG) opens as a read-only GTA session.
                 if (Assets.GtaAssetService.TryOpen(full) is string gta) return gta;
-                // One session per package path: the editor and an agent opening the same map share it. The lock keeps
-                // two opens at once from making two sessions.
-                lock (OpenGate)
-                {
-                    AssetSession? existing = Sessions.Values.FirstOrDefault(s =>
-                        s.OpenPath.Equals(full, StringComparison.OrdinalIgnoreCase) || s.Package.SourcePath.Equals(full, StringComparison.OrdinalIgnoreCase));
-                    // A session whose file changed on disk since (another tool wrote it) is reloaded, unless it holds
-                    // unsaved edits. It keeps its id and moves its revision on, so the pages polling it reload too.
-                    AssetSession? reloaded = null;
-                    if (existing != null && existing.Dirty.Count == 0 && existing.SourceStamp != SourceStampOf(full))
-                    {
-                        lock (existing.Gate)
-                            reloaded = new AssetSession { Id = existing.Id, Package = ZipperPackage.Open(full), OpenPath = full, SourceStamp = SourceStampOf(full), Revision = existing.Revision + 1 };
-                        existing = null;
-                    }
-                    AssetSession session = existing ?? reloaded ?? new AssetSession { Id = NewId(full), Package = ZipperPackage.Open(full), OpenPath = full, SourceStamp = SourceStampOf(full) };
-                    Sessions[session.Id] = session;
-                    return Ok("ASSET_OPEN", new { reused = existing != null, status = StatusObject(session) });
-                }
+                AssetSession session = OpenSession(full, out bool reused);
+                // A session the Asset Viewer opened to browse becomes an editor's (or an agent's) once they open it.
+                lock (ViewerOwned) ViewerOwned.Remove(session.Id);
+                return Ok("ASSET_OPEN", new { reused, status = StatusObject(session) });
             }
             catch (Exception ex) { return Responses.Error($"ASSET_OPEN error: {ex.Message}"); }
+        }
+
+        // One session per package path: the editor and an agent opening the same map share it. The lock keeps two
+        // opens at once from making two sessions.
+        private static AssetSession OpenSession(string full, out bool reused)
+        {
+            lock (OpenGate)
+            {
+                AssetSession? existing = Sessions.Values.FirstOrDefault(s =>
+                    s.OpenPath.Equals(full, StringComparison.OrdinalIgnoreCase) || s.Package.SourcePath.Equals(full, StringComparison.OrdinalIgnoreCase));
+                // A session whose file changed on disk since (another tool wrote it) is reloaded, unless it holds
+                // unsaved edits. It keeps its id and moves its revision on, so the pages polling it reload too.
+                AssetSession? reloaded = null;
+                if (existing != null && existing.Dirty.Count == 0 && existing.SourceStamp != SourceStampOf(full))
+                {
+                    lock (existing.Gate)
+                        reloaded = new AssetSession { Id = existing.Id, Package = ZipperPackage.Open(full), OpenPath = full, SourceStamp = SourceStampOf(full), Revision = existing.Revision + 1 };
+                    existing = null;
+                }
+                AssetSession session = existing ?? reloaded ?? new AssetSession { Id = NewId(full), Package = ZipperPackage.Open(full), OpenPath = full, SourceStamp = SourceStampOf(full) };
+                Sessions[session.Id] = session;
+                reused = existing != null;
+                return session;
+            }
         }
 
         private static readonly object OpenGate = new();
@@ -1517,7 +1540,7 @@ namespace MapBuilder.Server.Services
             return new
             {
                 grid = grid == null ? null : new { grid.Name, grid.MinX, grid.MinY, grid.MinZ, grid.MaxX, grid.MaxY, grid.MaxZ, grid.ScaleX, grid.ScaleZ, grid.Width, grid.Height },
-                points = MapPoints.Parse(mps.Data, grid).Select(p => new { p.Name, p.Team, p.Kind, p.X, p.Z, p.CellX, p.CellZ }).ToList(),
+                points = MapPoints.Parse(mps.Data, grid).Select(p => new { p.Name, p.Team, p.Kind, p.X, p.Y, p.Z, p.CellX, p.CellZ }).ToList(),
             };
         }
 

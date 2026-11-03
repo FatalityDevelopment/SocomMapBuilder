@@ -7,7 +7,7 @@ import * as THREE from 'three';
 import { placementMatrix, samplePlacement, surfaceNormal, type PlacementOptions, type PlacementSample, type PlacementTransform } from './placement';
 import { SELECT_COLOR, ViewportCore, billboardYaw, chunkGeometry, isIdentity, labelSprite, type MaterialSpec } from '../webview/zipper-core/viewport-core';
 import type { EditorMesh } from '../webview/model-editor/mesh-data';
-import { groupInstancesByLayer, layerOf, movable as isMovable, pointColor } from '../mapModel';
+import { groupInstancesByLayer, isSkyChunk, layerOf, movable as isMovable, pointColor } from '../mapModel';
 
 export type MapTool = 'select' | 'move' | 'rotate' | 'scale' | 'place';
 export type MapLayer = 'world' | 'reference' | 'clutter' | 'sky' | 'points';
@@ -27,7 +27,7 @@ export interface MapInstance {
   source: string | null;
 }
 
-export interface MapPointInfo { name: string; team: number; kind: string; x: number; z: number }
+export interface MapPointInfo { name: string; team: number; kind: string; x: number; y?: number | null; z: number }
 
 export interface MapModel { mesh: EditorMesh; textureNamespace: string | null }
 
@@ -102,6 +102,8 @@ export class MapViewport extends ViewportCore {
   // Meshes whose culling is off while a gizmo drag moves their instances (bounds are recomputed when it ends).
   private readonly dragMeshes = new Map<THREE.InstancedMesh, boolean>();
   private points: Array<MapPointInfo & { y: number; obj: THREE.Object3D }> = [];
+  // World models whose sky chunks moved to the Sky layer.
+  private worldSky: Array<{ source: string; nodes: string[] }> = [];
   // The sky dome encloses the map; hidden until asked for.
   private readonly hiddenLayers = new Set<MapLayer>(['sky']);
   private readonly hiddenModels = new Set<string>();
@@ -235,7 +237,7 @@ export class MapViewport extends ViewportCore {
   setScene(
     instances: MapInstance[],
     models: Map<string, MapModel>,
-    textures: Record<string, import('../webview/zipper-workbench/zed-model-renderer').ModelTexturePixels>,
+    textures: Record<string, import('../webview/zipper-core/texture-pixels').ModelTexturePixels>,
     points: MapPointInfo[],
     keepCamera: boolean,
   ): void {
@@ -248,6 +250,7 @@ export class MapViewport extends ViewportCore {
       return;
     }
     this.clearContent();
+    this.worldSky = [];
     this.builtModels = new Map([...models]);
     this.setTexturePixels(textures);
     this.instances = instances;
@@ -259,10 +262,14 @@ export class MapViewport extends ViewportCore {
       if (!model) { continue; }
       const ns = model.textureNamespace;
       const box = new THREE.Box3();
+      const skyNodes = new Set<string>();
       for (const chunk of model.mesh.chunks) {
         const geometry = chunkGeometry(chunk);
         geometry.computeBoundingBox();
-        if (geometry.boundingBox) { box.union(geometry.boundingBox); }
+        // A world model's sky dome draws with the Sky layer, and stays out of the map's bounds and the point drop.
+        const chunkLayer: MapLayer = layer === 'world' && isSkyChunk(chunk) ? 'sky' : layer;
+        if (chunkLayer === 'sky' && layer === 'world') { skyNodes.add(chunk.node || chunk.texture || 'sky'); }
+        else if (geometry.boundingBox) { box.union(geometry.boundingBox); }
         // Texture keys are namespaced: the same .tif name can differ between archives.
         const spec: MaterialSpec = { texture: chunk.texture ? `${ns ?? ''}:${chunk.texture.toLowerCase()}` : null, materialBlend: chunk.materialBlend, colors: chunk.colors };
         const mesh = new THREE.InstancedMesh(geometry, this.materialFor(spec), idx.length);
@@ -273,12 +280,13 @@ export class MapViewport extends ViewportCore {
         mesh.instanceMatrix.needsUpdate = true;
         mesh.computeBoundingSphere();
         mesh.userData['instances'] = idx;
-        mesh.userData['layer'] = layer;
+        mesh.userData['layer'] = chunkLayer;
         mesh.userData['source'] = source;
         this.content.add(mesh);
         this.targets.push({ mesh, spec });
       }
       this.localBounds.set(source, box);
+      if (skyNodes.size) { this.worldSky.push({ source, nodes: [...skyNodes].sort() }); }
     }
 
     // Bounds of the playable map: the world and props (sky domes and fogbands would swamp it).
@@ -379,6 +387,9 @@ export class MapViewport extends ViewportCore {
 
   instanceList(): readonly MapInstance[] { return this.instances; }
 
+  /** Sky drawn inside world models (their GEO node names), shown under the Sky layer. */
+  skyInWorld(): ReadonlyArray<{ source: string; nodes: string[] }> { return this.worldSky; }
+
   refreshHelpers(): void {
     this.clearHelpers();
     this.buildGridAxes(this.worldBox);
@@ -401,13 +412,17 @@ export class MapViewport extends ViewportCore {
   private buildPoints(points: MapPointInfo[]): void {
     this.clearPoints();
     const height = Math.max(4, this.extent * 0.012);
-    const ground = this.content.children.filter(c => c.userData['layer'] === 'world');
+    // Without a height from the AI grid: the highest terrain or prop surface under the point (buildings stand in holes
+    // in the terrain), else the bottom of the map.
+    const ground = this.content.children.filter(c => c.userData['layer'] === 'world' || c.userData['layer'] === 'reference');
     const ray = new THREE.Raycaster();
     for (const p of points) {
-      // On the highest world surface under the point (cells hold no height).
-      ray.set(new THREE.Vector3(p.x, this.worldBox.isEmpty() ? 1000 : this.worldBox.max.y + 10, p.z), new THREE.Vector3(0, -1, 0));
-      const hit = ray.intersectObjects(ground, false)[0];
-      const y = hit ? hit.point.y : this.center.y;
+      let y = p.y;
+      if (y == null || !Number.isFinite(y)) {
+        ray.set(new THREE.Vector3(p.x, this.worldBox.isEmpty() ? 1000 : this.worldBox.max.y + 10, p.z), new THREE.Vector3(0, -1, 0));
+        const hit = ray.intersectObjects(ground, false)[0];
+        y = hit ? hit.point.y : this.worldBox.isEmpty() ? 0 : this.worldBox.min.y;
+      }
       const color = pointColor(p.kind);
       const pillar = new THREE.Mesh(
         new THREE.CylinderGeometry(height * 0.08, height * 0.08, height, 10),

@@ -5,7 +5,7 @@
 
 import * as THREE from 'three';
 import { SELECT_COLOR, ViewportCore, chunkGeometry, type MaterialSpec } from '../zipper-core/viewport-core';
-import type { ModelTexturePixels } from '../zipper-workbench/zed-model-renderer';
+import type { ModelTexturePixels } from '../zipper-core/texture-pixels';
 import type { BoneWire, EditorChunk, EditorMesh } from '../model-editor/mesh-data';
 import type { FxNode } from '../model-editor/asset-client';
 import { FxInstance } from './zanim-player';
