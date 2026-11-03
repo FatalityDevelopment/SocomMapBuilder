@@ -93,8 +93,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.MPS
             var copy = (byte[])mps.Clone();
             if (newName != null)
             {
-                if (newName.Length is < 2 or > 15 || newName.Any(c => c < 0x21 || c > 0x7E))
-                    throw new ArgumentException("A point name is 2-15 printable characters without spaces");
+                if (newName.Length is < 2 or > 15 || newName.Any(c => c < 0x20 || c > 0x7E) || newName[0] == ' ' || newName[^1] == ' ')
+                    throw new ArgumentException("A point name is 2-15 printable characters (spaces only between words)");
                 if (points.Any(p => p != point && p.Name.Equals(newName, StringComparison.OrdinalIgnoreCase)))
                     throw new ArgumentException($"A point named {newName} already exists");
                 Array.Clear(copy, point.RecordOffset, 16);
@@ -125,10 +125,11 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.MPS
                 byte c = b[at + i];
                 if (ended) { if (c != 0) return null; continue; }
                 if (c == 0) { ended = true; continue; }
-                if (c < 0x21 || c > 0x7E) return null;
+                // Retail names hold spaces ("Demo Site 1", "Sniper Rifle" in M51), never at the start.
+                if (c < 0x20 || c > 0x7E || (c == 0x20 && sb.Length == 0)) return null;
                 sb.Append((char)c);
             }
-            return sb.Length >= 2 ? sb.ToString() : null;
+            return sb.Length >= 2 && sb[^1] != ' ' ? sb.ToString() : null;
         }
     }
 }

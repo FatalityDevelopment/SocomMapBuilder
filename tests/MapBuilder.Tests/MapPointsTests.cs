@@ -62,12 +62,24 @@ namespace MapBuilder.Tests
         [Theory]
         [InlineData("Bravo1", null, null)]
         [InlineData("a", null, null)]
-        [InlineData("has space", null, null)]
+        [InlineData(" leading", null, null)]
+        [InlineData("trailing ", null, null)]
         [InlineData(null, 300, null)]
         [InlineData(null, null, "boss")]
         public void Update_rejects_bad_changes(string? newName, int? team, string? kind)
         {
             Assert.ThrowsAny<ArgumentException>(() => MapPoints.Update(Mps(), "Alpha1", newName, team, kind));
+        }
+
+        [Fact]
+        public void Names_with_spaces_parse_and_can_be_given()
+        {
+            // M51's main table names points "Demo Site 1" and "Sniper Rifle"; one such name used to hide the whole table.
+            byte[] data = MapPoints.Update(Mps(), "Bravo1", "Demo Site 1", null, null);
+            var points = MapPoints.Parse(data);
+            Assert.Equal(2, points.Count);
+            Assert.Contains(points, p => p.Name == "Demo Site 1" && p.Kind == "waypoint");
+            Assert.Equal((5, 6), (MapPoints.Parse(MapPoints.Move(data, "Demo Site 1", 55, 65)).Single(p => p.Name == "Demo Site 1") is var q ? (q.CellX, q.CellZ) : default));
         }
 
         [Fact]
