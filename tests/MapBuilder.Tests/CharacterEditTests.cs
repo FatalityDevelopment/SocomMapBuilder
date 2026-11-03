@@ -108,6 +108,57 @@ namespace MapBuilder.Tests
             Assert.Contains("no section drawn with", _b.EditFails(s, new { op = "removeCharacterSection", archive = "CLIB_MDL.ZED", model = Seal, texture = "packtest.tif" }));
         }
 
+        private JsonElement PackOf(string session, object args) =>
+            _b.Ok(new CommandMessage { Command = "ASSET_CHARACTER_PACK", AssetSession = session, AssetJson = JsonSerializer.Serialize(args) });
+
+        [Fact]
+        public void A_pack_needs_a_skinned_mesh_and_a_pack_name()
+        {
+            using var pkg = new SyntheticPackage();
+            string s = _b.Open(pkg.Folder);
+            _sessions.Add(s);
+            string Fails(object args) => _b.Fails(new CommandMessage { Command = "ASSET_CHARACTER_PACK", AssetSession = s, AssetJson = JsonSerializer.Serialize(args) });
+            Assert.Contains("not a skinned character mesh", Fails(new { model = "crate", donor = "con_pow01", pack = "mtest", dryRun = true }));
+            Assert.Contains("must start with 'm'", Fails(new { model = "crate", donor = "con_pow01", pack = "toolongname", dryRun = true }));
+        }
+
+        [Fact]
+        public void A_packed_character_reads_back_under_the_donor_name_with_its_gear()
+        {
+            if (OpenMap() is not { } s) return;
+            _b.Edit(s, new { op = "addTexture", name = "packtest.tif", @namespace = "clib", materials = new[] { new { color = new[] { 80, 90, 50 } }, new { color = new[] { 40, 40, 30 } } } });
+            _b.Edit(s, Pack);
+            string dir = Path.Combine(Path.GetTempPath(), "mb-charpack-" + Guid.NewGuid().ToString("N"));
+            try
+            {
+                var r = PackOf(s, new { model = Seal, donor = "con_pow01", pack = "mtest1", outputDir = dir });
+                Assert.Equal("MESH_con_pow01", r.GetProperty("mesh").GetString());
+                Assert.Equal(new[] { "CLIB_GEO.ZED", "CLIB_MDL.ZED", "CLIB_PAL.ZED", "CLIB_TXR.ZED" },
+                    r.GetProperty("files").EnumerateArray().Select(f => f.GetProperty("path").GetString()!.Split('\\').Last()).OrderBy(x => x));
+                Assert.True(File.Exists(Path.Combine(dir, "MTEST1.CDB")));
+                int base_ = CodeDesigner.Ps2.FileFormats.Zipper.Conversion.CaToSocom2.PaletteBase("mtest1");
+                Assert.All(r.GetProperty("palettes").EnumerateObject(), p => Assert.InRange(p.Value.GetInt32(), base_, base_ + 31));
+                Assert.Empty(r.GetProperty("warnings").EnumerateArray());
+
+                string packed = _b.Open(Path.Combine(dir, "MTEST1"));
+                _sessions.Add(packed);
+                var d = Describe(packed, "MESH_con_pow01");
+                var source = Describe(s, Seal);
+                Assert.Equal(source.GetProperty("chunks").GetArrayLength(), d.GetProperty("chunks").GetArrayLength());
+                Assert.Contains(d.GetProperty("chunks").EnumerateArray(), c => c.GetProperty("texture").GetString() == "packtest.tif");
+                Assert.All(d.GetProperty("textures").EnumerateArray(), t =>
+                {
+                    Assert.True(t.GetProperty("found").GetBoolean(), t.GetProperty("name").GetString());
+                    Assert.True(t.GetProperty("paletteResolved").GetBoolean(), t.GetProperty("name").GetString());
+                    Assert.InRange(t.GetProperty("palette").GetInt32(), base_, base_ + 31);
+                });
+            }
+            finally
+            {
+                try { Directory.Delete(dir, true); } catch (IOException) { }
+            }
+        }
+
         [Fact]
         public void Geometry_out_of_a_bones_reach_is_refused()
         {

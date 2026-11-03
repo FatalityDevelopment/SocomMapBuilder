@@ -31,7 +31,8 @@ namespace MapBuilder.Server.Services
             "and assets_history lists what undo would take back. Prefabs (assets_save_prefab, assets_list_prefabs, assets_edit placePrefab) " +
             "reuse groups of props across maps. assets_edit placeInstance adds props; newProp copies a prop to reshape (addTexture materials, " +
             "addMesh shapes, hideVisual), fitBounds refits it, and placeInstance puts it in the map; addCharacterMesh puts rigid gear on a " +
-            "character bone (assets_describe_model lists its skeleton) and removeCharacterSection takes it off; " +
+            "character bone (assets_describe_model lists its skeleton) and removeCharacterSection takes it off; characters_pack ships a " +
+            "character as a memory-card pack under a donor name; " +
             "setPoint renames / retypes spawn points; fs_list finds packages; weapons_* builds weapons from a template archive; " +
             "package_* changes package files on disk. viewer_list / viewer_preview / viewer_edit browse and change any disc file or " +
             "archive record in place as the Asset Viewer does (RDR tables, AI maps, text, icons, GEO scene nodes, ZANIM effect scripts), " +
@@ -194,7 +195,7 @@ namespace MapBuilder.Server.Services
         // Tools that write disk or throw work away (the rest change only the in-memory session or the view).
         private static readonly HashSet<string> Destructive = new(StringComparer.Ordinal)
         {
-            "assets_save", "assets_close", "assets_entry", "assets_export", "package_edit", "weapons_create", "weapons_pack", "mapbuilder_command",
+            "assets_save", "assets_close", "assets_entry", "assets_export", "package_edit", "weapons_create", "weapons_pack", "characters_pack", "mapbuilder_command",
             "assets_delete_prefab", "viewer_extract",
         };
 
@@ -1020,6 +1021,26 @@ namespace MapBuilder.Server.Services
                     var args = System.Text.Json.Nodes.JsonNode.Parse(a.GetRawText())!.AsObject();
                     args.Remove("session"); args.Remove("reason");
                     return FromCommand(new CommandMessage { Command = "ASSET_WEAPON_PACK", AssetSession = Session(a), AssetJson = args.ToJsonString() },
+                        d => d.TryGetProperty("pack", out var p) ? $"{(Bool(a, "dryRun") ? "dry run: " : "")}{p.GetString()}.CDB" : null!);
+                });
+
+            AddSync("characters_pack", "Pack character",
+                "Package a session's character (a skinned MESH_* as edited: addCharacterMesh gear, removeCharacterSection, retexture) as " +
+                "one memory-card pack <PACK>.CDB that takes over a donor character name, the layout the CA character ports used in game: " +
+                "RUN\\MP\\<PACK>\\CLIB_MDL (the mesh as MESH_<donor>), CLIB_GEO (its skeleton as <donor>), CLIB_TXR (the textures its " +
+                "sections draw with) and CLIB_PAL (their palettes, renumbered into the pack's own ids). Name it as a character the map " +
+                "does not load (con_pow01, spawned by the mp_pow1 chartype on MP10 / MP11) so that chartype spawns it once the pack is " +
+                "loaded. Only the main mesh ships, not the lower-detail one. Written to outputDir (default Documents/CodeDesigner/Exports) " +
+                "with the archives loose beside it; folderCard installs it on a PCSX2 folder card. dryRun builds and writes nothing. Risk: writes disk.",
+                false, Schema(new[] { "session", "model", "donor", "pack" }, session,
+                    P("model", "string", "The session's character mesh (MESH_seal_A_woodland_LO)."),
+                    P("donor", "string", "The character name it takes (con_pow01)."),
+                    P("pack", "string", "Pack name: m + up to 6 letters/digits (mseal1)."), P("outputDir", "string", "Where the pack goes."),
+                    P("folderCard", "string", "A PCSX2 folder memory card to install into."), P("dryRun", "boolean", "Build and report, writing nothing.")), a =>
+                {
+                    var args = System.Text.Json.Nodes.JsonNode.Parse(a.GetRawText())!.AsObject();
+                    args.Remove("session"); args.Remove("reason");
+                    return FromCommand(new CommandMessage { Command = "ASSET_CHARACTER_PACK", AssetSession = Session(a), AssetJson = args.ToJsonString() },
                         d => d.TryGetProperty("pack", out var p) ? $"{(Bool(a, "dryRun") ? "dry run: " : "")}{p.GetString()}.CDB" : null!);
                 });
 

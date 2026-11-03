@@ -49,6 +49,17 @@ Measured on M51's `MESH_seal_A_woodland_LO` (7 sections, 74 groups):
 
 Character gear (`FLIB_MDL.ZED`: hats, goggles, pouches) are rigid models like weapons. `addMesh` and the texture ops change them in place. Nothing in a map package says which character wears which gear.
 
+## Packs (getting a character into the game)
+
+`characters_pack` (`Package/CharacterPack.cs`) writes a session's character as `<PACK>.CDB`, the layout of the CA ports confirmed in game (`Mods/SOCOMCA/ca2s2.py`, on MP61 in 2026-10). Everything is under `RUN\MP\<PACK>\`:
+
+- `CLIB_MDL.ZED`: the mesh as `MESH_<donor>`, its payload as edited.
+- `CLIB_GEO.ZED`: its skeleton as `<donor>`.
+- `CLIB_TXR.ZED`: the textures its sections draw with, renumbered 1..N, mip levels off.
+- `CLIB_PAL.ZED`: their palettes, renumbered into the pack's own block of 32 ids (`1024 + 32 * (crc32(pack) % 480)`), with each texture's TEX0.CBP set to match. Palette ids are global across everything loaded and the first registered wins, so packs must not share them.
+
+Archive headers and the render phase come from the session's own CLIB library. Give the pack the name of a character the current map does not load. For example, `con_pow01` is spawned by the `mp_pow1` chartype and is loaded only on MP10 / MP11. The game's own chartype then spawns the packed character once the pack is loaded (loading is the bots tooling's job, not the pack's). Only the main mesh ships, not the lower-detail one, as in the CA packs.
+
 ## Notes
 
 - `_1` variants (`MESH_alban_informant_1`) are separate, much smaller meshes (likely lower-detail copies) with their own skeleton definitions.
