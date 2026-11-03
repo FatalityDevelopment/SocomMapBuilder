@@ -251,10 +251,35 @@ namespace MapBuilder.Server.Services
                     string bone = Str(a, "bone") ?? throw new ArgumentException("\"bone\" (a skeleton bone, see assets_describe_model) is required");
                     string texture = Str(a, "texture") ?? throw new ArgumentException("\"texture\" is required");
                     var input = InputMeshOf(a, out string what);
-                    CharacterEdits.Result? made = null;
-                    var result = ApplyEdit(s, Str(a, "label") ?? $"add {what} to {model} on {bone}",
-                        p => (made = CharacterEdits.AddRigidMesh(p, archive, model, bone, texture, input)).Changed);
-                    return new { result, bone = made!.Bone, matrixId = made.MatrixId, groups = made.Groups, vertices = made.Vertices, triangles = made.Triangles };
+                    // The character's lower-detail mesh (drawn at a distance) gets the same geometry unless lowDetail is false.
+                    bool lowDetail = !(a.TryGetProperty("lowDetail", out var ld) && ld.ValueKind == JsonValueKind.False);
+                    string lowName = CharacterEdits.LowDetailName(model);
+                    bool hasLow = lowDetail && pkg.FindModel(archive, lowName) != null;
+                    CharacterEdits.Result? made = null, low = null;
+                    var result = ApplyEdit(s, Str(a, "label") ?? $"add {what} to {model}{(hasLow ? " and " + lowName : "")} on {bone}", p =>
+                    {
+                        made = CharacterEdits.AddRigidMesh(p, archive, model, bone, texture, input);
+                        if (!hasLow) return made.Changed;
+                        low = CharacterEdits.AddRigidMesh(p, archive, lowName, bone, texture, input, made.Changed[p.Entry(archive)!.Leaf]);
+                        return low.Changed;
+                    });
+                    return new
+                    {
+                        result, bone = made!.Bone, matrixId = made.MatrixId, groups = made.Groups, vertices = made.Vertices, triangles = made.Triangles,
+                        lowDetail = low == null ? null : new { model = lowName, groups = low.Groups },
+                    };
+                }
+                case "removeCharacterSection":
+                {
+                    // {archive, model, texture | section}: material sections out of a skinned mesh's chain (e.g. gear added earlier).
+                    string archive = Str(a, "archive") ?? throw new ArgumentException("\"archive\" is required");
+                    string model = Str(a, "model") ?? throw new ArgumentException("\"model\" is required");
+                    string? texture = Str(a, "texture");
+                    int? section = OptInt(a, "section");
+                    List<int> removed = new();
+                    var result = ApplyEdit(s, Str(a, "label") ?? $"remove {texture ?? "section " + section} from {model}",
+                        p => CharacterEdits.RemoveSections(p, archive, model, texture, section, out removed));
+                    return new { result, removed };
                 }
                 case "hideVisual":
                 {

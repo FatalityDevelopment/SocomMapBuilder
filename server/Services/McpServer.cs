@@ -31,7 +31,7 @@ namespace MapBuilder.Server.Services
             "and assets_history lists what undo would take back. Prefabs (assets_save_prefab, assets_list_prefabs, assets_edit placePrefab) " +
             "reuse groups of props across maps. assets_edit placeInstance adds props; newProp copies a prop to reshape (addTexture materials, " +
             "addMesh shapes, hideVisual), fitBounds refits it, and placeInstance puts it in the map; addCharacterMesh puts rigid gear on a " +
-            "character bone (assets_describe_model lists its skeleton); " +
+            "character bone (assets_describe_model lists its skeleton) and removeCharacterSection takes it off; " +
             "setPoint renames / retypes spawn points; fs_list finds packages; weapons_* builds weapons from a template archive; " +
             "package_* changes package files on disk. viewer_list / viewer_preview / viewer_edit browse and change any disc file or " +
             "archive record in place as the Asset Viewer does (RDR tables, AI maps, text, icons, GEO scene nodes, ZANIM effect scripts), " +

@@ -77,6 +77,37 @@ namespace MapBuilder.Tests
             Assert.Equal(mdl, Backend.Bytes(s, "CLIB_MDL.ZED"));
         }
 
+        [Theory]
+        [InlineData("MESH_seal_A_woodland_LO", "MESH_seal_A_woodland_1_LO")]
+        [InlineData("MESH_alban_ter01", "MESH_alban_ter01_1")]
+        public void The_lower_detail_mesh_is_named_as_the_disc_names_it(string mesh, string low) =>
+            Assert.Equal(low, CodeDesigner.Ps2.FileFormats.Zipper.Package.CharacterEdits.LowDetailName(mesh));
+
+        [Fact]
+        public void Gear_goes_on_the_lower_detail_mesh_too_and_comes_off_by_texture()
+        {
+            if (OpenMap() is not { } s) return;
+            const string Low = "MESH_seal_A_woodland_1_LO";
+            int Chunks(string model) => Describe(s, model).GetProperty("chunks").GetArrayLength();
+            int high = Chunks(Seal), low = Chunks(Low);
+            _b.Edit(s, new { op = "addTexture", name = "packtest.tif", @namespace = "clib", materials = new[] { new { color = new[] { 80, 90, 50 } }, new { color = new[] { 40, 40, 30 } } } });
+
+            var r = _b.Edit(s, Pack);
+            Assert.Equal(Low, r.GetProperty("lowDetail").GetProperty("model").GetString());
+            Assert.Equal(high + r.GetProperty("groups").GetInt32(), Chunks(Seal));
+            Assert.Equal(low + r.GetProperty("lowDetail").GetProperty("groups").GetInt32(), Chunks(Low));
+
+            foreach (string model in new[] { Seal, Low })
+            {
+                var removed = _b.Edit(s, new { op = "removeCharacterSection", archive = "CLIB_MDL.ZED", model, texture = "packtest.tif" });
+                Assert.Single(removed.GetProperty("removed").EnumerateArray());
+            }
+            Assert.Equal(high, Chunks(Seal));
+            Assert.Equal(low, Chunks(Low));
+            Assert.DoesNotContain(Describe(s, Seal).GetProperty("chunks").EnumerateArray(), c => c.GetProperty("texture").GetString() == "packtest.tif");
+            Assert.Contains("no section drawn with", _b.EditFails(s, new { op = "removeCharacterSection", archive = "CLIB_MDL.ZED", model = Seal, texture = "packtest.tif" }));
+        }
+
         [Fact]
         public void Geometry_out_of_a_bones_reach_is_refused()
         {

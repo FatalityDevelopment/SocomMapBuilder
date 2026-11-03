@@ -236,7 +236,10 @@ namespace MapBuilder.Server.Services
                     if (Sessions.TryGetValue(id, out var old) && old.Dirty.Count == 0 && old.Undo.Count == 0) close.Add(old);
                 }
             }
-            foreach (var old in close) lock (old.Gate) Sessions.TryRemove(old.Id, out _);
+            // Checked again under the gate: an edit may have landed since the list was made.
+            foreach (var old in close)
+                lock (old.Gate)
+                    if (old.Dirty.Count == 0 && old.Undo.Count == 0 && old.Redo.Count == 0) Sessions.TryRemove(old.Id, out _);
             return s;
         }
 

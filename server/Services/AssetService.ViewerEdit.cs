@@ -61,8 +61,17 @@ namespace MapBuilder.Server.Services
             var place = Resolve(full, inner);
             string leaf = zdb ? ZdbNodes(full)[inner[0]].Name : Path.GetFileName(full);
             int[] rest = zdb ? inner[1..] : inner;
-            var s = ViewerSession(EditPackageOf(full));
-            lock (s.Gate)
+            // Another viewer call may retire this session (untouched, past ViewerKeep) before its gate is ours; an
+            // edit to a retired session would be lost, so take the live one.
+            AssetSession s;
+            while (true)
+            {
+                s = ViewerSession(EditPackageOf(full));
+                Monitor.Enter(s.Gate);
+                if (Sessions.TryGetValue(s.Id, out var live) && ReferenceEquals(live, s)) break;
+                Monitor.Exit(s.Gate);
+            }
+            try
             {
                 var entry = s.Package.Entry(leaf) ?? throw new KeyNotFoundException($"{leaf} is not in the session's package");
                 object? result = null;
@@ -72,6 +81,10 @@ namespace MapBuilder.Server.Services
                     [leaf] = Rebuild(entry.Data, rest, data => ApplyViewerOp(req, data, out result)),
                 });
                 return new { session = s.Id, package = s.OpenPath, edit, result, status = StatusObject(s) };
+            }
+            finally
+            {
+                Monitor.Exit(s.Gate);
             }
         }
 

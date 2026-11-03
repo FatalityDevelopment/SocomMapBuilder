@@ -31,13 +31,16 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
         /// <summary>
         /// Adds <paramref name="input"/> (character model space, the bind pose) to the skinned mesh
         /// <paramref name="modelName"/>, drawn with <paramref name="texture"/> and moving rigidly with
-        /// <paramref name="boneName"/>.
+        /// <paramref name="boneName"/>. <paramref name="archiveBytes"/>: the archive as an earlier step of the same edit
+        /// left it (record indices are the package's), else the package's own bytes.
         /// </summary>
-        public static Result AddRigidMesh(ZipperPackage pkg, string archive, string modelName, string boneName, string texture, MeshTopology.InputMesh input)
+        public static Result AddRigidMesh(ZipperPackage pkg, string archive, string modelName, string boneName, string texture, MeshTopology.InputMesh input,
+            byte[]? archiveBytes = null)
         {
             var entry = pkg.Entry(archive) is { Kind: "mdl" } e ? e : throw new ArgumentException($"{archive} is not a model archive of this package");
             var model = pkg.FindModel(entry.Leaf, modelName) ?? throw new KeyNotFoundException($"No model {modelName} in {entry.Leaf}");
-            var container = ZedContainer.FromBytes(entry.Data);
+            byte[] source = archiveBytes ?? entry.Data;
+            var container = ZedContainer.FromBytes(source);
             int start = CharacterMesh.StartOffset(container, model.NodeIndex)
                 ?? throw new ArgumentException($"{modelName} is not a skinned character mesh (no {modelName}_START); use addMesh");
             var geo = pkg.FindSkeleton(model.Namespace, CharacterMesh.SkeletonName(model.Name))
@@ -112,8 +115,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             data.Write(payload, start + 4, 12 + count * 16);
             foreach (var tag in tags) foreach (uint w in tag) data.Write(BitConverter.GetBytes(w));
 
-            byte[] bytes = entry.Data;
-            bytes = ZedSplice.Replace(bytes, model.NodeIndex, data.ToArray());
+            byte[] bytes = ZedSplice.Replace(source, model.NodeIndex, data.ToArray());
             for (int i = model.NodeIndex + 1; i <= model.NodeIndex + (int)nodes[model.NodeIndex].Type && i < nodes.Count; i++)
             {
                 if (nodes[i].Name.Equals(model.Name + "_START", StringComparison.OrdinalIgnoreCase))
@@ -123,6 +125,71 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             }
             result.Changed[entry.Leaf] = bytes;
             return result;
+        }
+
+        /// <summary>A character's lower-detail mesh name: <c>MESH_seal_A_woodland_LO</c> → <c>MESH_seal_A_woodland_1_LO</c>,
+        /// <c>MESH_alban_ter01</c> → <c>MESH_alban_ter01_1</c>.</summary>
+        public static string LowDetailName(string meshName) =>
+            meshName.EndsWith("_LO", StringComparison.OrdinalIgnoreCase) ? meshName[..^3] + "_1" + meshName[^3..] : meshName + "_1";
+
+        /// <summary>
+        /// Takes material sections out of a skinned mesh's DMA chain: those drawn with <paramref name="texture"/>, or the
+        /// one numbered <paramref name="section"/> (in chain order, as the editors number them). Their blocks stay in
+        /// the payload, drawn by nothing, so every other offset holds. <paramref name="removed"/>: the sections taken out.
+        /// </summary>
+        public static Dictionary<string, byte[]> RemoveSections(ZipperPackage pkg, string archive, string modelName, string? texture, int? section, out List<int> removed)
+        {
+            if ((texture == null) == (section == null)) throw new ArgumentException("Give a texture or a section, not both");
+            var entry = pkg.Entry(archive) is { Kind: "mdl" } e ? e : throw new ArgumentException($"{archive} is not a model archive of this package");
+            var model = pkg.FindModel(entry.Leaf, modelName) ?? throw new KeyNotFoundException($"No model {modelName} in {entry.Leaf}");
+            var container = ZedContainer.FromBytes(entry.Data);
+            int start = CharacterMesh.StartOffset(container, model.NodeIndex)
+                ?? throw new ArgumentException($"{modelName} is not a skinned character mesh (no {modelName}_START)");
+            var nodes = container.Nodes;
+            byte[] payload = nodes[model.NodeIndex].Data;
+            uint endWord = BitConverter.ToUInt32(payload, start);
+            int count = (int)(endWord & 0xFFFF);
+            if (start + 16 + count * 16 > payload.Length) throw new InvalidDataException($"{modelName}: its chain runs past the payload");
+
+            // Tags by section: a cnt tag (id 1) opens one.
+            var sections = new List<(string Texture, List<int> Tags)>();
+            for (int t = 1; t <= count; t++)
+            {
+                int o = start + t * 16;
+                if ((BitConverter.ToUInt32(payload, o) >> 28 & 7) == 1)
+                    sections.Add((ReadName(payload, BitConverter.ToInt32(payload, o + 4)), new List<int>()));
+                if (sections.Count > 0) sections[^1].Tags.Add(t);
+            }
+            var picked = Enumerable.Range(0, sections.Count)
+                .Where(i => section != null ? i == section : sections[i].Texture.Equals(texture!.Trim(), StringComparison.OrdinalIgnoreCase)).ToList();
+            if (picked.Count == 0)
+                throw new ArgumentException(section != null
+                    ? $"{modelName} has sections 0-{sections.Count - 1}"
+                    : $"{modelName} has no section drawn with {texture} (textures: {string.Join(", ", sections.Select(x => x.Texture).Distinct())})");
+            if (picked.Count == sections.Count) throw new InvalidOperationException($"That would remove every section of {modelName}");
+            removed = picked;
+
+            var drop = picked.SelectMany(i => sections[i].Tags).ToHashSet();
+            int newCount = count - drop.Count;
+            var data = new MemoryStream();
+            data.Write(payload, 0, start);
+            data.Write(BitConverter.GetBytes((endWord & 0xFFFF0000u) | (uint)newCount));
+            data.Write(payload, start + 4, 12);
+            for (int t = 1; t <= count; t++)
+                if (!drop.Contains(t)) data.Write(payload, start + t * 16, 16);
+
+            byte[] bytes = ZedSplice.Replace(entry.Data, model.NodeIndex, data.ToArray());
+            for (int i = model.NodeIndex + 1; i <= model.NodeIndex + (int)nodes[model.NodeIndex].Type && i < nodes.Count; i++)
+                if (nodes[i].Name == "ref_count") bytes = ZedSplice.Replace(bytes, i, WithInt(nodes[i].Data, newCount));
+            return new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase) { [entry.Leaf] = bytes };
+        }
+
+        private static string ReadName(byte[] b, int addr)
+        {
+            if (addr < 0 || addr >= b.Length) return string.Empty;
+            int end = addr;
+            while (end < b.Length && end - addr < 32 && b[end] != 0) end++;
+            return Encoding.Latin1.GetString(b, addr, end - addr);
         }
 
         private static short Q(float v) => (short)Math.Clamp((int)MathF.Round(v), short.MinValue, short.MaxValue);
