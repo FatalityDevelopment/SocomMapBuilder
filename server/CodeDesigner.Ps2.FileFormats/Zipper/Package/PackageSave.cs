@@ -128,6 +128,18 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             string upper = name.ToUpperInvariant();
             var files = leaves.Select(l => pkg.Entry(l) ?? throw new KeyNotFoundException($"No root entry {l}"))
                 .Select(e => (Name: ArchivePath(pkg, e, archiveDir), e.Data)).ToList();
+            return WriteCdb(files, name, outputDir, folderCard);
+        }
+
+        /// <summary>
+        /// Writes <paramref name="files"/> (archive path → bytes) as <c>&lt;outputDir&gt;/&lt;NAME&gt;.CDB</c> and, when
+        /// <paramref name="folderCard"/> is a PCSX2 folder memory card, installs it as
+        /// <c>BASCUS-97275&lt;NAME&gt;/&lt;NAME&gt;.CDB</c>. Returns the paths written.
+        /// </summary>
+        public static List<string> WriteCdb(IReadOnlyList<(string Name, byte[] Data)> files, string name, string outputDir, string? folderCard)
+        {
+            CheckPackName(name);
+            string upper = name.ToUpperInvariant();
             if (files.Count == 0) throw new InvalidOperationException("Nothing to pack");
             byte[] cdb = BuildCdb(files);
             var written = new List<string>();

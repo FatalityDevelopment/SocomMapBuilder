@@ -151,6 +151,36 @@ namespace MapBuilder.Tests
         }
 
         [Fact]
+        public void Owning_a_list_unshares_its_items()
+        {
+            // Root ["a", ["x"], "b", ["x"]]: both value lists point at one atom, as retail tables share values.
+            byte[] pool = Encoding.ASCII.GetBytes("a\0b\0x\0");
+            var atoms = new List<(uint, uint)>
+            {
+                (0x0004_0004, 1 * 8),                      // 0 root: 4 items at 1
+                (0x03, 0), (0x0001_0004, 5 * 8),            // 1 "a", 2 [ -> 5 ]
+                (0x03, 2), (0x0001_0004, 5 * 8),            // 3 "b", 4 [ -> 5 ]
+                (0x03, 4),                                  // 5 "x"
+            };
+            int table = (0x0C + pool.Length + 3) / 4 * 4;
+            var data = new byte[table + atoms.Count * 8];
+            BitConverter.GetBytes(1u).CopyTo(data, 0);
+            BitConverter.GetBytes((uint)pool.Length).CopyTo(data, 4);
+            BitConverter.GetBytes((uint)table).CopyTo(data, 8);
+            pool.CopyTo(data, 0x0C);
+            for (int i = 0; i < atoms.Count; i++)
+            {
+                BitConverter.GetBytes(atoms[i].Item1).CopyTo(data, table + i * 8);
+                BitConverter.GetBytes(atoms[i].Item2).CopyTo(data, table + i * 8 + 4);
+            }
+            var doc = RdrDocument.Parse(data);
+            doc.SetString(doc.Own(4), "y");
+            doc = RdrDocument.Parse(doc.ToBytes());
+            Assert.Equal("x", doc.ValueOf(doc.Children(2).Single()));
+            Assert.Equal("y", doc.ValueOf(doc.Children(4).Single()));
+        }
+
+        [Fact]
         public void Duplicating_a_nested_list_leaves_the_rest_alone()
         {
             var doc = RdrDocument.Parse(Sample());

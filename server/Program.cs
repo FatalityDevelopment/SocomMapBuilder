@@ -63,8 +63,27 @@ app.MapPost("/mcp", ctx => mcp.Handle(ctx));
 app.MapGet("/mcp", () => Results.StatusCode(StatusCodes.Status405MethodNotAllowed));
 app.MapDelete("/mcp", () => Results.StatusCode(StatusCodes.Status405MethodNotAllowed));
 
-app.MapPost("/api/command", (CommandMessage command) =>
+// The body is read here rather than bound by the framework: a field of the wrong type (a number where a string is
+// expected) or a body over Kestrel's size limit would otherwise get a plain-text 400 / 413 that is never logged, and
+// the page could only say it cannot reach the server.
+app.MapPost("/api/command", async (HttpContext ctx) =>
 {
+    CommandMessage? command;
+    try
+    {
+        command = await ctx.Request.ReadFromJsonAsync<CommandMessage>();
+    }
+    catch (Exception ex) when (ex is System.Text.Json.JsonException or BadHttpRequestException)
+    {
+        string reason = ex.InnerException is System.Text.Json.JsonException inner ? inner.Message : ex.Message;
+        log.LogWarning("Unreadable /api/command request: {Reason}", reason);
+        return Results.Content(Responses.Error($"Unreadable request: {reason}"), "application/json");
+    }
+    if (command == null)
+    {
+        log.LogWarning("Empty /api/command request");
+        return Results.Content(Responses.Error("Empty request"), "application/json");
+    }
     if (!registry.TryGet(command.Command, out var handler) || handler == null)
     {
         return Results.Content(Responses.Error($"Unknown command '{command.Command}'"), "application/json");

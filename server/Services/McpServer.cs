@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace MapBuilder.Server.Services
 {
@@ -191,7 +192,7 @@ namespace MapBuilder.Server.Services
         // Tools that write disk or throw work away (the rest change only the in-memory session or the view).
         private static readonly HashSet<string> Destructive = new(StringComparer.Ordinal)
         {
-            "assets_save", "assets_close", "assets_entry", "assets_export", "package_edit", "weapons_create", "mapbuilder_command",
+            "assets_save", "assets_close", "assets_entry", "assets_export", "package_edit", "weapons_create", "weapons_pack", "mapbuilder_command",
             "assets_delete_prefab", "viewer_extract",
         };
 
@@ -221,8 +222,130 @@ namespace MapBuilder.Server.Services
                 type = "activity", id = callId, phase = result.IsError ? "error" : "done", tool = tool.Name, label = tool.Label, reason,
                 summary = result.Summary, ms = sw.ElapsedMilliseconds,
             });
+            if (tool.ReadOnly && !result.IsError)
+            {
+                // Showing what was read is a courtesy: it never fails the read.
+                try { ShowRead(tool.Name, args, result); }
+                catch (Exception ex) when (ex is JsonException or InvalidOperationException or KeyNotFoundException or ArgumentException or IOException) { }
+            }
             return result;
         }
+
+        /// <summary>
+        /// What a read looked at, brought forward in the page that shows it, so the user sees what the AI sees: the model it
+        /// described in the Model Editor, the texture it decoded or the record it read in the Asset Viewer, the map it read in
+        /// the Map Builder, the clip in the Animation Editor. Not forced: it moves the pages only while Follow AI is on.
+        /// (viewer_list / viewer_preview move the Asset Viewer themselves; edits follow through Changed.)
+        /// </summary>
+        private void ShowRead(string tool, JsonElement a, ToolResult result)
+        {
+            JsonElement? Answer()
+            {
+                foreach (var c in result.Content)
+                {
+                    var e = JsonSerializer.SerializeToElement(c);
+                    if (e.TryGetProperty("type", out var t) && t.GetString() == "text" && e.TryGetProperty("text", out var text))
+                    {
+                        try { return JsonDocument.Parse(text.GetString() ?? "").RootElement.Clone(); } catch (JsonException) { return null; }
+                    }
+                }
+                return null;
+            }
+            string? SessionPath() => Str(a, "session") is { } s && Status(s) is { } st && st.TryGetProperty("path", out var p) ? p.GetString() : null;
+            void Show(string page, string? path, object? model = null, object? focus = null) =>
+                _ui.Publish(new { type = "show", page, path, model, focus });
+            void Viewer(string path, int[] inner, bool open, JsonObject? extra = null)
+            {
+                var v = extra ?? new JsonObject();
+                v["path"] = path;
+                v["inner"] = new JsonArray(inner.Select(i => (JsonNode?)i).ToArray());
+                v["open"] = open;
+                _ui.Publish(new { type = "show", page = "viewer", path, focus = new { viewer = v } });
+            }
+
+            switch (tool)
+            {
+                case "assets_list_models":
+                    Show("models", SessionPath());
+                    break;
+                case "assets_describe_model":
+                case "assets_model_mesh":
+                {
+                    string? archive = Str(a, "archive") ?? (Answer() is { } d && d.TryGetProperty("archive", out var ar) ? ar.GetString() : null);
+                    Show("models", SessionPath(), archive != null ? new { archive, name = Str(a, "model") } : null);
+                    break;
+                }
+                case "assets_weapon_fx":
+                {
+                    // The weapon's model, when the answer names it.
+                    var d = Answer();
+                    string? model = d is { } x && x.TryGetProperty("model", out var m) && m.ValueKind == JsonValueKind.String ? m.GetString() : null;
+                    string? archive = d is { } y && y.TryGetProperty("archive", out var ar) && ar.ValueKind == JsonValueKind.String ? ar.GetString() : null;
+                    if (model != null && archive != null) Show("models", SessionPath(), new { archive, name = model });
+                    break;
+                }
+                case "assets_texture":
+                {
+                    // The texture in its TXR listing: the package (a loose one by its folder), the archive, the item.
+                    var d = Answer();
+                    string? ns = d is { } x && x.TryGetProperty("namespace", out var n) ? n.GetString() : null;
+                    if (SessionPath() is not { } pkg || ns == null) break;
+                    Viewer(ViewerPackage(pkg), Array.Empty<int>(), false,
+                        new JsonObject { ["archive"] = $"{ns.ToUpperInvariant()}_TXR.ZED", ["texture"] = Str(a, "texture") });
+                    break;
+                }
+                case "assets_list_textures":
+                case "assets_list_palettes":
+                    if (SessionPath() is { } listed) Viewer(ViewerPackage(listed), Array.Empty<int>(), true);
+                    break;
+                case "assets_map_scene":
+                case "assets_map_points":
+                case "assets_validate":
+                    Show("map", SessionPath());
+                    break;
+                case "assets_list_animations":
+                    Show("animations", SessionPath());
+                    break;
+                case "assets_animation":
+                    Show("animations", SessionPath(), null, new { clip = Str(a, "name") });
+                    break;
+                case "weapons_list":
+                case "package_inspect":
+                    if (Str(a, "path") is { } file) Viewer(Path.GetFullPath(file), Array.Empty<int>(), true);
+                    break;
+                case "fs_list":
+                    if (Answer() is { } folder && folder.TryGetProperty("path", out var fp) && fp.GetString() is { } dir) Viewer(dir, Array.Empty<int>(), true);
+                    break;
+                case "weapons_template":
+                    if (Str(a, "path") is { } zed) Show("models", Path.GetFullPath(zed), new { archive = Path.GetFileName(zed), name = Str(a, "weapon") });
+                    break;
+                case "weapons_texture":
+                {
+                    if (Str(a, "path") is not { } textureZed) break;
+                    string full = Path.GetFullPath(textureZed);
+                    var d = Answer();
+                    string? entry = d is { } x && x.TryGetProperty("textureEntry", out var te) ? te.GetString() : null;
+                    // Beside the model archive (its namespace's TXR) or inside it.
+                    string archive = d is { } y && y.TryGetProperty("textureNamespace", out var tn) && tn.GetString() is { } tns
+                        ? $"{tns.ToUpperInvariant()}_TXR.ZED" : Path.GetFileName(full);
+                    if (entry != null) Viewer(Path.GetDirectoryName(full)!, Array.Empty<int>(), false, new JsonObject { ["archive"] = archive, ["texture"] = entry });
+                    break;
+                }
+                case "weapons_definition":
+                {
+                    // The donor's record in the disc's weapon table.
+                    if (Answer() is not { } d || !d.TryGetProperty("run", out var run) || run.GetString() is not { } runDir) break;
+                    var focus = new JsonObject();
+                    if (d.TryGetProperty("atom", out var atom) && atom.ValueKind == JsonValueKind.Number) focus["atom"] = atom.GetInt32();
+                    Viewer(Path.Combine(runDir, "ZWEAPON.ZAR"), new[] { 0 }, false, focus);
+                    break;
+                }
+            }
+        }
+
+        // The viewer opens a loose package by its folder: a loose session's path (<folder>\<folder name>) is not on disk.
+        private static string ViewerPackage(string path) =>
+            File.Exists(path) || Directory.Exists(path) ? path : Path.GetDirectoryName(path) ?? path;
 
         /// <summary>
         /// The arguments against the tool's schema: no unknown names, required ones present (a non-empty reason
@@ -367,6 +490,7 @@ namespace MapBuilder.Server.Services
                 case "setAnimation":
                 case "setAnimationKey": return ("animations", null, null);
                 case "importModel":
+                case "newWeapon":
                 {
                     string? archive = result.ValueKind == JsonValueKind.Object && result.TryGetProperty("archive", out var ar) ? ar.GetString() : null;
                     string? name = result.ValueKind == JsonValueKind.Object && result.TryGetProperty("name", out var nm) ? nm.GetString() : null;
@@ -375,6 +499,42 @@ namespace MapBuilder.Server.Services
             }
             if (Str(op, "archive") is { } a && Str(op, "model") is { } model) return ("models", new { archive = a, name = model }, null);
             return (null, null, null);
+        }
+
+        // ui_show for a model: the page opens packages on its own, so wait for its state to have the model, or for the
+        // error it shows when the open failed (a missing path, a package it cannot read).
+        private async Task<ToolResult> ModelShown(string? path, string archive, string name)
+        {
+            for (int tries = 0; tries < 16; tries++)
+            {
+                await Task.Delay(500);
+                JsonElement state;
+                try { state = await _ui.Request("state", null, TimeSpan.FromSeconds(3)); }
+                catch (Exception ex) when (ex is TimeoutException or InvalidOperationException or TaskCanceledException) { continue; }
+                if (!state.TryGetProperty("pages", out var pages) || !pages.TryGetProperty("models", out var me) || me.ValueKind != JsonValueKind.Object) continue;
+                if (me.TryGetProperty("model", out var m) && m.ValueKind == JsonValueKind.Object
+                    && string.Equals(m.GetProperty("name").GetString(), name, StringComparison.Ordinal)
+                    && string.Equals(m.GetProperty("archive").GetString(), archive, StringComparison.OrdinalIgnoreCase)
+                    && SamePackage(me.TryGetProperty("path", out var pp) ? pp.GetString() : null, path))
+                    return ToolResult.Text($"Showing {name} in the Model Editor.", "models");
+                if (me.TryGetProperty("messageIsError", out var err) && err.ValueKind == JsonValueKind.True
+                    && me.TryGetProperty("message", out var msg) && msg.GetString() is { } text
+                    && (path == null || text.Contains(path, StringComparison.OrdinalIgnoreCase)))
+                    return ToolResult.Fail($"The Model Editor could not show {name}: {text}");
+            }
+            return ToolResult.Text($"Asked the Model Editor to show {name}; it has not opened it yet (ui_state shows what it has).", "models");
+        }
+
+        // The page's package is the one asked for: the same path, or for a loose package the same folder (its status path is
+        // <folder>\<folder name>; a request may name the folder, a file in it or that status path).
+        private static bool SamePackage(string? shown, string? requested)
+        {
+            if (requested == null) return true;
+            if (shown == null) return false;
+            if (string.Equals(shown, requested, StringComparison.OrdinalIgnoreCase)) return true;
+            static string? Folder(string p) => Directory.Exists(p) ? p.TrimEnd('\\', '/') : Path.GetDirectoryName(p);
+            return string.Equals(Folder(shown), Folder(requested), StringComparison.OrdinalIgnoreCase)
+                && !shown.EndsWith(".ZDB", StringComparison.OrdinalIgnoreCase) && !shown.EndsWith(".CDB", StringComparison.OrdinalIgnoreCase);
         }
 
         // ------------------------------------------------------------------ tools
@@ -576,10 +736,14 @@ namespace MapBuilder.Server.Services
                 "- transformVertices {archive, model, translate?, rotate? (degrees), scale?, pivot?, chunks?, vertices?, matrix?}\n" +
                 "- setVertices {archive, model, geometryOffset, vertices:[{i, position?, uv?, color?, normal?}]}\n" +
                 "- deleteFaces / duplicateFaces {archive, model, faces:{geometryOffset:[triangle…]}, …}\n" +
-                "- addMesh {archive, model, visual:\"N000_000\", texture, replace?, obj | primitive:{kind:cube|plane, size, center} | mesh}\n" +
+                "- addMesh {archive, model, visual:\"N000_000\", texture, replace?, shapes | obj | objPath | mesh | meshPath | primitive:{kind:cube|plane, size, center}}: " +
+                "shapes [{kind: lathe {profile:[[along,radius]]} | cylinder {start,end,radius,radiusEnd?} | ring {at,inner,outer,thickness?} | sphere {radius,scale?} | " +
+                "box {min,max,lean?}, material 0-7, axis? x|y|z (default x), center?, segments?, squash?, caps?}] build a mesh shaded from a materials skin (addTexture materials)\n" +
+                "- hideVisual {archive, model, visual} (it draws nothing; addMesh can fill it again)\n" +
+                "- newWeapon {template, name, archive?} (copies the weapon's visuals and GEO definition - LODs, firepoint, aimpoint - to reshape with addMesh / hideVisual)\n" +
                 "- importModel {source (package path) | sourceSession, archive, name, targetArchive?, newName?}\n" +
                 "- importTexture {source | sourceSession, name, sourceNamespace?, namespace?, newName?}\n" +
-                "- addTexture {name, pngBase64 | imagePath, namespace?, maxSize?} / addPalette {pngBase64 | imagePath, namespace?, is16?}\n" +
+                "- addTexture {name, pngBase64 | imagePath | materials:[{color:[r,g,b]}] (up to 8: a 64x64 shaded-strip skin for shapes), namespace?, maxSize?} / addPalette {pngBase64 | imagePath, namespace?, is16?}\n" +
                 "- setPalette {archive (a _PAL.ZED), id, rgba:[1024 numbers] | pngBase64 | imagePath} (256 colours in place, keeping the depth; " +
                 "the Asset Viewer opens the palette)\n" +
                 "- addAnimation / deleteAnimation / renameAnimation / setAnimation / setAnimationKey (package clips)\n" +
@@ -783,42 +947,77 @@ namespace MapBuilder.Server.Services
                 });
 
             AddSync("weapons_create", "Create weapon",
-                "Make a new weapon from a template in a weapon archive: re-encodes the template model (meshEdits: {perChunk: [{chunkIndex, " +
-                "transform?: {scaleX, scaleY, scaleZ, translateX, translateY, translateZ}, newTextureName?}]}), optionally a new texture " +
-                "from an image (imagePath or imageBase64, resampled to the template texture's size and depth, with a new palette when " +
-                "indexed), and adds them as new entries named newName (originals untouched), written to outputPath (default over the " +
-                "archive). Names already in the archive are refused. dryRun encodes everything and reports what it would add, writing " +
-                "nothing. Prefer an outputPath copy. Risk: writes disk.",
+                "Make a new weapon from a template in a weapon archive: copies the template model's record (visual chains included) " +
+                "with its vertices re-encoded (meshEdits: {perChunk: [{chunkIndex, transform?: {scaleX, scaleY, scaleZ, translateX, " +
+                "translateY, translateZ}, newTextureName?}]}) as newName, and optionally a new skin from an image (imagePath or " +
+                "imageBase64) at the size of the template texture it replaces (the one covering the most triangles), with a palette of " +
+                "its own. On the disc layout (WEAP_MDL.ZED with WEAP_TXR.ZED / WEAP_PAL.ZED beside it) the skin goes into the TXR / PAL " +
+                "pair and the model's texture fields point at it (textureEntryName, default <newName>.tif, no longer than the replaced " +
+                "name); the model archive is written to outputPath (default over the archive) and the changed TXR / PAL beside it. " +
+                "Originals are untouched; names in use are refused. The GEO definition (firepoint, aimpoint, LODs) is not made yet. " +
+                "dryRun reports every file and entry it would write, writing nothing. Prefer an outputPath copy. Risk: writes disk.",
                 false, Schema(new[] { "path", "template", "newName" }, P("path", "string", "The weapon archive (.ZED)."),
                     P("template", "string", "The template weapon model."), P("newName", "string", "The new model entry's name."),
                     P("outputPath", "string", "Where to write the archive (default over the source)."),
                     P("imagePath", "string", "Optional PNG / JPG for the new texture."), P("imageBase64", "string", "Optional PNG as base64 (instead of imagePath)."),
                     P("meshEdits", "object", "Optional {perChunk: [...]} model edits."),
-                    P("textureEntryName", "string", "Optional name for the new .tif entry."), P("paletteEntryName", "string", "Optional name for the new palette entry."),
+                    P("textureEntryName", "string", "Optional name for the new .tif (default <newName>.tif)."),
+                    P("paletteEntryName", "string", "Optional palette entry name; only for a texture inside the model archive (a PAL's palettes are texpal_<id>)."),
                     P("dryRun", "boolean", "Encode and check, writing nothing.")), a =>
                 {
-                    string path = Str(a, "path") ?? throw new ArgumentException("\"path\" is required");
-                    string template = Str(a, "template") ?? throw new ArgumentException("\"template\" is required");
                     string? edits = a.TryGetProperty("meshEdits", out var me) && me.ValueKind == JsonValueKind.Object ? me.GetRawText() : null;
-                    var (mok, mdata, merror) = Command(new CommandMessage { Command = "ZIPPER_ENCODE_WEAPON_MODEL", InputPath = path, WeaponName = template, WeaponMeshEditsJson = edits });
-                    if (!mok || mdata == null) return ToolResult.Fail(merror ?? "ZIPPER_ENCODE_WEAPON_MODEL failed");
-                    using var model = JsonDocument.Parse(mdata);
-                    string? tif = null, palette = null;
-                    if (Str(a, "imagePath") != null || Str(a, "imageBase64") != null)
+                    string path = Str(a, "path") ?? throw new ArgumentException("\"path\" is required");
+                    var result = FromCommand(new CommandMessage
                     {
-                        var (tok, tdata, terror) = Command(new CommandMessage { Command = "ZIPPER_ENCODE_WEAPON_TEXTURE", InputPath = path, WeaponName = template, WeaponImagePath = Str(a, "imagePath"), WeaponImageData = Str(a, "imageBase64") });
-                        if (!tok || tdata == null) return ToolResult.Fail(terror ?? "ZIPPER_ENCODE_WEAPON_TEXTURE failed");
-                        using var texture = JsonDocument.Parse(tdata);
-                        tif = texture.RootElement.GetProperty("tif").GetString();
-                        palette = texture.RootElement.TryGetProperty("palette", out var pal) && pal.ValueKind == JsonValueKind.String ? pal.GetString() : null;
-                    }
-                    return FromCommand(new CommandMessage
-                    {
-                        Command = "ZIPPER_WRITE_WEAPON", InputPath = path, OutputPath = Str(a, "outputPath"), WeaponNewName = Str(a, "newName"),
-                        WeaponModelData = model.RootElement.GetProperty("mdl").GetString(), WeaponTextureData = tif, WeaponPaletteData = palette,
+                        Command = "ZIPPER_CREATE_WEAPON", InputPath = path,
+                        WeaponName = Str(a, "template") ?? throw new ArgumentException("\"template\" is required"),
+                        OutputPath = Str(a, "outputPath"), WeaponNewName = Str(a, "newName"), WeaponMeshEditsJson = edits,
+                        WeaponImagePath = Str(a, "imagePath"), WeaponImageData = Str(a, "imageBase64"),
                         WeaponTextureEntryName = Str(a, "textureEntryName"), WeaponPaletteEntryName = Str(a, "paletteEntryName"), DryRun = Bool(a, "dryRun"),
                     }, d => d.TryGetProperty("outputPath", out var o) ? $"{Str(a, "newName")} → {Path.GetFileName(o.GetString())}"
                         : d.TryGetProperty("wouldWrite", out var w) ? $"dry run: {Str(a, "newName")} → {Path.GetFileName(w.GetString())}" : null!);
+                    // The new weapon is on disk, outside any session: the Model Editor opens the written archive on it.
+                    if (!result.IsError && !Bool(a, "dryRun"))
+                    {
+                        string written = Path.GetFullPath(Str(a, "outputPath") ?? path);
+                        _ui.Publish(new { type = "show", page = "models", path = written, model = new { archive = Path.GetFileName(written), name = Str(a, "newName") } });
+                    }
+                    return result;
+                });
+
+            AddSync("weapons_definition", "Read weapon definition",
+                "A weapon's definition as the game reads it: its zweapon.rdr fields (FireWait, Effective_Range, Maximum_Range, " +
+                "Ammo_Capacity, NumMags, Sound_Radius, Encumbrance, MaxFireMode, Muzzle_Velocity, ZoomMode0 ...), its ammo types' " +
+                "fields (ImpactDamage, Stun, Piercing, Explosion_Damage, Explosion_Radius) and the armory language entries showing " +
+                "it (short name, caption), from SOCOM II's RUN folder. Use it to pick a donor and values for weapons_pack. Risk: read-only.",
+                true, Schema(new[] { "donor" }, P("donor", "string", "A weapon: InternalName, DisplayName or ModelName (e.g. F57, Model 18, glock18)."),
+                    P("socom2Run", "string", "SOCOM II's RUN folder (default: the first drive that has it).")),
+                a => FromCommand(new CommandMessage { Command = "ASSET_WEAPON_DEFINITION", AssetJson = a.GetRawText() }, _ => Str(a, "donor")!));
+
+            AddSync("weapons_pack", "Pack custom weapon",
+                "Package a session's weapon (e.g. one made with newWeapon + addMesh shapes) as one memory-card pack <PACK>.CDB that " +
+                "takes over a donor weapon: RUN\\MP\\<PACK>\\ WEAP_* (the model, its GEO definition, textures, palettes), HUDX_* (a " +
+                "128x32 HUD icon drawn from the model), ZWEAPON.ZAR (the disc's weapon table with the donor pointed at the model and " +
+                "icon, its name / description and stats set; ammo values go to the donor's own copy of its ammo type) and, when a text " +
+                "changes, UIMNLOC.ZAR (the armory's short name, caption and given language keys). Written to outputDir (default " +
+                "Documents/CodeDesigner/Exports) with the archives loose beside it; folderCard installs it on a PCSX2 folder card. " +
+                "Loading it in game needs the loader code (not part of the pack). dryRun builds everything and writes nothing. Risk: writes disk.",
+                false, Schema(new[] { "session", "model", "donor", "pack" }, session,
+                    P("model", "string", "The session's weapon model."), P("donor", "string", "The weapon it takes over (weapons_definition shows one)."),
+                    P("pack", "string", "Pack name: m + up to 6 letters/digits (mrgun)."),
+                    P("name", "string", "Display name (also the armory's short name)."), P("caption", "string", "Armory caption (default: <KIND>: <DESCRIPTION>)."),
+                    P("description", "string", "Description (default: the name in capitals)."),
+                    P("stats", "object", "Weapon fields to set: {FireWait, Effective_Range, Maximum_Range, Ammo_Capacity, NumMags, Sound_Radius, Encumbrance, MaxFireMode, Muzzle_Velocity, ZoomMode0, RecoilPct ...}."),
+                    P("ammo", "object", "Damage on the weapon's own ammo: {ImpactDamage, Stun, Piercing, Explosion_Damage, Explosion_Radius}."),
+                    P("texts", "object", "Other language keys to rewrite: {\"_1225_SealPistolHasMags_MSG\": \"...\"}."),
+                    P("icon", "boolean", "Draw the HUD icon (default true)."), P("outputDir", "string", "Where the pack goes."),
+                    P("folderCard", "string", "A PCSX2 folder memory card to install into."), P("socom2Run", "string", "SOCOM II's RUN folder."),
+                    P("dryRun", "boolean", "Build and report, writing nothing.")), a =>
+                {
+                    var args = System.Text.Json.Nodes.JsonNode.Parse(a.GetRawText())!.AsObject();
+                    args.Remove("session"); args.Remove("reason");
+                    return FromCommand(new CommandMessage { Command = "ASSET_WEAPON_PACK", AssetSession = Session(a), AssetJson = args.ToJsonString() },
+                        d => d.TryGetProperty("pack", out var p) ? $"{(Bool(a, "dryRun") ? "dry run: " : "")}{p.GetString()}.CDB" : null!);
                 });
 
             // ── the app
@@ -847,20 +1046,24 @@ namespace MapBuilder.Server.Services
                     return ToolResult.Text(JsonSerializer.Serialize(new { pages = _ui.ClientCount, state = data }, Json), "read");
                 });
 
-            AddSync("ui_show", "Show page",
+            Add("ui_show", "Show page",
                 "Bring a page to the front, optionally opening a package (by session or path) and a model there: map (Map Builder), models " +
-                "(Model Editor, with archive + model), animations (Animation Editor), viewer (Asset Viewer). Risk: read-only.",
+                "(Model Editor, with archive + model), animations (Animation Editor), viewer (Asset Viewer). For a model it waits until the " +
+                "Model Editor has it open and fails with the page's own error when it could not open it. Risk: read-only.",
                 true, Schema(new[] { "page" }, E("page", "map, models, animations or viewer.", "map", "models", "animations", "viewer"), P("session", "string", "Optional session to show."),
                     P("path", "string", "Optional package path (instead of session)."), P("archive", "string", "Model Editor: the model's archive."),
-                    P("model", "string", "Model Editor: the model.")), a =>
+                    P("model", "string", "Model Editor: the model.")), async a =>
                 {
                     string page = Str(a, "page") ?? throw new ArgumentException("\"page\" is required");
                     if (page is not ("map" or "models" or "animations" or "viewer")) throw new ArgumentException("page is map, models, animations or viewer");
                     string? path = Str(a, "path");
                     if (path == null && Str(a, "session") is { } sid) path = Status(sid) is { } st && st.TryGetProperty("path", out var p) ? p.GetString() : throw new ArgumentException($"No session '{sid}'");
-                    object? model = Str(a, "archive") is { } ar && Str(a, "model") is { } m ? new { archive = ar, name = m } : null;
+                    string? archive = Str(a, "archive"), name = Str(a, "model");
+                    object? model = archive != null && name != null ? new { archive, name } : null;
                     _ui.Publish(new { type = "show", page, path, model, force = true });
-                    return ToolResult.Text(_ui.ClientCount > 0 ? $"Showing {page}." : "No page is open; nothing shown.", page);
+                    if (_ui.ClientCount == 0) return ToolResult.Text("No page is open; nothing shown.", page);
+                    if (page != "models" || model == null) return ToolResult.Text($"Showing {page}.", page);
+                    return await ModelShown(path, archive!, name!);
                 });
 
             AddSync("ui_focus", "Focus item",
