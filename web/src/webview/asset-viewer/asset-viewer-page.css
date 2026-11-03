@@ -84,7 +84,8 @@
 .av-rdr-caret { width: 10px; color: var(--me-muted); }
 .av-rdr-key { color: #9cdcfe; }
 .av-rdr-val.t-string { color: #ce9178; }
-.av-rdr-val.t-number { color: #b5cea8; }
+.av-rdr-val.t-int, .av-rdr-val.t-float { color: #b5cea8; }
+.av-rdr-uses { font-size: 10px; margin-left: -4px; }
 
 /* Right: the inspector */
 .av-inspector { display: flex; flex-direction: column; }
@@ -118,11 +119,13 @@
 .av-rdr-actions { display: none; gap: 2px; margin-left: 6px; }
 .av-rdr-row:hover .av-rdr-actions { display: inline-flex; }
 .av-rdr-actions .lm-row-btn { padding: 0 5px; line-height: 16px; }
-.av-edit-table td { vertical-align: middle; }
-.av-edit-table .me-input { width: 140px; }
+.av-edit-table td { vertical-align: middle; padding-right: 6px; }
 .av-num { width: 64px; }
-.av-vec { display: table-cell; }
-.av-vec .av-num + .av-num { margin-left: 3px; }
+.av-edit-table .me-input { width: 120px; }
+.av-vec { display: flex; align-items: center; gap: 3px; }
+.av-vec + .av-vec { margin-top: 2px; }
+.av-vec-label { width: 28px; font-size: 11px; }
+.av-row-actions { min-width: 110px; }
 .av-text-edit { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .av-textarea { resize: none; border: none; outline: none; background: transparent; color: inherit; width: 100%; box-sizing: border-box; }
 .av-hex-main { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
@@ -131,3 +134,4 @@
 .av-patch-bytes { flex: 1; }
 .av-patch-bytes .me-input { flex: 1; width: 100%; }
 .av-form { display: flex; flex-direction: column; gap: 6px; max-width: 560px; }
+.av-badge-btn { background: none; font: inherit; font-size: 11px; cursor: pointer; }

@@ -107,17 +107,19 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.RDR
             return -1;
         }
 
-        /// <summary>The tree from the root (atom 0) for the page: [atom, type, value, children?], each atom once.</summary>
+        /// <summary>The tree from the root (atom 0) for the page: [atom, type, value, children?]. Lists may share items
+        /// (retail files point many lists at one block): a shared value shows wherever it is used, a list already shown
+        /// comes back as [atom, "shared", count] so the tree stays finite.</summary>
         public object Tree()
         {
             var seen = new HashSet<int>();
             object Node(int a)
             {
-                if (!seen.Add(a)) return new object[] { a, "cycle", null! };
                 byte t = TypeOf(a);
-                return t == List
-                    ? new object[] { a, "list", CountOf(a), Children(a).Select(Node).ToList() }
-                    : new object[] { a, t switch { Int => "int", Float => "float", String => "string", _ => $"0x{t:X2}" }, ValueOf(a) ?? Atom(a).Value };
+                if (t != List)
+                    return new object[] { a, t switch { Int => "int", Float => "float", String => "string", _ => $"0x{t:X2}" }, ValueOf(a) ?? Atom(a).Value };
+                if (!seen.Add(a)) return new object[] { a, "shared", CountOf(a) };
+                return new object[] { a, "list", CountOf(a), Children(a).Select(Node).ToList() };
             }
             return _atoms.Count == 0 ? new object[] { 0, "list", 0, new List<object>() } : Node(0);
         }

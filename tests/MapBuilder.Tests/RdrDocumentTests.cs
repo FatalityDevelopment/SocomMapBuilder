@@ -85,13 +85,15 @@ namespace MapBuilder.Tests
             {
                 Assert.True(data.SequenceEqual(RdrDocument.Parse(data).ToBytes()), $"{name} did not save back unchanged");
                 var doc = RdrDocument.Parse(data);
-                int list = Enumerable.Range(0, doc.AtomCount).FirstOrDefault(a => a > 0 && doc.TypeOf(a) == RdrDocument.List && doc.CountOf(a) > 0 && doc.ParentOf(a) >= 0, -1);
-                if (list > 0)
+                // A list item that is itself a list (the deepest copy), else any list item.
+                var lists = Enumerable.Range(0, doc.AtomCount).Where(a => doc.TypeOf(a) == RdrDocument.List && doc.Children(a).Any()).ToList();
+                int parent = lists.FirstOrDefault(l => doc.Children(l).Any(c => doc.TypeOf(c) == RdrDocument.List && doc.CountOf(c) > 0), lists.FirstOrDefault(-1));
+                int item = parent < 0 ? -1 : doc.Children(parent).OrderByDescending(c => doc.TypeOf(c) == RdrDocument.List && doc.CountOf(c) > 0).First();
+                if (item > 0)
                 {
-                    int last = doc.FirstChild(list) + doc.CountOf(list) - 1;
-                    var before = RdrShape.Shape(RdrFile.Parse(data).BuildTree());
-                    doc.Duplicate(last);
-                    Assert.NotNull(RdrFile.Parse(doc.ToBytes()).BuildTree());
+                    string expected = Values(doc, 0, parent, item);
+                    doc.Duplicate(item);
+                    Assert.True(expected == Values(RdrDocument.Parse(doc.ToBytes()), 0), $"{name}: duplicating atom {item} changed more than its list");
                 }
                 checkedFiles++;
             }
@@ -136,6 +138,43 @@ namespace MapBuilder.Tests
                 else if (ext is ".ZED" or ".ZAR") Check(file, File.ReadAllBytes(file));
             }
             Assert.True(differ.Count == 0, $"{differ.Count} of {count} archives splice wrong: {string.Join(", ", differ.Take(8))}");
+        }
+
+        // The tree's values from an atom (no atom numbers), optionally with one more copy of `extra` in list `grow`.
+        private static string Values(RdrDocument doc, int atom, int grow = -1, int extra = -1, int depth = 0)
+        {
+            if (depth > 64) return "…";
+            if (doc.TypeOf(atom) != RdrDocument.List) return $"{doc.TypeOf(atom)}:{doc.ValueOf(atom)}";
+            var items = doc.Children(atom).Select(c => Values(doc, c, grow, extra, depth + 1)).ToList();
+            if (atom == grow) items.Add(Values(doc, extra, grow, extra, depth + 1));
+            return "[" + string.Join(",", items) + "]";
+        }
+
+        [Fact]
+        public void Duplicating_a_nested_list_leaves_the_rest_alone()
+        {
+            var doc = RdrDocument.Parse(Sample());
+            string expected = Values(doc, 0, 0, 3);
+            doc.Duplicate(3);
+            Assert.Equal(expected, Values(RdrDocument.Parse(doc.ToBytes()), 0));
+        }
+
+        [Fact]
+        public void Disc_sounds_rdr_duplicates_a_group_exactly()
+        {
+            string? disc = Environment.GetEnvironmentVariable("MAPBUILDER_DISC");
+            string zar = Path.Combine(disc ?? "", "RUN", "SOUNDRDR.ZAR");
+            if (string.IsNullOrEmpty(disc) || !File.Exists(zar)) return;
+            var doc = RdrDocument.Parse(ZedContainer.FromBytes(File.ReadAllBytes(zar)).Nodes[0].Data);
+            // GROUPS: root › [0] › [3] › [21], a list of two five-field lists.
+            int groups = doc.Children(doc.Children(0).First()).ElementAt(3);
+            int item = doc.Children(groups).ElementAt(21);
+            // A new string first: the pool grows and the atom table moves.
+            doc.SetFromText(doc.Children(groups).ElementAt(6), "BRAVO_SPEX");
+            doc = RdrDocument.Parse(doc.ToBytes());
+            string expected = Values(doc, 0, groups, item);
+            doc.Duplicate(item);
+            Assert.Equal(expected, Values(RdrDocument.Parse(doc.ToBytes()), 0));
         }
 
         private static IEnumerable<(string, byte[])> DiscRdrs(string root)

@@ -2,9 +2,9 @@
 // a text editor, a byte patcher and the icon.sys form. Each change is one VIEWER_EDIT (or ASSET_EDIT for points),
 // so it has the session's undo / redo and is written by Edit › Save changes.
 
-import { useEffect, useMemo, useState, type KeyboardEvent } from 'react';
+import { createContext, useContext, useEffect, useMemo, useState, type KeyboardEvent } from 'react';
 import type { AssetViewerLogic } from './asset-viewer-page';
-import type { MpsPoint, Preview, RdrTree } from './viewer-client';
+import { RDR_ROOT, type MpsPoint, type Preview, type RdrTree } from './viewer-client';
 
 type C = AssetViewerLogic;
 
@@ -28,33 +28,65 @@ const isField = (n: RdrTree): n is [number, 'list', number, RdrTree[]] =>
 
 const shown = (n: RdrTree) => n[1] === 'string' ? String(n[2]) : n[1] === 'float' ? String(Number(n[2])) : String(n[2]);
 
+const settable = (n: RdrTree) => n[1] === 'int' || n[1] === 'float' || n[1] === 'string';
+
+// How many places use each atom: retail files point many lists at one shared block, so one change shows in each.
+const Uses = createContext<ReadonlyMap<number, number>>(new Map());
+
+function countUses(tree: RdrTree): Map<number, number> {
+  const uses = new Map<number, number>();
+  const stack: RdrTree[] = [tree];
+  while (stack.length) {
+    const n = stack.pop()!;
+    uses.set(n[0], (uses.get(n[0]) ?? 0) + 1);
+    if (n[1] === 'list') { stack.push(...(n as [number, 'list', number, RdrTree[]])[3]); }
+  }
+  return uses;
+}
+
+/** A value's editor, noting when other places share the atom. */
+function RdrValue({ c, node, editable }: { c: C; node: RdrTree; editable: boolean }) {
+  const n = useContext(Uses).get(node[0]) ?? 1;
+  const shared = n > 1 ? `Shared: used in ${n} places, a change shows in each. ` : '';
+  return (
+    <>
+      <EditableValue className={`av-rdr-val t-${node[1]}`} value={shown(node)} editable={editable && settable(node)} title={`${node[1]}. ${shared}`} onCommit={t => void c.setRdrValue(node[0], t)} />
+      {n > 1 && <span className="lm-muted av-rdr-uses" title={shared}>×{n}</span>}
+    </>
+  );
+}
+
 // Lists past this many items show the rest on request.
 const PAGE = 400;
 
+function toggleOpen(c: C, key: string): void {
+  const next = new Set(c.rdrOpen());
+  if (next.has(key)) { next.delete(key); } else { next.add(key); }
+  c.rdrOpen.set(next);
+}
+
 export function RdrEditor({ c, p }: { c: C; p: Extract<Preview, { type: 'rdr' }> }) {
   const editable = c.canEditInPlace() && !c.editBusy();
+  const uses = useMemo(() => countUses(p.tree), [p.tree]);
   return (
     <div className="av-scroll av-mono av-rdr">
-      {editable && <div className="lm-muted av-rdr-help">Click a value to change it. Hover an item for ⧉ duplicate and ✕ remove. Edit › Undo takes a change back.</div>}
-      <RdrRow c={c} node={p.tree} label={p.name} depth={0} editable={editable} inList={false} />
+      {editable && <div className="lm-muted av-rdr-help">Click a value to change it (×N: shared by N places, which all change). Hover an item for ⧉ duplicate and ✕ remove. Edit › Undo takes a change back.</div>}
+      <Uses.Provider value={uses}>
+        <RdrRow c={c} node={p.tree} label={p.name} path={RDR_ROOT} depth={0} editable={editable} inList={false} />
+      </Uses.Provider>
     </div>
   );
 }
 
-function RdrRow({ c, node, label, depth, editable, inList }: { c: C; node: RdrTree; label: string; depth: number; editable: boolean; inList: boolean }) {
+function RdrRow({ c, node, label, path, depth, editable, inList }: { c: C; node: RdrTree; label: string; path: string; depth: number; editable: boolean; inList: boolean }) {
   const [more, setMore] = useState(false);
   const atom = node[0];
-  const key = String(atom);
-  const open = c.rdrOpen().has(key);
-  const toggle = () => {
-    const next = new Set(c.rdrOpen());
-    if (open) { next.delete(key); } else { next.add(key); }
-    c.rdrOpen.set(next);
-  };
+  const open = c.rdrOpen().has(path);
+  const toggle = () => toggleOpen(c, path);
   const actions = editable && inList && (
     <span className="av-rdr-actions">
       <button className="lm-row-btn" title="Duplicate (added after the list's last item)" onClick={e => { e.stopPropagation(); void c.duplicateRdr(atom); }}>⧉</button>
-      <button className="lm-row-btn lm-danger-btn" title="Remove from the list" onClick={e => { e.stopPropagation(); void c.removeRdr(atom); }}>✕</button>
+      <button className="lm-row-btn lm-danger-btn" title="Remove from the list" onClick={e => { e.stopPropagation(); void c.removeRdr(atom, path); }}>✕</button>
     </span>
   );
 
@@ -66,19 +98,19 @@ function RdrRow({ c, node, label, depth, editable, inList }: { c: C; node: RdrTr
       return (
         <div className="av-rdr-row" style={{ paddingLeft: depth * 14 + 16 }}>
           {name}<span className="av-rdr-sep">:</span>
-          <EditableValue className={`av-rdr-val t-${valueNode[1]}`} value={shown(valueNode)} editable={editable} title={`${valueNode[1]}. `} onCommit={t => void c.setRdrValue(valueNode[0], t)} />
+          {valueNode[1] === 'shared' ? <SharedList node={valueNode} /> : <RdrValue c={c} node={valueNode} editable={editable} />}
           {actions}
         </div>
       );
     }
-    return <RdrList c={c} node={valueNode as [number, 'list', number, RdrTree[]]} labelNode={name} depth={depth} editable={editable} actions={actions} toggleKey={String(valueNode[0])} />;
+    return <RdrList c={c} node={valueNode as [number, 'list', number, RdrTree[]]} labelNode={name} path={path} depth={depth} editable={editable} actions={actions} />;
   }
 
   if (node[1] !== 'list') {
     return (
       <div className="av-rdr-row" style={{ paddingLeft: depth * 14 + 16 }}>
         <span className="av-rdr-key">{label}</span>
-        <EditableValue className={`av-rdr-val t-${node[1]}`} value={shown(node)} editable={editable && ['int', 'float', 'string'].includes(node[1])} title={`${node[1]}. `} onCommit={t => void c.setRdrValue(atom, t)} />
+        {node[1] === 'shared' ? <SharedList node={node} /> : <RdrValue c={c} node={node} editable={editable} />}
         {actions}
       </div>
     );
@@ -93,21 +125,22 @@ function RdrRow({ c, node, label, depth, editable, inList }: { c: C; node: RdrTr
         <span className="lm-muted">[{children.length}]</span>
         {actions}
       </div>
-      {open && list.map((ch, i) => <RdrRow key={ch[0]} c={c} node={ch} label={`[${i}]`} depth={depth + 1} editable={editable} inList />)}
+      {open && list.map((ch, i) => <RdrRow key={ch[0]} c={c} node={ch} label={`[${i}]`} path={`${path}/${i}`} depth={depth + 1} editable={editable} inList />)}
       {open && !more && children.length > PAGE && <button className="lm-row-btn" style={{ marginLeft: (depth + 1) * 14 }} onClick={() => setMore(true)}>Show all {children.length}</button>}
     </>
   );
 }
 
+// A list shown elsewhere in the tree (lists may share a block of items).
+function SharedList({ node }: { node: RdrTree }) {
+  return <span className="lm-muted" title={`Atom #${node[0]}: the same list as one shown earlier; edit it there.`}>[{node[2]}] shared list</span>;
+}
+
 // A field whose value is a list: the field's name on the branch row.
-function RdrList({ c, node, labelNode, depth, editable, actions, toggleKey }: { c: C; node: [number, 'list', number, RdrTree[]]; labelNode: JSX.Element; depth: number; editable: boolean; actions: false | JSX.Element; toggleKey: string }) {
+function RdrList({ c, node, labelNode, path, depth, editable, actions }: { c: C; node: [number, 'list', number, RdrTree[]]; labelNode: JSX.Element; path: string; depth: number; editable: boolean; actions: false | JSX.Element }) {
   const [more, setMore] = useState(false);
-  const open = c.rdrOpen().has(toggleKey);
-  const toggle = () => {
-    const next = new Set(c.rdrOpen());
-    if (open) { next.delete(toggleKey); } else { next.add(toggleKey); }
-    c.rdrOpen.set(next);
-  };
+  const open = c.rdrOpen().has(path);
+  const toggle = () => toggleOpen(c, path);
   const children = node[3];
   return (
     <>
@@ -117,7 +150,7 @@ function RdrList({ c, node, labelNode, depth, editable, actions, toggleKey }: { 
         <span className="lm-muted">[{children.length}]</span>
         {actions}
       </div>
-      {open && children.slice(0, more ? children.length : PAGE).map((ch, i) => <RdrRow key={ch[0]} c={c} node={ch} label={`[${i}]`} depth={depth + 1} editable={editable} inList />)}
+      {open && children.slice(0, more ? children.length : PAGE).map((ch, i) => <RdrRow key={ch[0]} c={c} node={ch} label={`[${i}]`} path={`${path}/${i}`} depth={depth + 1} editable={editable} inList />)}
       {open && !more && children.length > PAGE && <button className="lm-row-btn" style={{ marginLeft: (depth + 1) * 14 }} onClick={() => setMore(true)}>Show all {children.length}</button>}
     </>
   );
@@ -127,6 +160,8 @@ function RdrList({ c, node, labelNode, depth, editable, actions, toggleKey }: { 
 
 const num = (v: string) => Number(v.trim());
 const allFinite = (v: number[]) => v.every(Number.isFinite);
+// Six significant digits keep the fields short; a field left as shown keeps its exact value (see MapRow's apply).
+const short = (v: number) => String(Number(v.toPrecision(6)));
 
 export function MpsEditor({ c, p }: { c: C; p: Extract<Preview, { type: 'mps' }> }) {
   const editable = c.canEditInPlace() && !c.editBusy();
@@ -134,7 +169,7 @@ export function MpsEditor({ c, p }: { c: C; p: Extract<Preview, { type: 'mps' }>
     <div className="av-scroll">
       <div className="me-card-title">AI maps</div>
       <table className="av-table av-edit-table">
-        <thead><tr><th>Name</th><th>Grid</th><th>Min X Y Z</th><th>Max X Y Z</th><th>Cell scale X / Z</th><th /></tr></thead>
+        <thead><tr><th>Name</th><th>Grid</th><th>Bounds and cell scale (X Y Z)</th><th /></tr></thead>
         <tbody>{p.maps.map((m, i) => <MapRow key={m.offset} c={c} index={i} map={m} editable={editable} />)}</tbody>
       </table>
       <div className="lm-muted me-note">The grid size is fixed: the cells after each header depend on it.</div>
@@ -153,19 +188,26 @@ export function MpsEditor({ c, p }: { c: C; p: Extract<Preview, { type: 'mps' }>
 }
 
 function MapRow({ c, index, map, editable }: { c: C; index: number; map: Extract<Preview, { type: 'mps' }>['maps'][number]; editable: boolean }) {
-  const initial = useMemo(() => ({ name: map.name, min: map.min.map(String), max: map.max.map(String), scale: map.scale.map(String) }), [map]);
+  const initial = useMemo(() => ({ name: map.name, min: map.min.map(short), max: map.max.map(short), scale: map.scale.map(short) }), [map]);
   const [d, setD] = useState(initial);
   useEffect(() => setD(initial), [initial]);
   const changed = JSON.stringify(d) !== JSON.stringify(initial);
-  const vec = (k: 'min' | 'max' | 'scale') => d[k].map((v, j) => (
-    <input key={j} className="me-num av-num" value={v} disabled={!editable} onChange={e => setD({ ...d, [k]: d[k].map((x, n) => n === j ? e.target.value : x) })} />
-  ));
+  const vec = (k: 'min' | 'max' | 'scale', label: string) => (
+    <div className="av-vec">
+      <span className="lm-muted av-vec-label">{label}</span>
+      {d[k].map((v, j) => (
+        <input key={j} className="me-num av-num" value={v} title={String(map[k][j])} disabled={!editable} onChange={e => setD({ ...d, [k]: d[k].map((x, n) => n === j ? e.target.value : x) })} />
+      ))}
+    </div>
+  );
   const apply = () => {
     const fields: { name?: string; min?: number[]; max?: number[]; scale?: number[] } = {};
     if (d.name !== initial.name) { fields.name = d.name.trim(); }
     for (const k of ['min', 'max', 'scale'] as const) {
-      const v = d[k].map(num);
-      if (d[k].join() !== initial[k].join()) { if (!allFinite(v)) { c.say(`${k}: numbers only`, true); return; } fields[k] = v; }
+      if (d[k].join() === initial[k].join()) { continue; }
+      const v = d[k].map((x, j) => x === initial[k][j] ? map[k][j] : num(x));
+      if (!allFinite(v)) { c.say(`${k}: numbers only`, true); return; }
+      fields[k] = v;
     }
     void c.setMap(index, fields);
   };
@@ -173,10 +215,8 @@ function MapRow({ c, index, map, editable }: { c: C; index: number; map: Extract
     <tr>
       <td><input className="me-input" value={d.name} maxLength={31} disabled={!editable} onChange={e => setD({ ...d, name: e.target.value })} /></td>
       <td>{map.width} × {map.height}</td>
-      <td className="av-vec">{vec('min')}</td>
-      <td className="av-vec">{vec('max')}</td>
-      <td className="av-vec">{vec('scale')}</td>
-      <td>{editable && changed && <><button className="lm-tool-btn av-primary" onClick={apply}>Apply</button> <button className="lm-row-btn" onClick={() => setD(initial)}>Revert</button></>}</td>
+      <td>{vec('min', 'Min')}{vec('max', 'Max')}{vec('scale', 'Cell')}</td>
+      <td className="av-row-actions">{editable && changed && <><button className="lm-tool-btn av-primary" onClick={apply}>Apply</button> <button className="lm-row-btn" onClick={() => setD(initial)}>Revert</button></>}</td>
     </tr>
   );
 }
@@ -210,7 +250,7 @@ function PointRow({ c, point, editable }: { c: C; point: MpsPoint; editable: boo
       <td><input className="me-num av-num" value={d.x} disabled={!editable} onChange={e => setD({ ...d, x: e.target.value })} /></td>
       <td><input className="me-num av-num" value={d.z} disabled={!editable} onChange={e => setD({ ...d, z: e.target.value })} /></td>
       <td className="lm-muted">{point.cellX}, {point.cellZ}</td>
-      <td>{editable && changed && <><button className="lm-tool-btn av-primary" onClick={apply}>Apply</button> <button className="lm-row-btn" onClick={() => setD(initial)}>Revert</button></>}</td>
+      <td className="av-row-actions">{editable && changed && <><button className="lm-tool-btn av-primary" onClick={apply}>Apply</button> <button className="lm-row-btn" onClick={() => setD(initial)}>Revert</button></>}</td>
     </tr>
   );
 }
@@ -219,16 +259,19 @@ function PointRow({ c, point, editable }: { c: C; point: MpsPoint; editable: boo
 
 export function TextEditor({ c, p }: { c: C; p: Extract<Preview, { type: 'text' }> }) {
   const editable = c.canEditInPlace() && !p.truncated;
-  const [draft, setDraft] = useState(p.text);
-  useEffect(() => setDraft(p.text), [p.text]);
-  const changed = draft !== p.text;
+  // A textarea hands back \n line breaks; the file keeps its own (SYSTEM.CNF and the .CNFs use \r\n).
+  const crlf = p.text.includes('\r\n');
+  const base = useMemo(() => p.text.replace(/\r\n/g, '\n'), [p.text]);
+  const [draft, setDraft] = useState(base);
+  useEffect(() => setDraft(base), [base]);
+  const changed = draft !== base;
   return (
     <div className="av-text-edit">
       {editable && (
         <div className="av-image-bar">
-          <button className="lm-tool-btn av-primary" disabled={!changed || c.editBusy()} onClick={() => void c.setText(draft)}>Apply</button>
-          <button className="lm-row-btn" disabled={!changed} onClick={() => setDraft(p.text)}>Revert</button>
-          <span className="lm-muted">{changed ? 'Changed (not applied)' : 'Plain ASCII text'}</span>
+          <button className="lm-tool-btn av-primary" disabled={!changed || c.editBusy()} onClick={() => void c.setText(crlf ? draft.replace(/\r?\n/g, '\r\n') : draft)}>Apply</button>
+          <button className="lm-row-btn" disabled={!changed} onClick={() => setDraft(base)}>Revert</button>
+          <span className="lm-muted">{changed ? 'Changed (not applied)' : `Plain ASCII text${crlf ? ' · CRLF' : ''}`}</span>
         </div>
       )}
       <textarea className="av-scroll av-mono av-textarea" value={draft} readOnly={!editable} spellCheck={false} onChange={e => setDraft(e.target.value)} />

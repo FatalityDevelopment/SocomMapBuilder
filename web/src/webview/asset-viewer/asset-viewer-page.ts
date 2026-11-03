@@ -14,7 +14,7 @@ import { loadMapModels } from '../zipper-core/map-models';
 import type { Lighting, Shading, ViewPreset, ViewportCore } from '../zipper-core/viewport-core';
 import type { ModelTexturePixels } from '../zipper-core/texture-pixels';
 import * as api from './viewer-client';
-import type { EditStatus, ItemKind, Listing, Place, Preview, ViewerItem } from './viewer-client';
+import { RDR_ROOT, type EditStatus, type ItemKind, type Listing, type Place, type Preview, type ViewerItem } from './viewer-client';
 
 export type Stage = 'empty' | 'loading' | 'model' | 'map' | 'clip' | 'image' | 'palette' | 'audio' | 'movie' | 'rdr' | 'mps' | 'text' | 'hex' | 'program' | 'iconsys' | 'summary' | 'error';
 type ViewportKind = 'model' | 'map' | 'clip';
@@ -43,6 +43,11 @@ function loadPlace(): Place | null {
 }
 function savePlace(p: Place): void {
   try { localStorage.setItem(LAST_PLACE, JSON.stringify({ path: p.path, inner: p.inner })); } catch { /* per-viewer convenience only */ }
+}
+
+/** A menu whose items are worked out each time it is drawn. */
+function liveMenu(id: string, label: string, items: () => MenuItem[]): Menu {
+  return { id, label, get items() { return items(); } };
 }
 
 export class AssetViewerLogic {
@@ -76,6 +81,8 @@ export class AssetViewerLogic {
   readonly editSession = signal<string | null>(null);
   readonly editStatus = signal<EditStatus | null>(null);
   readonly editBusy = signal(false);
+  // Other packages holding unsaved edits (one navigated away from, or one an editor changed).
+  readonly unsavedElsewhere = signal<EditStatus[]>([]);
   // 3D previews.
   readonly viewportKind = signal<ViewportKind | null>(null);
   readonly shading = signal<Shading>('textured');
@@ -88,8 +95,8 @@ export class AssetViewerLogic {
   readonly clipPlaying = signal(false);
   readonly clipTime = signal(0);
   readonly clipDuration = signal(0);
-  // RDR trees: expanded paths.
-  readonly rdrOpen = signal<ReadonlySet<string>>(new Set(['0']));
+  // RDR trees: expanded rows, by path of list indices ("r/0/3").
+  readonly rdrOpen = signal<ReadonlySet<string>>(new Set([RDR_ROOT]));
 
   readonly shadings: Array<{ id: Shading; label: string }> = [
     { id: 'textured', label: 'Textured' }, { id: 'solid', label: 'Solid' }, { id: 'wireframe', label: 'Wire' },
@@ -124,15 +131,18 @@ export class AssetViewerLogic {
         { label: 'Reload', action: () => void this.reload(), shortcut: 'F5', disabled: () => !this.listing() },
       ],
     },
-    {
-      id: 'edit', label: 'Edit', items: [
-        { label: 'Undo', action: () => void this.undo(), shortcut: 'Ctrl+Z', disabled: () => !this.editStatus()?.canUndo },
-        { label: 'Redo', action: () => void this.redo(), shortcut: 'Ctrl+Y', disabled: () => !this.editStatus()?.canRedo },
-        { label: '', separator: true },
-        { label: 'Save changes…', action: () => void this.saveEdits(), shortcut: 'Ctrl+S', disabled: () => !this.editStatus()?.dirty.length },
-        { label: 'Replace picture from image…', action: () => void this.replaceImage(), disabled: () => !this.canReplaceImage() },
-      ],
-    },
+    liveMenu('edit', 'Edit', () => [
+      { label: 'Undo', action: () => void this.undo(), shortcut: 'Ctrl+Z', disabled: () => !this.editStatus()?.canUndo },
+      { label: 'Redo', action: () => void this.redo(), shortcut: 'Ctrl+Y', disabled: () => !this.editStatus()?.canRedo },
+      { label: '', separator: true },
+      { label: 'Save changes…', action: () => void this.saveEdits(), shortcut: 'Ctrl+S', disabled: () => !this.editStatus()?.dirty.length },
+      { label: 'Replace picture from image…', action: () => void this.replaceImage(), disabled: () => !this.canReplaceImage() },
+      // Packages with unsaved edits elsewhere: going there makes their edits the ones Undo / Save act on.
+      ...this.unsavedElsewhere().flatMap((st, i) => [
+        ...(i === 0 ? [{ label: '', separator: true }] : []),
+        { label: `Go to ${fileName(st.path)} (${st.dirty.length} unsaved)`, action: () => void this.navigate({ path: st.path, inner: [] }).catch(() => undefined) },
+      ]),
+    ]),
     {
       id: 'go', label: 'Go', items: [
         { label: 'Back', action: () => void this.back(), shortcut: 'Alt+Left', disabled: () => !this.canBack() },
@@ -376,7 +386,7 @@ export class AssetViewerLogic {
         this.movieNote.set('');
         this.setStage('movie', p);
         return;
-      case 'rdr': if (!this.keepRdrOpen) { this.rdrOpen.set(new Set(['0'])); } this.setStage('rdr', p); return;
+      case 'rdr': if (!this.keepRdrOpen) { this.rdrOpen.set(new Set([RDR_ROOT])); } this.setStage('rdr', p); return;
       case 'iconsys': this.setStage('iconsys', p); return;
       case 'mps': this.setStage('mps', p); return;
       case 'text': this.setStage('text', p); return;
@@ -729,14 +739,25 @@ export class AssetViewerLogic {
     this.selected.set(again);
     this.keepRdrOpen = true;
     try { await this.showPreview(again); } finally { this.keepRdrOpen = false; }
+    void this.refreshUnsaved();
   }
 
   private async followEditSession(session: string | null): Promise<void> {
     if (session === this.editSession() && session) { return; }
     this.editSession.set(session);
     this.editStatus.set(null);
+    void this.refreshUnsaved();
     if (!session) { return; }
     try { this.editStatus.set(await this.clientFor(session).client.status() as unknown as EditStatus); } catch { this.editSession.set(null); }
+  }
+
+  /** The other sessions with unsaved edits; called after a listing and after each edit, undo, redo and save. */
+  async refreshUnsaved(): Promise<void> {
+    try {
+      const all = await api.sessions();
+      const here = this.editSession();
+      this.unsavedElsewhere.set(all.filter((st): st is EditStatus => !!st.session && st.session !== here && !!st.path && Array.isArray(st.dirty) && st.dirty.length > 0));
+    } catch { /* the badge is a convenience; the edits stay in their sessions */ }
   }
 
   async undo(): Promise<void> { await this.stepHistory(true); }
@@ -771,13 +792,32 @@ export class AssetViewerLogic {
       const r = await client.save({ mode: 'zdb', outputPath: target });
       this.editStatus.set(await client.status() as unknown as EditStatus);
       this.say(`Saved ${r.leaves.join(', ')} → ${r.written.join(', ')}`);
+      void this.refreshUnsaved();
     } catch (err) { this.say(`Save: ${errText(err)}`, true); }
   }
 
   // RDR
   setRdrValue(atom: number, text: string): Promise<boolean> { return this.applyEdit({ op: 'rdrSet', atom, value: text }); }
   duplicateRdr(atom: number): Promise<boolean> { return this.applyEdit({ op: 'rdrDuplicate', atom }); }
-  removeRdr(atom: number): Promise<boolean> { return this.applyEdit({ op: 'rdrRemove', atom }); }
+  async removeRdr(atom: number, path: string): Promise<boolean> {
+    // The removed row's later siblings move up one: their open branches move with them.
+    const cut = path.lastIndexOf('/');
+    const parent = path.slice(0, cut);
+    const at = Number(path.slice(cut + 1));
+    const before = this.rdrOpen();
+    const after = new Set<string>();
+    for (const key of before) {
+      if (!key.startsWith(`${parent}/`)) { after.add(key); continue; }
+      const rest = key.slice(parent.length + 1);
+      const slash = rest.indexOf('/');
+      const i = Number(slash < 0 ? rest : rest.slice(0, slash));
+      if (i < at) { after.add(key); } else if (i > at) { after.add(`${parent}/${i - 1}${slash < 0 ? '' : rest.slice(slash)}`); }
+    }
+    this.rdrOpen.set(after);
+    const ok = await this.applyEdit({ op: 'rdrRemove', atom });
+    if (!ok) { this.rdrOpen.set(before); }
+    return ok;
+  }
 
   // AI maps: the header through VIEWER_EDIT; points through the package session's setPoint (as the Map Builder does).
   setMap(map: number, fields: { name?: string; min?: number[]; max?: number[]; scale?: number[] }): Promise<boolean> {

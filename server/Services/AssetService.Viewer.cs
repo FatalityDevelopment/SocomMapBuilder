@@ -302,6 +302,7 @@ namespace MapBuilder.Server.Services
                 try { count = d.EnumerateFileSystemInfos().Count(); } catch (UnauthorizedAccessException) { }
                 items.Add(new { name = d.Name, kind = "folder", size = 0L, detail = $"{count} item{(count == 1 ? "" : "s")}", path = d.FullName, inner = Array.Empty<int>() });
             }
+            var edited = Sessions.Values.FirstOrDefault(x => x.OpenPath.Equals(Path.TrimEndingDirectorySeparator(dir), StringComparison.OrdinalIgnoreCase) && (x.Dirty.Count > 0 || x.Undo.Count > 0 || x.Redo.Count > 0));
             foreach (var f in info.GetFiles().OrderBy(f => f.Name, StringComparer.OrdinalIgnoreCase))
             {
                 byte[] head = Array.Empty<byte>();
@@ -313,9 +314,10 @@ namespace MapBuilder.Server.Services
                 }
                 catch (IOException) { }
                 catch (UnauthorizedAccessException) { }
-                items.Add(new { name = f.Name, kind = KindOf(f.Name, head), size = f.Length, path = f.FullName, inner = Array.Empty<int>(), editable = LooseEditable(f.FullName) });
+                // Files edited in the folder's session list their edited size.
+                long size = edited?.Package.Entry(f.Name)?.Data.Length ?? f.Length;
+                items.Add(new { name = f.Name, kind = KindOf(f.Name, head), size, path = f.FullName, inner = Array.Empty<int>(), editable = LooseEditable(f.FullName) });
             }
-            var edited = Sessions.Values.FirstOrDefault(x => x.OpenPath.Equals(Path.TrimEndingDirectorySeparator(dir), StringComparison.OrdinalIgnoreCase) && (x.Dirty.Count > 0 || x.Undo.Count > 0 || x.Redo.Count > 0));
             return new { path = dir, inner = Array.Empty<int>(), name = info.Name, kind = "folder", size = 0L, session = (string?)null, package = (string?)null, crumbs = Crumbs(dir, Array.Empty<int>()), items, editable = false, editSession = edited?.Id, editPackage = dir };
         }
 

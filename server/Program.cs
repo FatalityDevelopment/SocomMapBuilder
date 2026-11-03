@@ -7,7 +7,6 @@ var registry = new CommandRegistry();
 new ZipperAssetService().Register(registry);
 new ZipperWeaponsService().Register(registry);
 new ZipperFileFormatsService().Register(registry);
-new ViewerService().Register(registry);
 new FileSystemService().Register(registry);
 new PackageFilesService().Register(registry);
 // The pages' event stream, and the MCP endpoint an AI drives the same sessions through (the pages follow along).

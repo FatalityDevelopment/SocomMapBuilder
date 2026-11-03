@@ -49,6 +49,10 @@ export type Fact = [string, string];
 /** An RDR atom: [atom, 'list', count, children] or [atom, 'int' | 'float' | 'string' | other, value]. */
 export type RdrTree = [number, 'list', number, RdrTree[]] | [number, string, string | number];
 
+/** The RDR tree's root row. Rows are keyed by their path of list indices ("r/0/3"): a duplicate (added at the list's
+ *  end) and value edits leave those alone; a remove shifts the later siblings (AssetViewerLogic.removeRdr). */
+export const RDR_ROOT = 'r';
+
 export interface MpsPoint { name: string; team: number; kind: string; x: number; z: number; cellX: number; cellZ: number }
 
 export type Preview = { name: string; facts: Fact[] } & (
@@ -88,6 +92,11 @@ export function convertMovie(path: string): Promise<{ url: string; size: number;
 }
 
 export interface EditStatus { session: string; path: string; isZdb: boolean; revision: number; dirty: string[]; canUndo: string | null; canRedo: string | null }
+
+/** Every open asset session's status (the viewer's and the editors'), to find unsaved edits in other packages. */
+export function sessions(): Promise<Array<Partial<EditStatus>>> {
+  return command('ASSET_SESSIONS');
+}
 
 /** One VIEWER_EDIT on a file or record (rdrSet, rdrDuplicate, rdrRemove, mpsMap, text, bytes, image, iconSys). */
 export function edit(place: Place, op: Record<string, unknown>): Promise<{ session: string; package: string; result: unknown; status: EditStatus }> {

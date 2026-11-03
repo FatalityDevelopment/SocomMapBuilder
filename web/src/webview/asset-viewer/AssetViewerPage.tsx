@@ -75,6 +75,11 @@ export function AssetViewerPage() {
             {c.editStatus()!.dirty.length ? `${c.editStatus()!.dirty.length} unsaved` : 'saved'} · rev {c.editStatus()!.revision}
           </span>
         )}
+        {c.unsavedElsewhere().length > 0 && (
+          <button className="me-badge me-badge-dirty av-badge-btn" title={`Unsaved edits in ${c.unsavedElsewhere().map(st => `${st.path} (${st.dirty.join(', ')})`).join('; ')}. Edit › Go to… opens one to save it.`} onClick={() => c.toggleMenu('edit')}>
+            +{c.unsavedElsewhere().length} elsewhere
+          </button>
+        )}
         {l?.session && <span className="me-session" title="Asset session the previews read (shared with the editors)">{l.session}</span>}
       </div>
 
