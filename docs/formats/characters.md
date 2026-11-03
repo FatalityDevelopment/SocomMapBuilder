@@ -68,6 +68,7 @@ Gear that should look soft and worn rather than cut from blocks uses the shapes'
 - triangle edges whose length changed outside 0.6–1.4×, worst per bone, with a position;
 - vertices whose weights don't sum to 1;
 - how far added gear reaches from the nearest body vertex (over 2.5 units is flagged as floating; a backpack stands out about 2).
+- the body's triangles and the added gear's (`bodyTriangles`, `addedTriangles`). Gear over twice the body is flagged: every player on screen draws it.
 
 `addCharacterMesh`, `scaleBones` and `transformCharacter` include the same check in their reply. On alban_ter01, the first hard-edged reshape reports a 2.97× stretch under the chin and 0.17× folds at the shoulders; the `scaleBones` version passes (1.24× / 0.72×).
 

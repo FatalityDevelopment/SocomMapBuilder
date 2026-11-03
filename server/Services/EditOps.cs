@@ -105,7 +105,9 @@ namespace MapBuilder.Server.Services
                 new[] { F("texture", "string", "The .tif to paint."), F("model", "string", "The model whose parts pick the places (MESH_seal_A_woodland_LO)."),
                     F("archive", "string", "The model's *_MDL.ZED (default: found by name)."),
                     Arr("regions", "object", "[{parts: [bone or visual names] | all: true, color: [r, g, b] 0-255, fill?: false (tint, keeping shading), strength?: 0-1 (default 1), " +
-                        "uv?: [u0, v0, u1, v1] (only there: part of a bone's area, such as the lower face; assets_uv_layout gives each part's bounds)}], applied in order."),
+                        "uv?: [u0, v0, u1, v1] (only there: part of a bone's area, such as the lower face; assets_uv_layout gives each part's bounds), " +
+                        "grit?: {weave?, grime?, wear?, stitch? 0-1 each, scale?: grime blotch size in pixels (12), seed?} (wear painted after the colour: nylon cross-hatch, dirt blotches, " +
+                        "scuffed lighter UV-island rims, a dashed seam inside them; color may be left out to only wear it)}], applied in order."),
                     F("namespace", "string", "TXR namespace to prefer (default the model's).") }),
             new("retexture", "Point a model's sections at another texture.", new[] { "archive", "model", "from", "to" },
                 new[] { Archive, Model, F("from", "string", "The texture now named."), F("to", "string", "The texture to name (must exist)."), F("visual", "string", "Only this visual.") }),

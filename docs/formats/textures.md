@@ -94,4 +94,11 @@ The palette is `texpal_<TEX0.CBP>`, looked up first in the texture's own namespa
   - A name the target already uses keeps the target's texture when the pixels match. Otherwise the copy is renamed with a same-length name.
 - **IDs.** New palette ids start from a block chosen per package (`1024 + 32 × hash(name) % 480`), above the disc's ids (≤ 594) and the character packs (600+).
 - **Where a model draws a texture** (`Package/TexturePaint.cs`). The renderer uploads the decoded RGBA rows top-down (`flipY` off) and samples at V' = 1 − V (`chunkGeometry` in viewport-core). So a UV lands on pixel (u·W, (1 − v)·H), wrapping. `assets_uv_layout` draws a model's triangles over a texture, tinted per body part: a character's heaviest bone per triangle, else the visual. It also lists each part's UV bounds. `paintTexture` colours those places per part. A tint scales the colour by each pixel's brightness against the region's mean, keeping shading and detail; `fill` replaces the colour. Masks grow by a pixel so filtering at a UV edge does not pull in the old colour. The result goes through `replaceTexture`. Confirmed in the Model Editor: SEAL A's sleeves painted red and jacket navy keep the vest's pockets and folds, with a clean edge at the shoulder. The sleeve strips run the texture's full height, so that test could not catch a V flip; the gloves (painted dark, drawn light) and the face map (neck along the top) did, and the mapping is (1 − v).
+- **Grit.** A `paintTexture` region's `grit` wears its pixels after the colour, which may be left out. Each layer is 0–1:
+  - `weave`: a fine nylon cross-hatch.
+  - `grime`: dark value-noise blotches about `scale` pixels across (default 12).
+  - `wear`: the region's rims, the edges of its UV islands, lightened and speckled: scuffed pouch corners and strap edges.
+  - `stitch`: a dashed seam two pixels inside the rim.
+
+  `seed` picks the pattern, so the same op paints the same pixels. Geometry gives gear its outline; this is the cheap part of looking used, at no triangle cost.
 - **Not yet in game.** New and copied textures decode correctly in the editors but have not all been tested in game. Runtime VRAM for map props is small, so large or numerous new textures may not all load.

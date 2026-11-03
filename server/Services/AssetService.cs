@@ -494,7 +494,8 @@ namespace MapBuilder.Server.Services
                 case "paintTexture":
                 {
                     // {texture, model, archive?, regions: [{parts?: [...], all?, color, fill?, strength?}], namespace?}: colour the
-                    // places the model draws the texture by body part (assets_uv_layout names them), keeping its shading unless fill.
+                    // places the model draws the texture by body part (assets_uv_layout names them), keeping its shading unless fill;
+                    // grit {weave, grime, wear, stitch, scale, seed} then wears it.
                     string tif = Str(a, "texture") ?? throw new ArgumentException("\"texture\" is required");
                     string model = Str(a, "model") ?? throw new ArgumentException("\"model\" (whose parts pick the places) is required");
                     if (!a.TryGetProperty("regions", out var rs) || rs.ValueKind != JsonValueKind.Array || rs.GetArrayLength() == 0)
@@ -506,8 +507,9 @@ namespace MapBuilder.Server.Services
                     var regions = new List<TexturePaint.Region>();
                     foreach (var r in rs.EnumerateArray())
                     {
+                        var grit = GritOf(r);
                         var color = Floats(r, "color") is { Length: 3 } c && c.All(x => x >= 0 && x <= 255) ? c.Select(x => (byte)MathF.Round(x)).ToArray()
-                            : throw new ArgumentException("regions[].color is [r, g, b], 0-255 each");
+                            : r.TryGetProperty("color", out _) || grit == null ? throw new ArgumentException("regions[].color is [r, g, b], 0-255 each (it may be left out when grit is given)") : null;
                         bool all = r.TryGetProperty("all", out var al) && al.ValueKind == JsonValueKind.True;
                         var labels = all ? known : r.TryGetProperty("parts", out var ps) && ps.ValueKind == JsonValueKind.Array
                             ? ps.EnumerateArray().Select(x => x.GetString() ?? "").ToHashSet(StringComparer.OrdinalIgnoreCase)
@@ -517,7 +519,7 @@ namespace MapBuilder.Server.Services
                         float strength = r.TryGetProperty("strength", out var st) ? Math.Clamp(Number(st, "regions[].strength"), 0, 1) : 1;
                         float[]? uv = Floats(r, "uv");
                         if (uv != null && (uv.Length != 4 || uv[0] > uv[2] || uv[1] > uv[3])) throw new ArgumentException("regions[].uv is [u0, v0, u1, v1] with u0 <= u1, v0 <= v1");
-                        regions.Add(new TexturePaint.Region(labels, color, r.TryGetProperty("fill", out var fl) && fl.ValueKind == JsonValueKind.True, strength, uv));
+                        regions.Add(new TexturePaint.Region(labels, color, r.TryGetProperty("fill", out var fl) && fl.ValueKind == JsonValueKind.True, strength, uv, grit));
                     }
                     string? ns = Str(a, "namespace") ?? pkg.TextureNamespace(m.Namespace);
                     var decoded = pkg.DecodeTexture(tif, ns) ?? throw new KeyNotFoundException($"Texture {tif} not found");
@@ -1145,6 +1147,16 @@ namespace MapBuilder.Server.Services
 
         private static int Int(JsonElement a, string name) =>
             a.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt32() : throw new ArgumentException($"\"{name}\" (a number) is required");
+
+        // paintTexture regions[].grit: {weave, grime, wear, stitch} 0-1 each, scale (grime blotch size, pixels), seed.
+        private static TexturePaint.Grit? GritOf(JsonElement r)
+        {
+            if (!r.TryGetProperty("grit", out var g)) return null;
+            if (g.ValueKind != JsonValueKind.Object) throw new ArgumentException("regions[].grit is {weave?, grime?, wear?, stitch?, scale?, seed?}");
+            float F(string n, float d = 0) => g.TryGetProperty(n, out var v) ? Math.Clamp(Number(v, $"grit.{n}"), 0, n == "scale" ? 256 : 1) : d;
+            return new TexturePaint.Grit(F("weave"), F("grime"), F("wear"), F("stitch"), F("scale", 12),
+                g.TryGetProperty("seed", out var sd) && sd.ValueKind == JsonValueKind.Number ? sd.GetInt32() : 0);
+        }
 
         private static float[]? Floats(JsonElement a, string name) =>
             a.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Array ? v.EnumerateArray().Select(x => x.GetSingle()).ToArray() : null;

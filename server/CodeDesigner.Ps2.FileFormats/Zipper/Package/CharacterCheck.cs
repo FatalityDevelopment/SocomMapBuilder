@@ -18,6 +18,9 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
         /// <summary>Added vertices further than this from every body vertex float off the body (a backpack stands out about 2).</summary>
         public const float MaxGap = 2.5f;
 
+        /// <summary>Added gear past this many times the body's triangles is flagged: every player on screen draws it.</summary>
+        public const float MaxGearShare = 2f;
+
         public sealed record Spot(string Bone, float Ratio, float[] At);
 
         public sealed class Report
@@ -32,6 +35,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             public List<string> AddedTextures { get; } = new();
             public int AddedVertices { get; set; }
             public float AddedGap { get; set; }
+            public int BodyTriangles { get; set; }
+            public int AddedTriangles { get; set; }
             public List<string> Warnings { get; } = new();
             public bool Ok => Warnings.Count == 0;
         }
@@ -68,7 +73,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
                         for (int k = 0; k < ModelMesh.SkinInfluences; k++) sum += c.SkinWeights[v * ModelMesh.SkinInfluences + k];
                         if (MathF.Abs(sum - 1) > 0.02f) r.BadWeights++;
                     }
-                if (!old.TryGetValue(c.GeometryOffset, out var o) || o.VertexCount != c.VertexCount) { added.Add(c); continue; }
+                if (!old.TryGetValue(c.GeometryOffset, out var o) || o.VertexCount != c.VertexCount) { added.Add(c); r.AddedTriangles += c.Triangles.Length / 3; continue; }
+                r.BodyTriangles += c.Triangles.Length / 3;
                 for (int v = 0; v < c.VertexCount; v++)
                 {
                     body.Add(new[] { c.Positions[v * 3], c.Positions[v * 3 + 1], c.Positions[v * 3 + 2] });
@@ -111,6 +117,9 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
                     "a seam or kink; reshape body parts with scaleBones thickness rather than a transform with a hard edge");
             if (r.BadWeights > 0) r.Warnings.Add($"{r.BadWeights} vertices' skin weights do not sum to 1");
             if (r.AddedGap > MaxGap) r.Warnings.Add($"added geometry reaches {r.AddedGap:0.0} units from the body: it may float off it");
+            if (r.BodyTriangles > 0 && r.AddedTriangles > MaxGearShare * r.BodyTriangles)
+                r.Warnings.Add($"added gear is {r.AddedTriangles} triangles, {r.AddedTriangles / (float)r.BodyTriangles:0.0}x the body's {r.BodyTriangles}: " +
+                    "keep rounding and subdivide for the pieces that show, and plain boxes for buckles and tabs");
             return r;
         }
 

@@ -83,7 +83,7 @@ namespace MapBuilder.Server.Services
                 model = now.Name, ok = r.Ok, warnings = r.Warnings,
                 worstStretch = Math.Round(r.WorstStretch, 2), worstFold = Math.Round(r.WorstFold, 2), changedVertices = r.ChangedVertices,
                 problems = r.Problems.Select(p => new { bone = p.Bone, ratio = Math.Round(p.Ratio, 2), at = p.At.Select(x => Math.Round(x, 2)) }),
-                badWeights = r.BadWeights, addedTextures = r.AddedTextures, addedVertices = r.AddedVertices, addedGap = Math.Round(r.AddedGap, 2),
+                badWeights = r.BadWeights, addedTextures = r.AddedTextures, addedVertices = r.AddedVertices, addedGap = Math.Round(r.AddedGap, 2), bodyTriangles = r.BodyTriangles, addedTriangles = r.AddedTriangles,
             };
         }
 

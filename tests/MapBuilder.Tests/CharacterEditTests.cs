@@ -414,6 +414,38 @@ namespace MapBuilder.Tests
         }
 
         [Fact]
+        public void Grit_scuffs_a_regions_rims_lighter_and_grimes_its_middle_the_same_way_every_time()
+        {
+            // A square UV island in a 64x64 texture, plain grey.
+            var a = new TexturePaint.Triangle("p", new[] { 0.1f, 0.1f, 0.9f, 0.1f, 0.9f, 0.9f });
+            var b = new TexturePaint.Triangle("p", new[] { 0.1f, 0.1f, 0.9f, 0.9f, 0.1f, 0.9f });
+            byte[] Paint(TexturePaint.Grit g)
+            {
+                byte[] rgba = Enumerable.Repeat((byte)128, 64 * 64 * 4).ToArray();
+                TexturePaint.Paint(rgba, 64, 64, new[] { a, b }, new[] { new TexturePaint.Region(new HashSet<string> { "p" }, null, Grit: g) });
+                return rgba;
+            }
+            var wear = Paint(new TexturePaint.Grit(Wear: 1));
+            int Px(int x, int y) => wear[(y * 64 + x) * 4];
+            Assert.Equal(128, Px(32, 32));                                                       // the middle is untouched
+            Assert.Equal(128, Px(2, 2));                                                         // outside the island too
+            Assert.Contains(Enumerable.Range(6, 52), x => Px(x, 6) > 140 || Px(x, 5) > 140);     // its top rim is lighter
+
+            // A second island laid over the left half (an atlas shared by many pouches) keeps its own rim, at u 0.5.
+            byte[] both = Enumerable.Repeat((byte)128, 64 * 64 * 4).ToArray();
+            var c = new TexturePaint.Triangle("p", new[] { 0.12f, 0.12f, 0.5f, 0.12f, 0.5f, 0.88f });
+            var d = new TexturePaint.Triangle("p", new[] { 0.12f, 0.12f, 0.5f, 0.88f, 0.12f, 0.88f });
+            TexturePaint.Paint(both, 64, 64, new[] { a, b, c, d }, new[] { new TexturePaint.Region(new HashSet<string> { "p" }, null, Grit: new TexturePaint.Grit(Wear: 1)) });
+            Assert.Contains(Enumerable.Range(20, 24), y => both[(y * 64 + 31) * 4] > 140 || both[(y * 64 + 32) * 4] > 140);
+
+            var grime = Paint(new TexturePaint.Grit(Grime: 1, Weave: 0.5f, Stitch: 1, Seed: 7));
+            var inside = Enumerable.Range(16, 32).SelectMany(y => Enumerable.Range(16, 32).Select(x => grime[(y * 64 + x) * 4])).ToList();
+            Assert.True(inside.Min() < 110 && inside.Distinct().Count() > 4, "grime and weave vary the middle");
+            Assert.Equal(grime, Paint(new TexturePaint.Grit(Grime: 1, Weave: 0.5f, Stitch: 1, Seed: 7)));
+            Assert.NotEqual(grime, Paint(new TexturePaint.Grit(Grime: 1, Weave: 0.5f, Stitch: 1, Seed: 8)));
+        }
+
+        [Fact]
         public void The_uv_layout_names_the_body_parts_a_skin_covers()
         {
             if (OpenMap() is not { } s) return;
