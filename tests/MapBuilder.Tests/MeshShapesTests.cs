@@ -159,6 +159,41 @@ namespace MapBuilder.Tests
         }
 
         [Fact]
+        public void Subdividing_a_rounded_box_smooths_it_keeps_it_closed_and_quadruples_its_triangles()
+        {
+            const string box = "{\"kind\":\"box\",\"min\":[-1,-1,-1],\"max\":[1,1,1],\"radius\":0.4";
+            var coarse = Build($"[{box}}}]");
+            var fine = Build($"[{box},\"subdivide\":1}}]");
+            Assert.Equal(4 * coarse.Triangles.Count, fine.Triangles.Count);
+            AssertClosed(fine);
+            AssertOutward(fine, new[] { 0f, 0, 0 });
+            // Smoothing pulls the corners in: nothing is further out than the coarse box reached.
+            float Far(MeshTopology.InputMesh m) => m.Positions.Max(p => MathF.Sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]));
+            Assert.True(Far(fine) < Far(coarse));
+            // A plain box's 90° edges are creases: subdivided, it is still the same cube.
+            var cube = Build("[{\"kind\":\"box\",\"min\":[0,0,0],\"max\":[1,1,1],\"material\":2,\"subdivide\":2}]");
+            Assert.Equal(12 * 16, cube.Triangles.Count);
+            Assert.All(cube.Positions, p => Assert.Contains(p, c => MathF.Abs(c) < 1e-4f || MathF.Abs(c - 1) < 1e-4f));
+            Assert.All(cube.Uvs, uv => Assert.Equal((8 * 2 + 4) / 64f, uv[0], 5));   // still material 2's strip
+            AssertClosed(cube);
+        }
+
+        [Fact]
+        public void Noise_roughens_a_surface_along_its_normals_without_opening_seams()
+        {
+            const string sphere = "{\"kind\":\"sphere\",\"center\":[0,0,0],\"radius\":1,\"segments\":16,\"uvRect\":[0,0,1,1]";
+            var rough = Build($"[{sphere},\"noise\":{{\"amount\":0.08,\"scale\":0.3,\"seed\":3}}}}]");
+            var radii = rough.Positions.Select(p => MathF.Sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2])).ToList();
+            Assert.All(radii, r => Assert.InRange(r, 0.91f, 1.09f));
+            Assert.True(radii.Max() - radii.Min() > 0.03f);
+            AssertClosed(rough);
+            // The same seed gives the same surface.
+            var again = Build($"[{sphere},\"noise\":{{\"amount\":0.08,\"scale\":0.3,\"seed\":3}}}}]");
+            Assert.Equal(rough.Positions.SelectMany(p => p), again.Positions.SelectMany(p => p));
+            Assert.Contains("subdivide", Assert.Throws<ArgumentException>(() => Build("[{\"kind\":\"box\",\"min\":[0,0,0],\"max\":[1,1,1],\"subdivide\":3}]")).Message);
+        }
+
+        [Fact]
         public void Bad_shapes_say_what_is_wrong()
         {
             Assert.Contains("profile", Assert.Throws<ArgumentException>(() => Build("[{\"kind\":\"lathe\"}]")).Message);

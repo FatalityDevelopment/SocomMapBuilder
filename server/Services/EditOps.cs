@@ -70,7 +70,7 @@ namespace MapBuilder.Server.Services
             Arr("shapes", "object", "[{kind: lathe {profile: [[along, radius]], caps?} | cylinder {start, end, radius, radiusEnd?, caps?} | ring {at, inner, outer, thickness?} | " +
                 "sphere {radius, scale?, rings?} | box {min, max, lean?, radius? (rounded edges), bevelSegments? (1-4), puff? (bulge the faces' middles: a stuffed pouch), divisions?, faceUv?: {\"-z\": rect, ...}} | " +
                 "strap {path: [[x, y, z]], width, thickness?, around?: [x, y, z] (wraps round it) | outward?: [x, y, z], steps? (curve pieces per span), caps?}, " +
-                "material (0-7), uvRect?: [u0, v0, u1, v1] (map into that rectangle of a painted texture instead of the material strip; v up), axis?: x|y|z (default x), center?, segments?, squash?: [u, w]}]."),
+                "material (0-7), uvRect?: [u0, v0, u1, v1] (map into that rectangle of a painted texture instead of the material strip; v up), subdivide?: 0-2 (smooth it, 4× triangles a level; edges sharper than crease?: 60° stay sharp), noise?: amount | {amount, scale?: 0.4, seed?} (wrinkles along the normals), axis?: x|y|z (default x), center?, segments?, squash?: [u, w]}]."),
             Vec("light", 3, "shapes: the light the shades are baked from (default [0.35, 0.85, 0.45])."),
             F("obj", "string", "OBJ text."), F("objPath", "string", "An OBJ file (instead of obj)."), F("yUp", "boolean", "OBJ is Y up (default true)."),
             F("scale", "number", "OBJ scale."), Vec("offset", 3, "OBJ offset."), F("primitive", "object", "{kind: cube | plane, size?, center?}."),

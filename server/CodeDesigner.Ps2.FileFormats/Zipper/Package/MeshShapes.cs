@@ -11,6 +11,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
     /// A shape with <c>uvRect</c> [u0, v0, u1, v1] maps into that rectangle of a painted texture instead (an atlas of
     /// webbing, stitched nylon, buckles): a box face, a strap's length or a lathe's unrolled side spans the rectangle,
     /// its top at v1 (the renderer draws v up: pixel row (1 − v)·H).
+    /// Any shape takes <c>subdivide</c> 1..2 (smoothed, creases over <c>crease</c> degrees kept) and <c>noise</c>
+    /// (displacement along the normals) to soften it: see <see cref="MeshRefine"/>.
     /// </summary>
     public static class MeshShapes
     {
@@ -34,6 +36,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
                 float[] center = Vec(s, "center", 3) ?? new float[3];
                 float[] squash = Vec(s, "squash", 2) ?? new[] { 1f, 1f };
                 b.Rect = Rect(s, "uvRect", index);
+                bool atlas = b.Rect != null || s.TryGetProperty("faceUv", out _);
+                int v0 = b.Mesh.Positions.Count, t0 = b.Mesh.Triangles.Count;
                 switch (kind)
                 {
                     case "lathe":
@@ -99,6 +103,11 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
                     default:
                         throw new ArgumentException($"shapes[{index}].kind '{kind}' is not lathe, cylinder, sphere, box, ring or strap");
                 }
+                int subdivide = Int(s, "subdivide") ?? 0;
+                if (subdivide is < 0 or > 2) throw new ArgumentException($"shapes[{index}].subdivide is 0..2 (each level is 4× the triangles)");
+                var noise = NoiseOf(s, index);
+                if (subdivide > 0 || noise != null)
+                    b.Refine(v0, t0, subdivide, Num(s, "crease") ?? 60, noise, atlas ? null : b.Reshade);
                 index++;
             }
             return b.Mesh;
@@ -164,6 +173,31 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
                 int k = Math.Min(Shades - 1, (int)(shade * (Shades - 1)));
                 Mesh.Uvs.Add(new[] { (StripWidth * mat + StripWidth / 2f) / Size, (2 * k + 1) / (float)Size });
                 return Mesh.Positions.Count - 1;
+            }
+
+            // The strip uv for a new normal, keeping the material's column.
+            public float[] Reshade(float[] n, float[] uv)
+            {
+                float shade = Math.Max(0, n[0] * _light[0] + n[1] * _light[1] + n[2] * _light[2]) * 0.8f + 0.2f;
+                int k = Math.Min(Shades - 1, (int)(shade * (Shades - 1)));
+                return new[] { uv[0], (2 * k + 1) / (float)Size };
+            }
+
+            /// <summary>Subdivides and roughens the shape built from vertex v0 and triangle t0 on (<see cref="MeshRefine"/>).</summary>
+            public void Refine(int v0, int t0, int subdivide, float crease, MeshRefine.Noise? noise, Func<float[], float[], float[]>? reshade)
+            {
+                var part = new MeshTopology.InputMesh();
+                for (int i = v0; i < Mesh.Positions.Count; i++) { part.Positions.Add(Mesh.Positions[i]); part.Normals.Add(Mesh.Normals[i]); part.Uvs.Add(Mesh.Uvs[i]); }
+                for (int i = t0; i < Mesh.Triangles.Count; i++) { var (a, b, c) = Mesh.Triangles[i]; part.Triangles.Add((a - v0, b - v0, c - v0)); }
+                part = MeshRefine.Refine(part, subdivide, crease, noise, reshade);
+                Mesh.Positions.RemoveRange(v0, Mesh.Positions.Count - v0);
+                Mesh.Normals.RemoveRange(v0, Mesh.Normals.Count - v0);
+                Mesh.Uvs.RemoveRange(v0, Mesh.Uvs.Count - v0);
+                Mesh.Triangles.RemoveRange(t0, Mesh.Triangles.Count - t0);
+                Mesh.Positions.AddRange(part.Positions);
+                Mesh.Normals.AddRange(part.Normals);
+                Mesh.Uvs.AddRange(part.Uvs);
+                foreach (var (a, b, c) in part.Triangles) Mesh.Triangles.Add((a + v0, b + v0, c + v0));
             }
 
             // Winding from the geometry: each triangle faces the way its vertex normals point.
@@ -462,6 +496,16 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
         }
 
         // An atlas rectangle [u0, v0, u1, v1] in 0..1 (u0 < u1, v0 < v1).
+        // noise: amount, or {amount, scale (wrinkle size, default 0.4), seed}.
+        private static MeshRefine.Noise? NoiseOf(JsonElement s, int index)
+        {
+            if (!s.TryGetProperty("noise", out var v)) return null;
+            if (v.ValueKind == JsonValueKind.Number) return new(v.GetSingle(), 0.4f, index);
+            if (v.ValueKind != JsonValueKind.Object || Num(v, "amount") is not { } amount)
+                throw new ArgumentException($"shapes[{index}].noise is an amount or {{amount, scale?, seed?}}");
+            return new(amount, Num(v, "scale") ?? 0.4f, Int(v, "seed") ?? index);
+        }
+
         private static float[]? Rect(JsonElement e, string n, int index)
         {
             var r = Vec(e, n, 4);
