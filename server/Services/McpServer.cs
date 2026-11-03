@@ -29,7 +29,8 @@ namespace MapBuilder.Server.Services
             "user has open), read with assets_map_scene / assets_list_models / assets_describe_model, change with assets_edit " +
             "(undoable, in memory; dryRun previews an edit) and write with assets_save only when the user asks. assets_validate lints a map " +
             "and assets_history lists what undo would take back. Prefabs (assets_save_prefab, assets_list_prefabs, assets_edit placePrefab) " +
-            "reuse groups of props across maps. assets_edit placeInstance adds props and " +
+            "reuse groups of props across maps. assets_edit placeInstance adds props; newProp copies a prop to reshape (addTexture materials, " +
+            "addMesh shapes, hideVisual), fitBounds refits it, and placeInstance puts it in the map; " +
             "setPoint renames / retypes spawn points; fs_list finds packages; weapons_* builds weapons from a template archive; " +
             "package_* changes package files on disk. viewer_list / viewer_preview / viewer_edit browse and change any disc file or " +
             "archive record in place as the Asset Viewer does (RDR tables, AI maps, text, icons, GEO scene nodes, ZANIM effect scripts), " +
@@ -491,6 +492,7 @@ namespace MapBuilder.Server.Services
                 case "setAnimationKey": return ("animations", null, null);
                 case "importModel":
                 case "newWeapon":
+                case "newProp":
                 {
                     string? archive = result.ValueKind == JsonValueKind.Object && result.TryGetProperty("archive", out var ar) ? ar.GetString() : null;
                     string? name = result.ValueKind == JsonValueKind.Object && result.TryGetProperty("name", out var nm) ? nm.GetString() : null;

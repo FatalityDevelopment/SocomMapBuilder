@@ -140,6 +140,23 @@ namespace MapBuilder.Tests
         }
 
         [Fact]
+        public void NewProp_copies_a_prop_that_places_under_its_new_name()
+        {
+            var r = RoundTrip("TST_MDL.ZED", new { op = "newProp", template = "crate", name = "barrel" });
+            Assert.Equal("barrel", r.GetProperty("name").GetString());
+            _b.Edit(_s, new { op = "placeInstance", model = "barrel", position = new[] { 9f, 0, 19 }, name = "barrel_1" });
+            var placed = Instances("reference").Single(i => i.GetProperty("instance").GetString() == "barrel_1");
+            Assert.Equal("barrel", placed.GetProperty("model").GetString());
+        }
+
+        [Fact]
+        public void NewProp_refuses_a_name_the_scene_resolves_to_another_model()
+        {
+            Assert.Contains("resolves to the model crate", _b.EditFails(_s, new { op = "newProp", template = "tree", name = "crate_7" }));
+            Assert.Contains("already", _b.EditFails(_s, new { op = "newProp", template = "crate", name = "tree" }));
+        }
+
+        [Fact]
         public void PlaceInstance_requires_a_position()
         {
             Assert.Contains("position", _b.EditFails(_s, new { op = "placeInstance", model = "tree" }));

@@ -294,6 +294,30 @@ namespace MapBuilder.Server.Services
                     var visuals = pkg.FindModel(archive, template) is { } tm ? ZipperModelMesh.Build(pkg, tm).Chunks.Select(c => c.Visual).Distinct().ToList() : null;
                     return new { result, archive = made!.Archive, name = made.Model, geoArchive = made.GeoArchive, visuals, warnings = made.Warnings };
                 }
+                case "newProp":
+                {
+                    // {template, name, archive?}: newWeapon's copy for a map prop. Scene names resolve loosely, so the
+                    // new name must not resolve to a model already here (crate_2 would place crate).
+                    string template = Str(a, "template") ?? throw new ArgumentException("\"template\" (the prop to copy) is required");
+                    string name = (Str(a, "name") ?? throw new ArgumentException("\"name\" (the new prop) is required")).Trim();
+                    var tm = Str(a, "archive") is { } ar ? pkg.FindModel(ar, template) : pkg.Models().FirstOrDefault(m => m.Name == template);
+                    if (tm == null) throw new ArgumentException($"No model {template}{(Str(a, "archive") is { } ar2 ? " in " + ar2 : "")} (see assets_list_models)");
+                    if (tm.Kind is "weapon" or "character") throw new ArgumentException($"{template} is a {tm.Kind}; copy weapons with newWeapon");
+                    if (pkg.ResolveModel(name) is { } clash)
+                        throw new ArgumentException($"{name} resolves to the model {clash.Name} already in the package (scene names drop _<digits> and _LO); pick another name");
+                    PackageWeapons.Result? made = null;
+                    var result = ApplyEdit(s, Str(a, "label") ?? $"new prop {name} from {template}", p => (made = PackageWeapons.Create(p, tm.Archive, template, name)).Changed);
+                    var visuals = ZipperModelMesh.TryBuild(pkg, tm)?.Chunks.Select(c => c.Visual).Distinct().ToList();
+                    return new { result, archive = made!.Archive, name = made.Model, geoArchive = made.GeoArchive, visuals, warnings = made.Warnings };
+                }
+                case "fitBounds":
+                {
+                    string model = Str(a, "model") ?? throw new ArgumentException("\"model\" is required");
+                    float[] min = Array.Empty<float>(), max = Array.Empty<float>();
+                    int references = 0;
+                    var result = ApplyEdit(s, Str(a, "label") ?? $"fit bounds of {model}", p => PackageEdits.FitBounds(p, model, out min, out max, out references));
+                    return new { result, min, max, references };
+                }
                 case "importModel":
                 {
                     // {sourceSession | source (a package path), archive, name, targetArchive?, newName?}

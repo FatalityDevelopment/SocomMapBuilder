@@ -154,6 +154,62 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             return data;
         }
 
+        /// <summary>
+        /// Refits <paramref name="modelName"/>'s bounds to its geometry (model space, hidden visuals' zero-area
+        /// specks left out): its definition's root nparams and the nparams of every placed reference naming it, which
+        /// copy the definition's bounds (see <see cref="PlaceReference"/>). A reshaped model otherwise keeps its
+        /// template's box.
+        /// </summary>
+        public static Dictionary<string, byte[]> FitBounds(ZipperPackage pkg, string modelName, out float[] min, out float[] max, out int references)
+        {
+            var model = pkg.ResolveModel(modelName) is { } m && m.Name.Equals(modelName, StringComparison.OrdinalIgnoreCase) ? m
+                : throw new ArgumentException($"No model '{modelName}' in the package (see ASSET_LIST_MODELS)");
+            var def = pkg.FindDefinition(model) ?? throw new InvalidOperationException($"{model.Name} has no GEO definition to hold bounds");
+            var mesh = ZipperModelMesh.Build(pkg, model);
+            min = new[] { float.MaxValue, float.MaxValue, float.MaxValue };
+            max = new[] { float.MinValue, float.MinValue, float.MinValue };
+            foreach (var c in mesh.Chunks)
+            {
+                var p = c.Positions;
+                bool speck = true;
+                for (int i = 3; i < p.Length && speck; i++) speck = p[i] == p[i % 3];
+                if (speck) continue;
+                for (int i = 0; i < p.Length; i++)
+                {
+                    min[i % 3] = MathF.Min(min[i % 3], p[i]);
+                    max[i % 3] = MathF.Max(max[i % 3], p[i]);
+                }
+            }
+            if (min[0] > max[0]) throw new InvalidOperationException($"{model.Name} draws no geometry to fit");
+
+            var changed = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+            int placed = 0;
+            foreach (var geo in pkg.Entries.Where(e => e.Kind == "geo" && e.Namespace != null).ToList())
+            {
+                // nparams splices keep every record index, so one parse serves all the archive's edits.
+                byte[] bytes = geo.Data;
+                var scene = GeoScene.Parse(bytes);
+                var targets = new List<int>();
+                if (string.Equals(geo.Namespace, def.Namespace, StringComparison.OrdinalIgnoreCase) && def.Node.Child("nparams") is { } own)
+                    targets.Add(own.Index);
+                void Visit(GeoNode n)
+                {
+                    if (n.IsSceneNode && n.ModelReference.Length > 0 && n.Child("nparams") is { Data.Length: >= 22 * 4 } np
+                        && pkg.ResolveModel(n.ModelReference) is { } r && r.Archive == model.Archive && r.Name == model.Name)
+                    {
+                        targets.Add(np.Index);
+                        placed++;
+                    }
+                    foreach (var c in n.Children) Visit(c);
+                }
+                Visit(scene.Root);
+                foreach (int index in targets.Distinct()) bytes = GeoEdits.WithNodeParams(bytes, index, null, min, max, null, null);
+                if (targets.Count > 0) changed[geo.Leaf] = bytes;
+            }
+            references = placed;
+            return changed;
+        }
+
         public static Dictionary<string, byte[]> DeleteInstance(ZipperPackage pkg, string sceneNs, int geoIndex)
         {
             var (leaf, container, node) = SceneNode(pkg, sceneNs, geoIndex);
