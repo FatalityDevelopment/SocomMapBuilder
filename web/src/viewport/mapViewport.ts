@@ -27,7 +27,7 @@ export interface MapInstance {
   source: string | null;
 }
 
-export interface MapPointInfo { name: string; team: number; kind: string; x: number; z: number }
+export interface MapPointInfo { name: string; team: number; kind: string; x: number; y?: number | null; z: number }
 
 export interface MapModel { mesh: EditorMesh; textureNamespace: string | null }
 
@@ -412,13 +412,17 @@ export class MapViewport extends ViewportCore {
   private buildPoints(points: MapPointInfo[]): void {
     this.clearPoints();
     const height = Math.max(4, this.extent * 0.012);
-    const ground = this.content.children.filter(c => c.userData['layer'] === 'world');
+    // Without a height from the AI grid: the highest terrain or prop surface under the point (buildings stand in holes
+    // in the terrain), else the bottom of the map.
+    const ground = this.content.children.filter(c => c.userData['layer'] === 'world' || c.userData['layer'] === 'reference');
     const ray = new THREE.Raycaster();
     for (const p of points) {
-      // On the highest world surface under the point (cells hold no height).
-      ray.set(new THREE.Vector3(p.x, this.worldBox.isEmpty() ? 1000 : this.worldBox.max.y + 10, p.z), new THREE.Vector3(0, -1, 0));
-      const hit = ray.intersectObjects(ground, false)[0];
-      const y = hit ? hit.point.y : this.center.y;
+      let y = p.y;
+      if (y == null || !Number.isFinite(y)) {
+        ray.set(new THREE.Vector3(p.x, this.worldBox.isEmpty() ? 1000 : this.worldBox.max.y + 10, p.z), new THREE.Vector3(0, -1, 0));
+        const hit = ray.intersectObjects(ground, false)[0];
+        y = hit ? hit.point.y : this.worldBox.isEmpty() ? 0 : this.worldBox.min.y;
+      }
       const color = pointColor(p.kind);
       const pillar = new THREE.Mesh(
         new THREE.CylinderGeometry(height * 0.08, height * 0.08, height, 10),

@@ -138,6 +138,31 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.MPS
     /// <summary>One AI map record inside an MPS file.</summary>
     public sealed class MpsMap
     {
+        /// <summary>
+        /// The floor height the AI walks on in cell (x, z), or null where the grid has no cell (outside every row's
+        /// span). After the header (+0x58) the grid has a sub-header whose +0x1C holds the cell count; at +0x50 the
+        /// cells follow, 8 bytes each in row-major order of the cells that exist (byte 0 and 3 flags, u16 at 1 whose
+        /// low 11 bits are the height between the grid's min and max y, u32 link to a stacked layer or 0xFFFFFFFF),
+        /// then one 12-byte entry per row: u16 first x, u16 end x (exclusive), u32 index of its first cell, and a
+        /// pointer the game fills when loading. Checked on every retail map: the rows add up to the cell count.
+        /// </summary>
+        public float? HeightAt(byte[] mps, int cellX, int cellZ)
+        {
+            int sub = (int)Offset + 0x58;
+            if (cellX < 0 || cellZ < 0 || cellX >= Width || cellZ >= Height || sub + 0x50 > mps.Length) return null;
+            uint count = BitConverter.ToUInt32(mps, sub + 0x1C);
+            long table = sub + 0x50, rows = table + count * 8L;
+            long row = rows + cellZ * 12L;
+            if (count == 0 || row + 12 > mps.Length) return null;
+            int first = BitConverter.ToUInt16(mps, (int)row), end = BitConverter.ToUInt16(mps, (int)row + 2);
+            uint index = BitConverter.ToUInt32(mps, (int)row + 4);
+            if (cellX < first || cellX >= end) return null;
+            long cell = table + (index + (cellX - first)) * 8L;
+            if (index + (cellX - first) >= count || cell + 8 > mps.Length) return null;
+            int level = BitConverter.ToUInt16(mps, (int)cell + 1) & 0x7FF;
+            return MinY + level / 2047f * (MaxY - MinY);
+        }
+
         public uint Offset { get; init; }
         public string Name { get; init; } = string.Empty;
         public uint Width { get; init; }

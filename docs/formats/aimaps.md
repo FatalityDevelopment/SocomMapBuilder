@@ -35,4 +35,18 @@ A table of `count` (u32), one more u32, then 24-byte records:
 | +0x12 | 2 × u8 | unused |
 | +0x14 | u32 | packed cell: x in bits 6–18, z in bits 19–31 |
 
-A point's position is the centre of its cell in the first AI map's grid: `min + (cell + 0.5) × cell size` on x and z. Moving a point rewrites the packed cell. The height comes from the map surface.
+A point's position is the centre of its cell in the first AI map's grid: `min + (cell + 0.5) × cell size` on x and z, and its height is that cell's floor in the grid (below). Moving a point rewrites the packed cell.
+
+## Grid cells
+
+After each AI map's header (+0x58 from the marker) comes a sub-header, then the cells and a row table:
+
+| Offset (from +0x58) | Size | Field |
+|---|---|---|
+| +0x1C | u32 | cell count (only cells that exist are stored) |
+| +0x50 | count × 8 | cells, row by row |
+| then | height × 12 | one entry per row |
+
+A cell (8 bytes): byte 0 and byte 3 are flags, the u16 at +1 holds the floor height in its low 11 bits, and the u32 at +4 links to a stacked layer (a floor above, `0xFFFFFFFF` for none). Height: `min y + (u16 & 0x7FF) / 2047 × (max y − min y)`.
+
+A row entry: u16 first x, u16 end x (exclusive; empty rows have first = end = width), u32 index of the row's first cell, and a pointer the game fills at load. Cell (x, z) is cell `index + x − first` of row z when `first ≤ x < end`. On every retail map the rows add up to the cell count, and the decoded heights match the floors under the points (terrain, and floors inside buildings where the terrain has holes). `MpsMap.HeightAt` reads it; the Map Builder stands point markers on it. What follows the row table (per-cell links for the AI) is not decoded.

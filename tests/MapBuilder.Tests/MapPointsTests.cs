@@ -1,5 +1,6 @@
 using System.Text;
 using CodeDesigner.Ps2.FileFormats.Zipper.MPS;
+using CodeDesigner.Ps2.FileFormats.Zipper.ZDB;
 using Xunit;
 
 namespace MapBuilder.Tests
@@ -80,6 +81,41 @@ namespace MapBuilder.Tests
             Assert.Equal(2, points.Count);
             Assert.Contains(points, p => p.Name == "Demo Site 1" && p.Kind == "waypoint");
             Assert.Equal((5, 6), (MapPoints.Parse(MapPoints.Move(data, "Demo Site 1", 55, 65)).Single(p => p.Name == "Demo Site 1") is var q ? (q.CellX, q.CellZ) : default));
+        }
+
+        [Fact]
+        public void A_grid_without_cells_gives_no_height()
+        {
+            Assert.All(MapPoints.Parse(Mps()), p => Assert.Null(p.Y));
+        }
+
+        /// <summary>On a disc (MAPBUILDER_DISC): every map's grid rows add up, point heights lie in the grid's range, and
+        /// MP1's match the floors measured in the Map Builder (terrain, and floors where buildings stand in it).</summary>
+        [Fact]
+        public void Disc_points_take_their_floor_from_the_ai_grid()
+        {
+            string? disc = Environment.GetEnvironmentVariable("MAPBUILDER_DISC");
+            if (string.IsNullOrEmpty(disc) || !Directory.Exists(Path.Combine(disc, "RUN"))) return;
+            int maps = 0;
+            foreach (string zdb in Directory.GetFiles(Path.Combine(disc, "RUN"), "*.ZDB").Where(f => !Path.GetFileName(f).StartsWith("APACHE")))
+            {
+                using var z = ZdbArchive.Open(zdb);
+                byte[] mps = z.Entries.First(e => e.FullPath.EndsWith("AIMAPS.MPS", StringComparison.OrdinalIgnoreCase)).Data;
+                var grid = MpsFile.Parse(mps).Maps[0];
+                var points = MapPoints.Parse(mps, grid);
+                Assert.True(points.Count(p => p.Y == null) <= 1, $"{zdb}: {points.Count(p => p.Y == null)} points without a floor");
+                Assert.All(points.Where(p => p.Y != null), p => Assert.InRange(p.Y!.Value, grid.MinY - 0.01f, grid.MaxY + 0.01f));
+                if (Path.GetFileName(zdb).Equals("MP1.ZDB", StringComparison.OrdinalIgnoreCase))
+                {
+                    var y = points.ToDictionary(p => p.Name, p => p.Y);
+                    Assert.Equal(71.2f, y["StartBomb"]!.Value, 0.2f);  // terrain
+                    Assert.Equal(169.2f, y["Juliet"]!.Value, 0.2f);    // terrain
+                    Assert.Equal(122.2f, y["startPlayer"]!.Value, 0.2f); // the outbuilding's floor (no terrain under it)
+                    Assert.Equal(111.8f, y["spectator"]!.Value, 0.2f);   // the dredge's deck
+                }
+                maps++;
+            }
+            Assert.True(maps >= 30, $"only {maps} maps");
         }
 
         [Fact]

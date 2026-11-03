@@ -133,7 +133,8 @@ export interface MapSceneResult {
   instances: MapInstanceWire[];
 }
 
-export interface MapPointWire { name: string; team: number; kind: string; x: number; z: number; cellX: number; cellZ: number }
+// y: the floor of the point's cell in the AI grid (null where the grid has no cell).
+export interface MapPointWire { name: string; team: number; kind: string; x: number; y?: number | null; z: number; cellX: number; cellZ: number }
 
 export interface AnimationSummary { name: string; source: string; editable: boolean; duration: number; frames: number; samples: number; fps: number; bones: number }
 

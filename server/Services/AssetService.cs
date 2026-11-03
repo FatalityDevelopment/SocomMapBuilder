@@ -1540,7 +1540,7 @@ namespace MapBuilder.Server.Services
             return new
             {
                 grid = grid == null ? null : new { grid.Name, grid.MinX, grid.MinY, grid.MinZ, grid.MaxX, grid.MaxY, grid.MaxZ, grid.ScaleX, grid.ScaleZ, grid.Width, grid.Height },
-                points = MapPoints.Parse(mps.Data, grid).Select(p => new { p.Name, p.Team, p.Kind, p.X, p.Z, p.CellX, p.CellZ }).ToList(),
+                points = MapPoints.Parse(mps.Data, grid).Select(p => new { p.Name, p.Team, p.Kind, p.X, p.Y, p.Z, p.CellX, p.CellZ }).ToList(),
             };
         }
 

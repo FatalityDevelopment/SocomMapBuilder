@@ -6,7 +6,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.MPS
     /// The named points of AIMAPS.MPS: starts, hostage starts, waypoints (port of zed-spawn-points.ts). A table of
     /// <c>count</c> (u32), one more u32, then 24-byte records: name[16], team byte (0xFF on starts), kind byte
     /// (2 start, 1 waypoint, 0 spectator), two unused bytes, and a packed cell (u32: x = bits 6..18, z = bits 19..31)
-    /// in the first AI map's grid (<c>min + (cell + 0.5) × scale</c>). <see cref="Move"/> rewrites the cell.
+    /// in the first AI map's grid (<c>min + (cell + 0.5) × scale</c>; the height is the cell's floor in that grid).
+    /// <see cref="Move"/> rewrites the cell.
     /// </summary>
     public static class MapPoints
     {
@@ -19,6 +20,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.MPS
             public int CellX { get; init; }
             public int CellZ { get; init; }
             public float X { get; init; }
+            /// <summary>The floor height of its cell in the AI grid (<see cref="MpsMap.HeightAt"/>), or null.</summary>
+            public float? Y { get; init; }
             public float Z { get; init; }
             /// <summary>Offset of the 24-byte record in the MPS file.</summary>
             public int RecordOffset { get; init; }
@@ -53,6 +56,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.MPS
                         CellX = cx,
                         CellZ = cz,
                         X = grid.MinX + (cx + 0.5f) * grid.ScaleX,
+                        Y = grid.HeightAt(mps, cx, cz),
                         Z = grid.MinZ + (cz + 0.5f) * grid.ScaleZ,
                         RecordOffset = r,
                     });
