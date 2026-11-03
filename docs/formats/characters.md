@@ -32,6 +32,21 @@ A vertex is the weighted sum of its parts. Each part is a bone-local position tr
 
 Animations drive bones by name (see [Animations](animations.md)).
 
+## The draw groups, field by field
+
+Measured on M51's `MESH_seal_A_woodland_LO` (7 sections, 74 groups):
+
+- **Vertex block header** `(flags, triangles, matrix_id, count)`. Flags: `2` on a group's first batch, `1` on the middle ones, `5` on its last, `6` on a group's only batch. Rigid vertices have weight 32767; a blended vertex appears in several batches with partial weights.
+- **Draw block**: `STCYCL 0x102`, `UNPACK V4-8` (num = triangles, imm `0xC000 | (3N + 4)` where N is the group's vertex count; each triangle `(a*3, b*3, c*3, 3)`), `STCYCL 0x101`, `UNPACK V4-32` (4 GIF qwords, imm `0x8000`), `STCYCL 0x103`, `UNPACK V2-16` (num = N, imm `0x8005`; 12-bit UVs), `MSCNT`, zero padding to a qword.
+- **GIF qwords**: the second one's NLOOP (low 15 bits) is N; the third holds `(3N + 4, 0, N, triangles)`. The first and fourth are the same in every group.
+- **Sizes**: retail groups stay at or under 51 vertices and 58 triangles.
+
+## Editing
+
+`assets_edit addCharacterMesh` (`Package/CharacterEdits.cs`) adds rigid geometry (shapes, OBJ, arrays) that follows one bone. It goes in as a new material section appended after the mesh's blocks, so no existing offset moves. The chain is rewritten after the new blocks with the new tags at its end, and `_START` / `ref_count` are updated. Groups hold at most 48 vertices and 56 triangles, with flags `6` and weight 1.0. Positions are given in the character's bind pose; each must lie within 7.99 units of its bone (int16 at 1/4096). The section's texture must already be in the character's TXR namespace (`addTexture` with `namespace: clib`). Decoded by the editors and posed by the Animation Editor; **not yet tried in game**. A character's `_1` mesh is a separate lower-detail mesh and needs its own call.
+
+Character gear (`FLIB_MDL.ZED`: hats, goggles, pouches) are rigid models like weapons. `addMesh` and the texture ops change them in place. Nothing in a map package says which character wears which gear.
+
 ## Notes
 
 - `_1` variants (`MESH_alban_informant_1`) are separate, much smaller meshes (likely lower-detail copies) with their own skeleton definitions.

@@ -65,6 +65,16 @@ namespace MapBuilder.Server.Services
         private static readonly (string, Dictionary<string, object>) Materials = Arr("materials", "object",
             "Instead of an image: up to 8 [{color: [r, g, b]} | {light, dark}], a 64x64 skin of shaded strips that addMesh shapes' material indices pick.");
 
+        private static readonly (string, Dictionary<string, object>)[] MeshInput =
+        {
+            Arr("shapes", "object", "[{kind: lathe {profile: [[along, radius]], caps?} | cylinder {start, end, radius, radiusEnd?, caps?} | ring {at, inner, outer, thickness?} | " +
+                "sphere {radius, scale?, rings?} | box {min, max, lean?}, material (0-7), axis?: x|y|z (default x), center?, segments?, squash?: [u, w]}]."),
+            Vec("light", 3, "shapes: the light the shades are baked from (default [0.35, 0.85, 0.45])."),
+            F("obj", "string", "OBJ text."), F("objPath", "string", "An OBJ file (instead of obj)."), F("yUp", "boolean", "OBJ is Y up (default true)."),
+            F("scale", "number", "OBJ scale."), Vec("offset", 3, "OBJ offset."), F("primitive", "object", "{kind: cube | plane, size?, center?}."),
+            F("mesh", "object", "{positions, triangles, normals?, uvs?, colors?}."), F("meshPath", "string", "A JSON file holding mesh (instead of mesh).")
+        };
+
         private static (string, Dictionary<string, object>)[] With(IEnumerable<(string, Dictionary<string, object>)> a, params (string, Dictionary<string, object>)[] b) => a.Concat(b).ToArray();
 
         internal static readonly Spec[] All =
@@ -105,13 +115,11 @@ namespace MapBuilder.Server.Services
                 With(VertexTransform, Archive, Model, F("faces", "object", "{geometryOffset: [triangle indices]}."))),
             new("addMesh", "Add geometry to a model visual: shapes, OBJ, raw arrays or a primitive.", new[] { "archive", "model", "visual", "texture" },
                 new[] { Archive, Model, F("visual", "string", "An N<node>_<visual> key."), F("texture", "string", "The texture to use (for shapes: a materials skin, addTexture materials)."),
-                    F("replace", "boolean", "Replace the visual's geometry."),
-                    Arr("shapes", "object", "[{kind: lathe {profile: [[along, radius]], caps?} | cylinder {start, end, radius, radiusEnd?, caps?} | ring {at, inner, outer, thickness?} | " +
-                        "sphere {radius, scale?, rings?} | box {min, max, lean?}, material (0-7), axis?: x|y|z (default x), center?, segments?, squash?: [u, w]}]."),
-                    Vec("light", 3, "shapes: the light the shades are baked from (default [0.35, 0.85, 0.45])."),
-                    F("obj", "string", "OBJ text."), F("objPath", "string", "An OBJ file (instead of obj)."), F("yUp", "boolean", "OBJ is Y up (default true)."),
-                    F("scale", "number", "OBJ scale."), Vec("offset", 3, "OBJ offset."), F("primitive", "object", "{kind: cube | plane, size?, center?}."),
-                    F("mesh", "object", "{positions, triangles, normals?, uvs?, colors?}."), F("meshPath", "string", "A JSON file holding mesh (instead of mesh).") }),
+                    F("replace", "boolean", "Replace the visual's geometry.") }.Concat(MeshInput).ToArray()),
+            new("addCharacterMesh", "Add rigid geometry to a skinned character (MESH_*), moving with one bone: a new material section; positions in the character's bind pose (model space).",
+                new[] { "archive", "model", "bone", "texture" },
+                new[] { Archive, Model, F("bone", "string", "A skeleton bone (assets_describe_model skeleton); vertices stay within 8 units of it."),
+                    F("texture", "string", "A texture in the character's TXR namespace (addTexture materials for shapes), at most 15 characters.") }.Concat(MeshInput).ToArray()),
             new("hideVisual", "Hide a model visual (it keeps one zero-area triangle; addMesh can fill it again).", new[] { "archive", "model", "visual" },
                 new[] { Archive, Model, F("visual", "string", "An N<node>_<visual> key.") }),
             new("newWeapon", "Copy a weapon (its visuals and GEO definition: LODs, firepoint, aimpoint) under a new name, to reshape with addMesh / hideVisual.", new[] { "template", "name" },

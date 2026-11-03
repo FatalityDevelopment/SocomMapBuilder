@@ -240,40 +240,21 @@ namespace MapBuilder.Server.Services
                     string visual = Str(a, "visual") ?? throw new ArgumentException("\"visual\" (an N<node>_<visual> key) is required");
                     string texture = Str(a, "texture") ?? throw new ArgumentException("\"texture\" is required");
                     bool replace = a.TryGetProperty("replace", out var rp) && rp.ValueKind == JsonValueKind.True;
-                    MeshTopology.InputMesh input;
-                    string what;
-                    if (a.TryGetProperty("shapes", out var shapes) && shapes.ValueKind == JsonValueKind.Array)
-                    {
-                        input = MeshShapes.Build(shapes, Floats(a, "light"));
-                        what = $"{shapes.GetArrayLength()} shape(s)";
-                    }
-                    else if ((Str(a, "obj") ?? ReadFile(Str(a, "objPath"), "objPath")) is { } obj)
-                    {
-                        bool yUp = !(a.TryGetProperty("yUp", out var yu) && yu.ValueKind == JsonValueKind.False);
-                        float scale = a.TryGetProperty("scale", out var sc) && sc.ValueKind == JsonValueKind.Number ? sc.GetSingle() : 1;
-                        input = MeshTopology.ParseObj(obj, yUp, scale, Floats(a, "offset"));
-                        what = "OBJ";
-                    }
-                    else if (ReadFile(Str(a, "meshPath"), "meshPath") is { } meshText)
-                    {
-                        using var meshDoc = JsonDocument.Parse(meshText);
-                        input = ArraysMesh(meshDoc.RootElement);
-                        what = "mesh";
-                    }
-                    else if (a.TryGetProperty("primitive", out var pr) && pr.ValueKind == JsonValueKind.Object)
-                    {
-                        string kind = Str(pr, "kind") ?? "cube";
-                        float size = pr.TryGetProperty("size", out var sz) && sz.ValueKind == JsonValueKind.Number ? sz.GetSingle() : 10;
-                        input = MeshTopology.Primitive(kind, size, Floats(pr, "center") ?? new float[3]);
-                        what = kind;
-                    }
-                    else if (a.TryGetProperty("mesh", out var me) && me.ValueKind == JsonValueKind.Object)
-                    {
-                        input = ArraysMesh(me);
-                        what = "mesh";
-                    }
-                    else throw new ArgumentException("addMesh needs \"shapes\" [{kind, material, ...}], \"obj\" / \"objPath\" (OBJ), \"mesh\" / \"meshPath\" {positions, triangles, normals?, uvs?, colors?} or \"primitive\" {kind, size, center}");
+                    var input = InputMeshOf(a, out string what);
                     return ApplyTopology(s, Str(a, "label") ?? $"add {what} to {model} {visual}", p => MeshTopology.AddMesh(p, archive, model, visual, texture, input, replace));
+                }
+                case "addCharacterMesh":
+                {
+                    // {archive, model, bone, texture, shapes | obj | mesh | primitive ...}: rigid geometry on a skinned character's bone.
+                    string archive = Str(a, "archive") ?? throw new ArgumentException("\"archive\" is required");
+                    string model = Str(a, "model") ?? throw new ArgumentException("\"model\" is required");
+                    string bone = Str(a, "bone") ?? throw new ArgumentException("\"bone\" (a skeleton bone, see assets_describe_model) is required");
+                    string texture = Str(a, "texture") ?? throw new ArgumentException("\"texture\" is required");
+                    var input = InputMeshOf(a, out string what);
+                    CharacterEdits.Result? made = null;
+                    var result = ApplyEdit(s, Str(a, "label") ?? $"add {what} to {model} on {bone}",
+                        p => (made = CharacterEdits.AddRigidMesh(p, archive, model, bone, texture, input)).Changed);
+                    return new { result, bone = made!.Bone, matrixId = made.MatrixId, groups = made.Groups, vertices = made.Vertices, triangles = made.Triangles };
                 }
                 case "hideVisual":
                 {
@@ -535,6 +516,44 @@ namespace MapBuilder.Server.Services
             List<int> newChunks = new();
             var result = ApplyEdit(s, description, p => { var r = edit(p); newChunks = r.NewChunks; return r.Changed; });
             return new { result, newChunks };
+        }
+
+        // The geometry of addMesh / addCharacterMesh: shapes, OBJ, raw arrays (inline or from a file) or a primitive.
+        private static MeshTopology.InputMesh InputMeshOf(JsonElement a, out string what)
+        {
+            MeshTopology.InputMesh input;
+            if (a.TryGetProperty("shapes", out var shapes) && shapes.ValueKind == JsonValueKind.Array)
+            {
+                input = MeshShapes.Build(shapes, Floats(a, "light"));
+                what = $"{shapes.GetArrayLength()} shape(s)";
+            }
+            else if ((Str(a, "obj") ?? ReadFile(Str(a, "objPath"), "objPath")) is { } obj)
+            {
+                bool yUp = !(a.TryGetProperty("yUp", out var yu) && yu.ValueKind == JsonValueKind.False);
+                float scale = a.TryGetProperty("scale", out var sc) && sc.ValueKind == JsonValueKind.Number ? sc.GetSingle() : 1;
+                input = MeshTopology.ParseObj(obj, yUp, scale, Floats(a, "offset"));
+                what = "OBJ";
+            }
+            else if (ReadFile(Str(a, "meshPath"), "meshPath") is { } meshText)
+            {
+                using var meshDoc = JsonDocument.Parse(meshText);
+                input = ArraysMesh(meshDoc.RootElement);
+                what = "mesh";
+            }
+            else if (a.TryGetProperty("primitive", out var pr) && pr.ValueKind == JsonValueKind.Object)
+            {
+                string kind = Str(pr, "kind") ?? "cube";
+                float size = pr.TryGetProperty("size", out var sz) && sz.ValueKind == JsonValueKind.Number ? sz.GetSingle() : 10;
+                input = MeshTopology.Primitive(kind, size, Floats(pr, "center") ?? new float[3]);
+                what = kind;
+            }
+            else if (a.TryGetProperty("mesh", out var me) && me.ValueKind == JsonValueKind.Object)
+            {
+                input = ArraysMesh(me);
+                what = "mesh";
+            }
+            else throw new ArgumentException("The op needs \"shapes\" [{kind, material, ...}], \"obj\" / \"objPath\" (OBJ), \"mesh\" / \"meshPath\" {positions, triangles, normals?, uvs?, colors?} or \"primitive\" {kind, size, center}");
+            return input;
         }
 
         private static Dictionary<int, int[]> FaceMap(JsonElement a)
@@ -1437,6 +1456,14 @@ namespace MapBuilder.Server.Services
                 fromChains = true,
                 skinned = true,
                 bones = mesh.Skeleton!.Bones.Count,
+                // The bones vertex batches can follow (addCharacterMesh), with their bind position in model space.
+                skeleton = mesh.Skeleton.Bones.Where(b => b.MatrixId >= 0).Select(b => new
+                {
+                    name = b.Name,
+                    matrixId = b.MatrixId,
+                    parent = b.Parent >= 0 ? mesh.Skeleton.Bones[b.Parent].Name : null,
+                    position = new[] { b.World[12], b.World[13], b.World[14] },
+                }).ToList(),
                 visuals = chunks.Select(c => c.visual).Distinct().ToList(),
                 chunks,
                 textures,

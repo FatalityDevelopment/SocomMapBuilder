@@ -1,0 +1,90 @@
+using System.Text.Json;
+using MapBuilder.Server;
+using MapBuilder.Tests.Fixtures;
+using Xunit;
+
+namespace MapBuilder.Tests
+{
+    /// <summary>
+    /// addCharacterMesh: rigid geometry appended to a skinned character as a new material section. The real-mesh tests
+    /// need a SOCOM II map package with SEAL A (M51.ZDB): set MB_MAP_ZDB to its path; without it they pass vacuously.
+    /// </summary>
+    public sealed class CharacterEditTests : IDisposable
+    {
+        private const string Seal = "MESH_seal_A_woodland_LO";
+        private readonly Backend _b = new();
+        private readonly List<string> _sessions = new();
+
+        public void Dispose()
+        {
+            foreach (string s in _sessions) _b.Close(s);
+        }
+
+        private string? OpenMap()
+        {
+            string? path = Environment.GetEnvironmentVariable("MB_MAP_ZDB");
+            if (string.IsNullOrEmpty(path) || !File.Exists(path)) return null;
+            string s = _b.Open(path);
+            _sessions.Add(s);
+            return s;
+        }
+
+        private JsonElement Describe(string session, string model) =>
+            _b.Ok(new CommandMessage { Command = "ASSET_DESCRIBE_MODEL", AssetSession = session, AssetArchive = "CLIB_MDL.ZED", AssetName = model });
+
+        private static object Pack => new
+        {
+            op = "addCharacterMesh", archive = "CLIB_MDL.ZED", model = Seal, bone = "spinehi", texture = "packtest.tif",
+            shapes = new object[]
+            {
+                new { kind = "box", min = new[] { -1.7f, 12.2f, 1.45f }, max = new[] { 1.7f, 16f, 2.9f }, material = 0 },
+                new { kind = "cylinder", axis = "x", start = -2.1f, end = 2.1f, radius = 0.65f, center = new[] { 0f, 16.55f, 2.2f }, segments = 10, material = 1, caps = true },
+            },
+        };
+
+        [Fact]
+        public void A_static_model_is_refused()
+        {
+            using var pkg = new SyntheticPackage();
+            string s = _b.Open(pkg.Folder);
+            _sessions.Add(s);
+            string error = _b.EditFails(s, new { op = "addCharacterMesh", archive = "TST_MDL.ZED", model = "crate", bone = "head", texture = "x.tif", primitive = new { kind = "cube" } });
+            Assert.Contains("not a skinned character mesh", error);
+        }
+
+        [Fact]
+        public void Rigid_geometry_decodes_as_new_groups_on_its_bone()
+        {
+            if (OpenMap() is not { } s) return;
+            var before = Describe(s, Seal);
+            int chunks = before.GetProperty("chunks").GetArrayLength();
+            Assert.Contains(before.GetProperty("skeleton").EnumerateArray(), b => b.GetProperty("name").GetString() == "spinehi");
+
+            _b.Edit(s, new { op = "addTexture", name = "packtest.tif", @namespace = "clib", materials = new[] { new { color = new[] { 80, 90, 50 } }, new { color = new[] { 40, 40, 30 } } } });
+            byte[] mdl = Backend.Bytes(s, "CLIB_MDL.ZED");
+            var r = _b.Edit(s, Pack);
+            Assert.Equal("spinehi", r.GetProperty("bone").GetString());
+            int groups = r.GetProperty("groups").GetInt32();
+            Assert.True(groups >= 1);
+
+            var after = Describe(s, Seal);
+            var added = after.GetProperty("chunks").EnumerateArray().Skip(chunks).ToList();
+            Assert.Equal(groups, added.Count);
+            Assert.All(added, c => Assert.Equal("packtest.tif", c.GetProperty("texture").GetString()));
+            Assert.Equal(r.GetProperty("triangles").GetInt32(), added.Sum(c => c.GetProperty("triangles").GetInt32()));
+
+            _b.Undo(s);
+            Assert.Equal(mdl, Backend.Bytes(s, "CLIB_MDL.ZED"));
+        }
+
+        [Fact]
+        public void Geometry_out_of_a_bones_reach_is_refused()
+        {
+            if (OpenMap() is not { } s) return;
+            _b.Edit(s, new { op = "addTexture", name = "packtest.tif", @namespace = "clib", materials = new[] { new { color = new[] { 80, 90, 50 } } } });
+            string error = _b.EditFails(s, new { op = "addCharacterMesh", archive = "CLIB_MDL.ZED", model = Seal, bone = "rfoot", texture = "packtest.tif",
+                primitive = new { kind = "cube", size = 1, center = new[] { 0f, 18f, 0f } } });
+            Assert.Contains("at most 7.99", error);
+        }
+    }
+}
