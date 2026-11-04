@@ -229,6 +229,18 @@ namespace MapBuilder.Server.Services
                     int n = faces.Values.Sum(f => f.Length);
                     return ApplyTopology(s, Str(a, "label") ?? $"delete {n} face(s) of {model}", p => MeshTopology.DeleteFaces(p, archive, model, faces));
                 }
+                case "extrudeFaces":
+                {
+                    // {archive, model, faces, distance?, matrix?}: faces pushed out along their normal (and / or moved by
+                    // a model-space matrix: an inset shrinks them about their centre), joined to where they were by walls.
+                    string archive = Str(a, "archive") ?? throw new ArgumentException("\"archive\" is required");
+                    string model = Str(a, "model") ?? throw new ArgumentException("\"model\" is required");
+                    var faces = FaceMap(a);
+                    float distance = a.TryGetProperty("distance", out var dv) ? Number(dv, "distance") : 0;
+                    float[]? m = Vec(a, "matrix", 16);
+                    if (distance == 0 && m == null) throw new ArgumentException("Give a distance (along the faces' normal) and / or a matrix");
+                    return ApplyTopology(s, Str(a, "label") ?? $"extrude {faces.Values.Sum(f => f.Length)} face(s) of {model}", p => MeshTopology.ExtrudeFaces(p, archive, model, faces, distance, m));
+                }
                 case "duplicateFaces":
                 {
                     string archive = Str(a, "archive") ?? throw new ArgumentException("\"archive\" is required");
@@ -288,6 +300,28 @@ namespace MapBuilder.Server.Services
                         conformed = fitted == null ? null : new { moved = fitted.Moved, maxPush = MathF.Round(fitted.MaxPush, 3) },
                         check = CheckReport(s, model),
                     };
+                }
+                case "setSkinWeights":
+                {
+                    // {archive, model, vertices: [{group, vertex, weights: {bone: weight}}]}: skin weights painted in the Model
+                    // Editor, moved between the bones each vertex's group already lists (in place; the bind pose stays).
+                    string archive = Str(a, "archive") ?? throw new ArgumentException("\"archive\" is required");
+                    string model = Str(a, "model") ?? throw new ArgumentException("\"model\" is required");
+                    if (!a.TryGetProperty("vertices", out var vs) || vs.ValueKind != JsonValueKind.Array || vs.GetArrayLength() == 0)
+                        throw new ArgumentException("\"vertices\" [{group, vertex, weights: {bone: weight}}] is required");
+                    var edits = new List<CharacterEdits.WeightEdit>();
+                    foreach (var v in vs.EnumerateArray())
+                    {
+                        if (!v.TryGetProperty("weights", out var ws) || ws.ValueKind != JsonValueKind.Object)
+                            throw new ArgumentException("vertices[].weights is {bone: weight}");
+                        var weights = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
+                        foreach (var w in ws.EnumerateObject()) weights[w.Name] = Number(w.Value, $"weights.{w.Name}");
+                        edits.Add(new CharacterEdits.WeightEdit(Int(v, "group"), Int(v, "vertex"), weights));
+                    }
+                    CharacterEdits.WeightResult? made = null;
+                    var result = ApplyEdit(s, Str(a, "label") ?? $"paint skin weights of {edits.Count} vertices of {model}",
+                        p => (made = CharacterEdits.SetWeights(p, archive, model, edits)).Changed);
+                    return new { result, vertices = made!.Vertices, dropped = made.Dropped, droppedBones = made.DroppedBones.OrderBy(x => x).ToList(), check = CheckReport(s, model) };
                 }
                 case "scaleBones":
                 {

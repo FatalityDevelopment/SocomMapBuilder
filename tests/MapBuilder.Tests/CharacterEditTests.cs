@@ -10,6 +10,7 @@ namespace MapBuilder.Tests
     /// addCharacterMesh: rigid geometry appended to a skinned character as a new material section. The real-mesh tests
     /// need a SOCOM II map package with SEAL A (M51.ZDB): set MB_MAP_ZDB to its path; without it they pass vacuously.
     /// </summary>
+    [Collection(MapPackageCollection.Name)]
     public sealed class CharacterEditTests : IDisposable
     {
         private const string Seal = "MESH_seal_A_woodland_LO";
@@ -278,6 +279,68 @@ namespace MapBuilder.Tests
                 }
             }
             Assert.True(blended > 0, "no sleeve vertex blends two bones");
+        }
+
+        private static int[] Ints(JsonElement base64)
+        {
+            byte[] b = Convert.FromBase64String(base64.GetString()!);
+            var f = new int[b.Length / 4];
+            Buffer.BlockCopy(b, 0, f, 0, b.Length);
+            return f;
+        }
+
+        [Fact]
+        public void Painted_weights_move_between_a_vertexs_bones_and_leave_the_bind_pose_where_it_was()
+        {
+            if (OpenMap() is not { } s) return;
+            JsonElement Mesh() => _b.Ok(new CommandMessage { Command = "ASSET_MODEL_MESH", AssetSession = s, AssetArchive = "CLIB_MDL.ZED", AssetName = Seal,
+                AssetJson = JsonSerializer.Serialize(new { arrays = true }) });
+            var before = Mesh();
+            var names = before.GetProperty("skeleton").EnumerateArray().Select(b => b.GetProperty("name").GetString()!).ToList();
+            // A vertex that blends two bones: hand its weight over to the lighter one.
+            (int Group, int Vertex, string Heavy, string Light, float[] Position)? pick = null;
+            foreach (var c in before.GetProperty("chunks").EnumerateArray())
+            {
+                var w = Floats(c.GetProperty("skinWeights"));
+                var bones = Ints(c.GetProperty("skinBones"));
+                var p = Floats(c.GetProperty("positions"));
+                for (int v = 0; v < p.Length / 3 && pick == null; v++)
+                {
+                    var parts = Enumerable.Range(0, 4).Where(k => bones[v * 4 + k] >= 0 && w[v * 4 + k] > 0.2f).OrderByDescending(k => w[v * 4 + k]).ToList();
+                    if (parts.Count == 2)
+                        pick = (c.GetProperty("geometryOffset").GetInt32(), v, names[bones[v * 4 + parts[0]]], names[bones[v * 4 + parts[1]]], p.Skip(v * 3).Take(3).ToArray());
+                }
+                if (pick != null) break;
+            }
+            Assert.NotNull(pick);
+            var (group, vertex, heavy, light, position) = pick.Value;
+            byte[] mdl = Backend.Bytes(s, "CLIB_MDL.ZED");
+
+            var weights = new Dictionary<string, float> { [heavy] = 0.1f, [light] = 0.9f, ["rfoot_does_not_exist"] = 0f };
+            var r = _b.Edit(s, new { op = "setSkinWeights", archive = "CLIB_MDL.ZED", model = Seal, vertices = new[] { new { group, vertex, weights } } });
+            Assert.Equal(1, r.GetProperty("vertices").GetInt32());
+            Assert.Equal(0, r.GetProperty("dropped").GetInt32());
+
+            var chunk = Mesh().GetProperty("chunks").EnumerateArray().First(c => c.GetProperty("geometryOffset").GetInt32() == group);
+            var after = Floats(chunk.GetProperty("positions")).Skip(vertex * 3).Take(3).ToArray();
+            for (int k = 0; k < 3; k++) Assert.InRange(after[k] - position[k], -0.003f, 0.003f);   // a few 1/4096 steps
+            var aw = Floats(chunk.GetProperty("skinWeights")).Skip(vertex * 4).Take(4).ToArray();
+            var ab = Ints(chunk.GetProperty("skinBones")).Skip(vertex * 4).Take(4).ToArray();
+            float W(string bone) => Enumerable.Range(0, 4).Where(k => ab[k] >= 0 && names[ab[k]] == bone).Sum(k => aw[k]);
+            Assert.InRange(W(light), 0.89f, 0.91f);
+            Assert.InRange(W(heavy), 0.09f, 0.11f);
+            Assert.InRange(aw.Where((_, k) => ab[k] >= 0).Sum(), 0.999f, 1.001f);
+
+            // A bone the group does not list for it: its share goes to the bones it has.
+            var far = names.First(n => n != heavy && n != light && n.Contains("foot", StringComparison.OrdinalIgnoreCase));
+            var r2 = _b.Edit(s, new { op = "setSkinWeights", archive = "CLIB_MDL.ZED", model = Seal, vertices = new[] { new { group, vertex, weights = new Dictionary<string, float> { [far] = 1f, [heavy] = 1f } } } });
+            Assert.Equal(1, r2.GetProperty("dropped").GetInt32());
+            Assert.Contains(far, r2.GetProperty("droppedBones").EnumerateArray().Select(x => x.GetString()));
+
+            _b.Undo(s);
+            _b.Undo(s);
+            Assert.Equal(mdl, Backend.Bytes(s, "CLIB_MDL.ZED"));
+            Assert.Contains("no vertex", _b.EditFails(s, new { op = "setSkinWeights", archive = "CLIB_MDL.ZED", model = Seal, vertices = new[] { new { group = 1, vertex = 0, weights = new Dictionary<string, float> { [heavy] = 1f } } } }));
         }
 
         [Fact]

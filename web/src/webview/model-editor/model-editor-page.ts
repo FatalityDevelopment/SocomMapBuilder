@@ -6,10 +6,11 @@ import * as THREE from 'three';
 import { command } from '../../api/client';
 import { activePage, computed, host, modalOpen, signal } from '../../shared';
 import type { ModelTexturePixels } from '../zipper-core/texture-pixels';
-import { AssetClient, type ExportResult, type ModelDescription, type ModelSummary, type SessionStatus, type TextureInfo } from './asset-client';
+import { AssetClient, type AnimationSummary, type ExportResult, type ModelDescription, type ModelSummary, type SessionStatus, type TextureInfo } from './asset-client';
+import { poseBones, type PoseClip, type WeightMode } from '../zipper-core/skinning';
 import { TextureCache } from './model-loader';
 import { decodeMesh, toModelMatrix, toModelPoint, type EditorChunk, type EditorMesh, type MeshWire } from './mesh-data';
-import { EditorViewport, type HoverInfo, type SelectMode, type Shading, type Tool, type ViewPreset, type VertexSelection } from './editor-viewport';
+import { EditorViewport, type HoverInfo, type SelectMode, type Shading, type Tool, type ViewPreset, type VertexSelection, type WeightStroke } from './editor-viewport';
 import { UvEditor, type UvEdits } from './uv-editor';
 import type { Lighting } from '../zipper-core/viewport-core';
 
@@ -52,6 +53,7 @@ export class ModelEditorPageLogic {
     { id: 'rotate', label: 'Rotate', key: 'R', glyph: '⟳' },
     { id: 'scale', label: 'Scale', key: 'S', glyph: '⤢' },
     { id: 'paint', label: 'Vertex paint', key: 'P', glyph: '🖌' },
+    { id: 'weights', label: 'Weight paint (characters)', key: 'B', glyph: '⚖' },
   ];
   readonly propTabs: Array<{ id: PropTab; label: string }> = [
     { id: 'item', label: 'Item' }, { id: 'material', label: 'Material' }, { id: 'texture', label: 'Texture' }, { id: 'paint', label: 'Paint' }, { id: 'model', label: 'Model' },
@@ -88,6 +90,24 @@ export class ModelEditorPageLogic {
   readonly ortho = signal(false);
   readonly loading = signal(false);
   readonly busy = signal(false);
+
+  // ------------------------------------------------------------------ skin: weight paint and pose
+  // The weight view's bone (skeleton index; null shows the materials), the brush's mode and the weight Set paints.
+  readonly weightBone = signal<number | null>(null);
+  readonly weightMode = signal<WeightMode>('add');
+  readonly weightSetTo = signal(1);
+  // Clips to pose the character with, the one in use ('' = the bind pose) and where in it.
+  readonly poseClips = signal<AnimationSummary[]>([]);
+  readonly poseClip = signal('');
+  readonly poseTime = signal(0);
+  readonly poseDuration = signal(0);
+  private poseData: PoseClip | null = null;
+  // Modeling: soft selection's radius, mirrored moves, and the extrude / inset amounts.
+  readonly softRadius = signal(0);
+  readonly mirrorX = signal(false);
+  readonly extrudeDistance = signal(2);
+  readonly insetFactor = signal(0.7);
+  readonly skeletonBones = computed(() => (this.mesh()?.skeleton ?? []).map((b, i) => ({ i, name: b.name, skins: b.matrixId >= 0 })).filter(b => b.skins));
 
   // ------------------------------------------------------------------ export to the other game
   readonly exportOpen = signal(false);
@@ -293,6 +313,8 @@ export class ModelEditorPageLogic {
       onHover: info => this.hover.set(info),
       onTransformCommit: (delta, verts, kind) => void this.commitTransform(delta, verts, kind),
       onPaintCommit: colors => void this.commitPaint(colors),
+      onWeightCommit: stroke => void this.commitWeights(stroke),
+      onPositionsCommit: (positions, kind) => void this.commitPositions(positions, kind),
       onCameraChange: () => undefined,
     });
     this.viewport.selectMode = this.selectMode();
@@ -365,6 +387,8 @@ export class ModelEditorPageLogic {
     else if (k === 'r' || k === 'e') { this.setTool('rotate'); }
     else if (k === 's') { this.setTool('scale'); }
     else if (k === 'p') { this.setTool('paint'); }
+    else if (k === 'b' && this.mesh()?.skeleton) { this.setTool('weights'); }
+    else if (k === 'i' && this.selectMode() === 'face' && !this.mesh()?.skeleton) { void this.insetSelection(); }
     else if (k === 'z') { this.cycleShading(); }
     else if (['1', '2', '3', '4', '5'].includes(e.key) && !numpad) { this.setSelectMode(this.selectModes[+e.key - 1].id); }
     else if (e.key === 'Escape') { this.openMenu.set(null); this.setTool('select'); }
@@ -376,8 +400,16 @@ export class ModelEditorPageLogic {
 
   setSelectMode(mode: SelectMode): void { this.selectMode.set(mode); this.viewport.setSelectMode(mode); }
   setTool(tool: Tool): void {
+    if (tool === 'weights' && !this.mesh()?.skeleton) { this.say('Weight paint is for skinned characters.', true); return; }
+    if ((tool === 'move' || tool === 'rotate' || tool === 'scale') && this.viewport.posed) {
+      this.say('Vertices move in the bind pose: set Pose to Bind pose (Paint tab) first.');
+    }
     this.tool.set(tool);
     this.viewport.tool = tool;
+    if (tool === 'weights') {
+      this.propTab.set('paint');
+      this.weightBone.set(this.viewport.weightViewBone);
+    }
     if (tool === 'paint') {
       this.propTab.set('paint');
       // Painting edits the baked lighting, so show it.
@@ -644,7 +676,10 @@ export class ModelEditorPageLogic {
       this.description.set(desc);
       this.mesh.set(mesh);
       this.missingTextures.set(missing.sort());
+      if (!mesh.skeleton) { this.poseClip.set(''); this.poseData = null; this.weightBone.set(null); }
       this.viewport.setMesh(mesh, pixels, keepCamera);
+      if (mesh.skeleton && this.poseData) { this.viewport.setPose(poseBones(mesh.skeleton, this.poseData, this.poseTime())); }
+      if (mesh.skeleton && !this.poseClips().length) { void this.loadPoseClips(); }
       const ext = Math.max(...[0, 1, 2].map(k => {
         let lo = Infinity, hi = -Infinity;
         for (const c of mesh.chunks) { for (let i = k; i < c.positions.length; i += 3) { lo = Math.min(lo, c.positions[i]); hi = Math.max(hi, c.positions[i]); } }
@@ -739,6 +774,111 @@ export class ModelEditorPageLogic {
       vertices: [...map].map(([i, c]) => ({ i, color: c.map(x => Math.round(x)) })),
     }));
     return this.edit('Paint vertex colours', { op: 'setVertices', chunks });
+  }
+
+  // A weight stroke: each touched vertex's new weights by bone name (slots of one bone summed).
+  private commitWeights(stroke: WeightStroke): Promise<boolean> {
+    const m = this.mesh()!;
+    const inf = m.skinInfluences, names = m.skeleton ?? [];
+    const vertices: Array<{ group: number; vertex: number; weights: Record<string, number> }> = [];
+    for (const [ci, map] of stroke) {
+      const chunk = m.chunks[ci];
+      if (!chunk?.skin) { continue; }
+      for (const [vertex, w] of map) {
+        const weights: Record<string, number> = {};
+        for (let k = 0; k < inf; k++) {
+          const b = chunk.skin.bones[vertex * inf + k];
+          if (b >= 0 && names[b]) { weights[names[b].name] = (weights[names[b].name] ?? 0) + Math.max(0, w[k]); }
+        }
+        vertices.push({ group: chunk.geometryOffset, vertex, weights });
+      }
+    }
+    if (!vertices.length) { return Promise.resolve(false); }
+    const bone = names[this.weightBone() ?? -1]?.name ?? 'bone';
+    return this.edit(`Paint ${bone} weights on ${vertices.length} vertices`, { op: 'setSkinWeights', vertices });
+  }
+
+  // A soft or mirrored move: each moved vertex's position (model space).
+  private commitPositions(positions: Map<number, Map<number, [number, number, number]>>, kind: 'move' | 'rotate' | 'scale'): Promise<boolean> {
+    const m = this.mesh()!;
+    let n = 0;
+    const chunks = [...positions].map(([ci, map]) => {
+      n += map.size;
+      return { geometryOffset: m.chunks[ci].geometryOffset, vertices: [...map].map(([i, p]) => ({ i, position: toModelPoint(p) })) };
+    });
+    const how = [this.softRadius() > 0 ? 'soft' : '', this.mirrorX() ? 'mirrored' : ''].filter(Boolean).join(', ');
+    return this.edit(`${kind === 'move' ? 'Move' : kind === 'rotate' ? 'Rotate' : 'Scale'} ${n} vertex(es) (${how})`, { op: 'setVertices', chunks });
+  }
+
+  setSoftRadius(value: string): void {
+    const v = Math.max(0, Number(value));
+    if (!Number.isFinite(v)) { return; }
+    this.softRadius.set(v);
+    this.viewport.softRadius = v;
+  }
+
+  setMirrorX(on: boolean): void { this.mirrorX.set(on); this.viewport.mirrorX = on; }
+
+  async extrudeSelection(): Promise<void> {
+    const faces = this.selectedFaces();
+    const n = Object.values(faces).reduce((a, f) => a + f.length, 0);
+    if (!n) { this.say('Select faces to extrude (select mode 5).', true); return; }
+    const d = this.extrudeDistance();
+    const raw = await this.editResult(`Extrude ${n} face(s) by ${d}`, { op: 'extrudeFaces', faces, distance: d });
+    if (raw) { this.setTool('move'); }
+  }
+
+  async insetSelection(): Promise<void> {
+    const faces = this.selectedFaces();
+    const n = Object.values(faces).reduce((a, f) => a + f.length, 0);
+    const c = this.viewport.selectionCenter();
+    if (!n || !c) { this.say('Select faces to inset (select mode 5).', true); return; }
+    const f = this.insetFactor();
+    // Scale about the faces' centre (model space = display space).
+    const matrix = new THREE.Matrix4().makeTranslation(c.x, c.y, c.z).multiply(new THREE.Matrix4().makeScale(f, f, f)).multiply(new THREE.Matrix4().makeTranslation(-c.x, -c.y, -c.z));
+    await this.edit(`Inset ${n} face(s) to ${f}`, { op: 'extrudeFaces', faces, matrix: toModelMatrix(matrix.toArray()) });
+  }
+
+  setWeightBone(i: number | null): void {
+    this.weightBone.set(i);
+    this.viewport.setWeightView(i);
+  }
+
+  setWeightMode(mode: WeightMode): void { this.weightMode.set(mode); this.viewport.weightMode = mode; }
+
+  setWeightSetTo(value: string): void {
+    const v = Math.max(0, Math.min(1, Number(value)));
+    if (Number.isFinite(v)) { this.weightSetTo.set(v); this.viewport.weightSetTo = v; }
+  }
+
+  private async loadPoseClips(): Promise<void> {
+    try { this.poseClips.set((await this.client.listAnimations()).clips); }
+    catch { this.poseClips.set([]); }
+  }
+
+  /** Poses the character with a clip ('' for the bind pose), at its start or where the slider is. */
+  async setPoseClip(name: string): Promise<void> {
+    const skeleton = this.mesh()?.skeleton;
+    this.poseClip.set(name);
+    if (!name || !skeleton) { this.poseData = null; this.poseDuration.set(0); this.viewport.setPose(null); return; }
+    const summary = this.poseClips().find(c => c.name === name);
+    try {
+      this.poseData = await this.client.animation(name, summary?.source) as PoseClip;
+      this.poseDuration.set(this.poseData.duration);
+      this.poseTime.set(Math.min(this.poseTime(), this.poseData.duration));
+      this.viewport.setPose(poseBones(skeleton, this.poseData, this.poseTime()));
+      if (this.tool() === 'move' || this.tool() === 'rotate' || this.tool() === 'scale') { this.setTool('select'); }
+    } catch (err) {
+      this.say(`Could not load ${name}: ${errText(err)}`, true);
+    }
+  }
+
+  setPoseTime(value: string): void {
+    const skeleton = this.mesh()?.skeleton;
+    const t = Number(value);
+    if (!Number.isFinite(t) || !skeleton || !this.poseData) { return; }
+    this.poseTime.set(t);
+    this.viewport.setPose(poseBones(skeleton, this.poseData, t));
   }
 
   private commitUv(edits: UvEdits): Promise<boolean> {

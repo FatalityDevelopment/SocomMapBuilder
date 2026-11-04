@@ -309,6 +309,26 @@ export function ModelEditorPage() {
                     </div>
                     <div className="lm-muted me-note">X right, Y up, Z toward the front view; pivot = selection centre.</div>
                   </div>
+                  {!m?.skeleton && (
+                    <div className="me-card">
+                      <div className="me-card-title">Modeling</div>
+                      <label className="me-field me-field-wide" title="Unselected vertices within this distance of the selection follow a move, fading out (0: off)">Soft radius
+                        <NumInput min="0" step="0.5" value={String(c.softRadius())} onCommit={v => c.setSoftRadius(v)} />
+                      </label>
+                      <label className="me-toggle" title="A move also moves the selection's mirror image across X = 0, mirrored"><input type="checkbox" checked={c.mirrorX()} onChange={e => c.setMirrorX(e.target.checked)} /> Mirror X</label>
+                      <label className="me-field me-field-wide">Extrude by
+                        <NumInput step="0.5" value={String(c.extrudeDistance())} onCommit={v => c.extrudeDistance.set(Number(v) || 0)} />
+                      </label>
+                      <label className="me-field me-field-wide" title="Inset: the new faces' size against the old (1 = no change)">Inset to
+                        <NumInput min="0.05" step="0.05" value={String(c.insetFactor())} onCommit={v => c.insetFactor.set(Math.min(0.95, Math.max(0.05, Number(v) || 0.7)))} />
+                      </label>
+                      <div className="me-actions">
+                        <button className="lm-tool-btn" disabled={c.busy() || !counts.faces} onClick={() => void c.extrudeSelection()} title="Push the selected faces out along their normal, with walls (E in face mode)">Extrude</button>
+                        <button className="lm-tool-btn" disabled={c.busy() || !counts.faces} onClick={() => void c.insetSelection()} title="Shrink the selected faces into their own plane, with a ring of new faces round them (I)">Inset</button>
+                      </div>
+                      <div className="lm-muted me-note">Extrude and inset work on faces (select mode 5, or vertices whose faces are all picked). Soft radius and Mirror X apply to Move, Rotate and Scale.</div>
+                    </div>
+                  )}
                   <div className="me-card">
                     <div className="me-card-title">Geometry</div>
                     <label className="me-field me-field-wide">Visual
@@ -428,6 +448,40 @@ export function ModelEditorPage() {
                   </div>
                   <div className="lm-muted me-note">White at intensity 1 = the texture as-is (GS 0x80). Painting limits itself to the selected chunks when any are selected.</div>
                 </div>
+              )}
+              {c.propTab() === 'paint' && m?.skeleton && (
+                <>
+                  <div className="me-card">
+                    <div className="me-card-title">Skin weights</div>
+                    <label className="me-field">Bone
+                      <select value={c.weightBone() ?? ''} onChange={e => c.setWeightBone(e.target.value === '' ? null : Number(e.target.value))}>
+                        <option value="">— (show materials)</option>
+                        {c.skeletonBones().map(b => <option key={b.i} value={b.i}>{b.name}</option>)}
+                      </select>
+                    </label>
+                    <div className="me-seg" title="Add pulls the bone's weight towards 1, Subtract towards 0, Set towards the value below">
+                      {(['add', 'subtract', 'set'] as const).map(mode => (
+                        <button key={mode} className={c.weightMode() === mode ? 'on' : ''} onClick={() => c.setWeightMode(mode)}>{mode[0].toUpperCase() + mode.slice(1)}</button>
+                      ))}
+                    </div>
+                    {c.weightMode() === 'set' && <label className="me-field">Weight <input type="range" min="0" max="1" step="0.05" value={c.weightSetTo()} onChange={e => c.setWeightSetTo(e.target.value)} /> <span>{c.weightSetTo()}</span></label>}
+                    <div className="me-actions">
+                      <button className="lm-tool-btn" onClick={() => c.setTool('weights')}>Weight brush (B)</button>
+                    </div>
+                    <div className="lm-muted me-note">Blue: the bone does not move the vertex; red: it moves it fully. Radius and Strength are the brush's above. A vertex takes weight only from bones its draw group already lists for it (most blend 2–3); one stroke is one undo.</div>
+                  </div>
+                  <div className="me-card">
+                    <div className="me-card-title">Pose</div>
+                    <label className="me-field">Clip
+                      <select value={c.poseClip()} onChange={e => void c.setPoseClip(e.target.value)}>
+                        <option value="">Bind pose</option>
+                        {c.poseClips().map(clip => <option key={clip.source + ':' + clip.name} value={clip.name}>{clip.name}</option>)}
+                      </select>
+                    </label>
+                    {c.poseClip() && <label className="me-field">Time <input type="range" min="0" max={c.poseDuration()} step={Math.max(0.01, c.poseDuration() / 100)} value={c.poseTime()} onChange={e => c.setPoseTime(e.target.value)} /> <span>{c.poseTime().toFixed(2)} s</span></label>}
+                    <div className="lm-muted me-note">See gear and seams bend while you work: paint weights on a bent elbow, then check again in the bind pose. Move, rotate and scale wait for the bind pose.</div>
+                  </div>
+                </>
               )}
               {c.propTab() === 'model' && (
                 <>
