@@ -246,13 +246,20 @@ export function MapPage() {
     setBookmarks(next);
     try { if (status?.path) { localStorage.setItem(bookmarkKey(status.path), JSON.stringify(next)); } } catch { /* storage unavailable */ }
   };
-  const addBookmark = () => {
+  // The app's own dialog, not window.prompt (which embedded browsers may block).
+  const addBookmark = async () => {
     const vp = viewportRef.current;
     if (!vp || !status) { return; }
-    const name = window.prompt('Name this view', `View ${bookmarks.length + 1}`)?.trim();
+    const camera = vp.cameraState();
+    const name = (await host.prompt('Bookmark this view', [{ key: 'name', label: 'Name', value: `View ${bookmarks.length + 1}` }], 'Save'))?.name?.trim();
     if (!name) { return; }
-    storeBookmarks([...bookmarks.filter(b => b.name !== name), { name, camera: vp.cameraState() }]);
+    storeBookmarks([...bookmarks.filter(b => b.name !== name), { name, camera }]);
     say(`Saved the view as “${name}” (View › Bookmarks).`);
+  };
+  const deleteBookmarkAsk = async () => {
+    const names = bookmarks.map(b => b.name).join(', ');
+    const n = (await host.prompt('Delete a bookmark', [{ key: 'name', label: `Which one? (${names})`, value: bookmarks.at(-1)?.name ?? '' }], 'Delete'))?.name?.trim();
+    if (n) { deleteBookmark(n); }
   };
   const goToBookmark = (camera: CameraState) => { viewportRef.current?.setCameraState(camera); setWalking(false); };
   const deleteBookmark = (name: string) => storeBookmarks(bookmarks.filter(b => b.name !== name));
@@ -492,9 +499,9 @@ export function MapPage() {
         { label: 'Walk mode', shortcut: SHORTCUTS.walk.label, action: toggleWalk, checked: () => walking, disabled: () => !status },
         { label: 'Measure', shortcut: SHORTCUTS.toolMeasure.label, action: () => setTool('measure'), disabled: () => !status },
         { separator: true, label: '' },
-        { label: 'Bookmark this view…', action: addBookmark, disabled: () => !status },
+        { label: 'Bookmark this view…', action: () => void addBookmark(), disabled: () => !status },
         ...bookmarks.map(b => ({ label: `Go to “${b.name}”`, action: () => goToBookmark(b.camera) })),
-        ...(bookmarks.length ? [{ label: 'Delete a bookmark…', action: () => { const n = window.prompt(`Delete which bookmark? (${bookmarks.map(b => b.name).join(', ')})`)?.trim(); if (n) { deleteBookmark(n); } } }] : []),
+        ...(bookmarks.length ? [{ label: 'Delete a bookmark…', action: () => void deleteBookmarkAsk() }] : []),
       ],
     },
     {

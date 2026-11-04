@@ -29,12 +29,12 @@ The aim is to add to SOCOM II's Map Builder and Model Editor the tools Unity and
   - **Walk mode** (Shift+F, View menu): eye 16 units above the ground under it, WASD walks (Shift runs), Esc stops.
   - **Camera bookmarks** (View › Bookmark this view…): stored in localStorage per package path.
 
+**Since then (second session):** the Model Editor has the command search (F3 / Ctrl+Shift+P, Edit menu) and a History tab in its bottom panel; README and ROADMAP are updated. Tried live on M51 with the browser pane hidden: command search on both pages, isolate / show all, measure, the History jump (back 3, forward 2), bookmarks. Fixed: bookmarks now use the app's dialog (`host.prompt`), not `window.prompt`; walk mode stands on the surface in the middle of the view when nothing is under the orbit target.
+
 **Still to do in Wave 4:**
 
-1. Try it live. Build `web`, run the worktree's server on a spare port (see *Running* below), open M51, and check each feature. Walk mode's ground-follow and the history jump are the riskiest.
-2. Add the command search and the History list to the **Model Editor** too. It uses `ModelEditorPageLogic` (signals) with the same menu shape: wire `CommandPalette` with `commandsFromMenus(c.menus)` and a key in `onKey`.
-3. Update the README (Map Builder bullets, Controls table: H, Shift+H, Alt+H, M, Shift+F, F3) and the ROADMAP (a Wave 4 entry like the Wave 1–3 ones).
-4. Open the PR. While #15 is open, base it on `claude/wave3`; after #15 merges, base it on `master`.
+1. Watch walk mode move (WASD, ground-follow over slopes and kerbs) with the browser pane on screen: a hidden pane draws no frames, so it was not seen moving.
+2. Open the PR. While #15 is open, base it on `claude/wave3`; after #15 merges, base it on `master`.
 
 **Later ideas** (from the original Unity / Blender list): glTF import and export (skinned characters too), launching the map in PCSX2 from play mode, AI routes and sight lines in walk mode, user layers and selection sets, loop cut / bevel / knife, editable gear stacks, occlusion for characters (into the texture), texture paint across uv seams.
 

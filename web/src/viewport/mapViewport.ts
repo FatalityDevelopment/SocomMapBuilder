@@ -643,7 +643,16 @@ export class MapViewport extends ViewportCore {
     if (this.walking) { return; }
     const eye = 16;
     const at = this.controls.target.clone();
-    const ground = this.groundBelow(at.x, at.z) ?? at.y;
+    let ground = this.groundBelow(at.x, at.z);
+    if (ground === null) {
+      // Nothing under the orbit target (Frame all on an L-shaped map centres on empty space): stand on the surface
+      // in the middle of the view instead.
+      const rect = this.canvas.getBoundingClientRect();
+      const targets = this.content.children.filter(c => c.visible && (c.userData['layer'] === 'world' || c.userData['layer'] === 'reference'));
+      const hit = this.rayFrom(rect.left + rect.width / 2, rect.top + rect.height / 2).intersectObjects(targets, false)[0];
+      if (hit) { at.set(hit.point.x, hit.point.y, hit.point.z); ground = hit.point.y; }
+    }
+    ground ??= at.y;
     const forward = at.clone().sub(this.camera.position).setY(0);
     if (forward.lengthSq() < 1e-6) { forward.set(0, 0, -1); }
     forward.normalize();

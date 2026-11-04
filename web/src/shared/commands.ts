@@ -13,13 +13,14 @@ export interface Command {
 
 export interface MenuLike {
   label: string;
-  items: Array<{ label: string; shortcut?: string; action?: () => void; disabled?: () => boolean; separator?: boolean }>;
+  // A label may be worked out when shown (the Model Editor's "Export to <game>").
+  items: Array<{ label: string | (() => string); shortcut?: string; action?: () => void; disabled?: () => boolean; separator?: boolean }>;
 }
 
 /** The menus' runnable items as commands (separators and plain notes left out). */
 export function commandsFromMenus(menus: MenuLike[]): Command[] {
   return menus.flatMap(m => m.items.filter(i => !i.separator && i.action).map(i => ({
-    label: i.label, group: m.label, shortcut: i.shortcut, run: i.action!, disabled: i.disabled?.() ?? false,
+    label: typeof i.label === 'function' ? i.label() : i.label, group: m.label, shortcut: i.shortcut, run: i.action!, disabled: i.disabled?.() ?? false,
   })));
 }
 

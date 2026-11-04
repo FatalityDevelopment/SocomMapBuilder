@@ -16,6 +16,12 @@ describe('command search', () => {
     expect(cmds[1].disabled).toBe(true);
   });
 
+  it('works out labels given as functions (the Model Editor menus)', () => {
+    const cmds = commandsFromMenus([{ label: 'File', items: [{ label: () => 'Export to SOCOM 3', action: noop }] }]);
+    expect(cmds[0].label).toBe('Export to SOCOM 3');
+    expect(matchScore('exp soc', cmds[0].label)).not.toBeNull();
+  });
+
   it('matches words in order, as prefixes or spread letters', () => {
     expect(matchScore('sv cp', 'Save copy…')).not.toBeNull();
     expect(matchScore('copy save', 'Save copy…')).toBeNull();

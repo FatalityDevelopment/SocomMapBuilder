@@ -70,7 +70,7 @@ app-map-editor-page { display: block; height: 100vh; }
 .me-header select { margin-left: 6px; color: inherit; background: var(--me-panel, #252526); border: 1px solid var(--me-border); border-radius: 3px; padding: 1px 4px; }
 
 /* Command search (F3), History list, status badges (Wave 4). */
-.cmd-palette { width: min(620px, calc(100vw - 48px)); }
+.cmd-palette { width: min(620px, calc(100vw - 48px)); overflow-x: hidden; }
 .cmd-list { list-style: none; margin: 8px 0 0; padding: 0; max-height: 50vh; overflow: auto; }
 .cmd-item { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 4px; cursor: pointer; }
 .cmd-item.active { background: var(--vscode-list-activeSelectionBackground, #04395e); }
