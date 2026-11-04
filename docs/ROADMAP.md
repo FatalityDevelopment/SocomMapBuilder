@@ -104,14 +104,10 @@ MCP (`server/Services/McpServer.cs`):
 ## Backlog
 
 **Editor parity** (Map Builder)
-- Place GEO props from the UI (placeInstance in the Place tab; today only clutter is placed from the UI).
-- Full rotation gizmo (pitch/roll) and non-uniform scale.
-- Pivot modes; live drag deltas.
-- Surface, vertex and object snap; align and distribute.
+- [x] Wave 1 (2026-11-03, branch `claude/map-wave1`): Assets panel with textured thumbnails (`viewport/thumbnails.ts`, `components/AssetBrowser.tsx`), drag a tile onto the map; prefab UI (save the selection, place, delete); Place as a GEO prop (placeInstance); clutter brush with eraser (`viewport/scatter.ts`); full rotation gizmo, non-uniform scale for GEO props, pivot modes and the drag shown in the status bar (`viewport/arrange.ts` applyDrag); surface and vertex snap; align and distribute; the map check's scene checks (floating, stacked, dense areas: `viewport/mapAnalysis.ts`). Tests: `viewport/wave1.test.ts`. Tried live on M51. *Left over:* object (edge) snap; prefabs do not carry AIMAPS points; pitch and roll are not tried in game (collision may stay upright).
 - Paste at the cursor, for props as well as clutter.
 - History panel; camera bookmarks; isolate / hide selected; measure tool.
 - Top-down minimap or quad view.
-- Clutter scatter brush.
 - Replace a model across instances; instance rename and tags.
 - User layers and selection sets.
 - Autosave; remappable keys.

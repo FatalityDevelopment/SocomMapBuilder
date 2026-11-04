@@ -5,12 +5,18 @@
 
 import * as THREE from 'three';
 import { placementMatrix, samplePlacement, surfaceNormal, type PlacementOptions, type PlacementSample, type PlacementTransform } from './placement';
+import { dabPoints, keepApart, seededRandom, slopeOk, withinRadius, type ScatterOptions } from './scatter';
+import { applyDrag, type PivotMode } from './arrange';
+import type { Measured } from './mapAnalysis';
 import { SELECT_COLOR, ViewportCore, billboardYaw, chunkGeometry, isIdentity, labelSprite, type MaterialSpec } from '../webview/zipper-core/viewport-core';
 import type { EditorMesh } from '../webview/model-editor/mesh-data';
 import { propDrawChunks } from './propFaces';
 import { groupInstancesByLayer, isSkyChunk, layerOf, movable as isMovable, pointColor } from '../mapModel';
 
-export type MapTool = 'select' | 'move' | 'rotate' | 'scale' | 'place';
+export type MapTool = 'select' | 'move' | 'rotate' | 'scale' | 'place' | 'paint';
+/** What a move drag snaps to beyond the increment snap: nothing, the surface under each item, or the nearest vertex under the cursor. */
+export type SnapTarget = 'increment' | 'surface' | 'vertex';
+export interface BrushOptions extends ScatterOptions { erase: boolean }
 export type MapLayer = 'world' | 'reference' | 'clutter' | 'sky' | 'points';
 
 export interface MapInstance {
@@ -41,6 +47,11 @@ export interface MapCallbacks {
   onPlace?: (transform: PlacementTransform) => void;
   onOpenModel?: (index: number) => void;
   onCameraChange?: () => void;
+  // The clutter brush: placements to add (model-space matrices), or clutter instances to remove, at the end of a stroke.
+  onScatter?: (matrices: number[][]) => void;
+  onErase?: (indices: number[]) => void;
+  // What a gizmo drag is doing right now (null when it ends), for the status bar.
+  onDragInfo?: (text: string | null) => void;
 }
 
 // Model space is Y up like the display, so placements are used as they are (column-major).
@@ -117,12 +128,31 @@ export class MapViewport extends ViewportCore {
   private editableValue = true;
   private dragStart: { x: number; y: number } | null = null;
   private readonly boxEl: HTMLDivElement;
-  private gizmoDrag: { start: THREE.Matrix4; snapshot: Map<number, THREE.Matrix4>; point?: THREE.Vector3 } | null = null;
+  private gizmoDrag: { start: THREE.Matrix4; snapshot: Map<number, THREE.Matrix4>; point?: THREE.Vector3; centre: THREE.Vector3; bottoms: Map<number, number> } | null = null;
+  private snapTargetValue: SnapTarget = 'increment';
+  private pivotModeValue: PivotMode = 'center';
+  private lastPointer: { x: number; y: number } | null = null;
+  // The clutter brush: its options, the model it paints (its clutter is what it keeps apart from and erases), the ring
+  // under the cursor, and the stroke in progress.
+  private brush: BrushOptions = { radius: 20, spacing: 5, density: 8, maxSlope: 35, erase: false };
+  private brushModel: string | null = null;
+  private readonly brushRing: THREE.LineLoop;
+  private readonly strokeMarks: THREE.Points;
+  private stroke: { erasing: boolean; matrices: THREE.Matrix4[]; erase: Set<number>; last: THREE.Vector3 | null; screen: { x: number; y: number };
+    random: () => number; } | null = null;
+  private readonly eraseMaterial = new THREE.LineBasicMaterial({ color: 0xff5544, depthTest: false, transparent: true });
   private worldBox = new THREE.Box3();
 
   constructor(canvas: HTMLCanvasElement, private readonly callbacks: MapCallbacks = {}) {
     super(canvas, () => callbacks.onCameraChange?.());
     this.scene.add(this.content, this.overlay, this.pointGroup, this.placementGhost);
+    const ring = new THREE.BufferGeometry().setFromPoints(Array.from({ length: 48 }, (_, k) => new THREE.Vector3(Math.cos(k / 48 * Math.PI * 2), 0, Math.sin(k / 48 * Math.PI * 2))));
+    this.brushRing = new THREE.LineLoop(ring, new THREE.LineBasicMaterial({ color: 0x66ddbb, depthTest: false, transparent: true }));
+    this.brushRing.renderOrder = 30;
+    this.brushRing.visible = false;
+    this.strokeMarks = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ color: 0x66ddbb, size: 6, sizeAttenuation: false, depthTest: false }));
+    this.strokeMarks.renderOrder = 31;
+    this.scene.add(this.brushRing, this.strokeMarks);
     this.placementGhost.visible = false;
     this.placementGhost.matrixAutoUpdate = false;
     this.boxEl = document.createElement('div');
@@ -132,7 +162,7 @@ export class MapViewport extends ViewportCore {
     canvas.addEventListener('pointermove', this.onPointerMove);
     canvas.addEventListener('dblclick', this.onDoubleClick);
     window.addEventListener('pointerup', this.onPointerUp);
-    canvas.addEventListener('pointerleave', () => { this.placementPointer = null; this.placementGhost.visible = false; this.callbacks.onHover?.(null); }, { signal: this.listenerAbort.signal });
+    canvas.addEventListener('pointerleave', () => { this.placementPointer = null; this.placementGhost.visible = false; this.brushRing.visible = false; this.callbacks.onHover?.(null); }, { signal: this.listenerAbort.signal });
     canvas.tabIndex = 0;
   }
 
@@ -147,6 +177,11 @@ export class MapViewport extends ViewportCore {
     this.clearContent();
     this.overlay.traverse(o => { (o as THREE.Mesh).geometry?.dispose(); });
     this.overlayMaterial.dispose();
+    this.eraseMaterial.dispose();
+    this.brushRing.geometry.dispose();
+    (this.brushRing.material as THREE.Material).dispose();
+    this.strokeMarks.geometry.dispose();
+    (this.strokeMarks.material as THREE.Material).dispose();
     this.disposeCore();
   }
 
@@ -166,13 +201,31 @@ export class MapViewport extends ViewportCore {
 
   setPlacementMesh(mesh: EditorMesh | null): void {
     if (mesh === this.placementSource) { return; }
+    this.setPlacementParts(mesh ? [{ mesh }] : null, mesh);
+  }
+
+  /** The placement ghost from several meshes, each at its own matrix relative to the placement (a prefab's items). */
+  setPlacementParts(parts: Array<{ mesh: EditorMesh; matrix?: number[] }> | null, key: EditorMesh | null = null): void {
     this.placementGhost.traverse(object => { (object as THREE.Mesh).geometry?.dispose(); });
     this.placementGhost.clear();
-    this.placementSource = mesh;
-    for (const chunk of mesh?.chunks ?? []) {
-      this.placementGhost.add(new THREE.Mesh(chunkGeometry(chunk), this.placementMaterial));
+    this.placementSource = parts?.length ? key ?? parts[0].mesh : null;
+    for (const part of parts ?? []) {
+      for (const chunk of part.mesh.chunks) {
+        const m = new THREE.Mesh(chunkGeometry(chunk), this.placementMaterial);
+        if (part.matrix) { m.matrixAutoUpdate = false; m.matrix.fromArray(part.matrix); }
+        this.placementGhost.add(m);
+      }
     }
     this.updatePlacementGhost();
+  }
+
+  /** Where a placement dropped at this screen point would go (drag and drop from the asset browser), or null off the map. */
+  placementAt(clientX: number, clientY: number): PlacementTransform | null {
+    if (!this.placementOptions) { return null; }
+    const hit = this.placementHit(clientX, clientY);
+    if (!hit) { return null; }
+    const sample = samplePlacement(this.placementOptions);
+    return { ...sample, matrix: placementMatrix(hit.point, surfaceNormal(hit), sample, this.placementOptions.alignSurface).toArray() };
   }
 
   setPlacementOptions(options: PlacementOptions): void {
@@ -543,11 +596,23 @@ export class MapViewport extends ViewportCore {
 
   // ------------------------------------------------------------------ selection
 
-  set tool(value: MapTool) { this.toolValue = value; this.updateGizmo(); this.updatePlacementGhost(); }
+  set tool(value: MapTool) { this.toolValue = value; this.updateGizmo(); this.updatePlacementGhost(); this.updateBrushRing(); }
   get tool(): MapTool { return this.toolValue; }
 
   set gizmoLocal(value: boolean) { this.localSpace = value; this.updateGizmo(); }
   get gizmoLocal(): boolean { return this.localSpace; }
+
+  set snapTarget(value: SnapTarget) { this.snapTargetValue = value; }
+  get snapTarget(): SnapTarget { return this.snapTargetValue; }
+
+  set pivotMode(value: PivotMode) { this.pivotModeValue = value; this.updateGizmo(); }
+  get pivotMode(): PivotMode { return this.pivotModeValue; }
+
+  setBrush(options: BrushOptions, model: string | null): void {
+    this.brush = options;
+    this.brushModel = model;
+    this.updateBrushRing();
+  }
 
   // Off while the page waits on an edit or the session is read-only: no gizmo, no placing.
   set editable(value: boolean) { if (this.editableValue !== value) { this.editableValue = value; this.updateGizmo(); this.updatePlacementGhost(); } }
@@ -632,6 +697,21 @@ export class MapViewport extends ViewportCore {
       this.overlay.add(holder);
       this.overlayHolders.set(i, holder);
     }
+    for (const i of this.stroke?.erase ?? []) {
+      const inst = this.instances[i];
+      const b = inst.source ? this.localBounds.get(inst.source) : null;
+      if (!b || b.isEmpty()) { continue; }
+      const cube = new THREE.BoxGeometry(...b.getSize(new THREE.Vector3()).toArray());
+      const box = new THREE.LineSegments(new THREE.EdgesGeometry(cube), this.eraseMaterial);
+      cube.dispose();
+      box.position.copy(b.getCenter(new THREE.Vector3()));
+      const holder = new THREE.Group();
+      holder.matrixAutoUpdate = false;
+      holder.matrix.copy(this.currentMatrix(i));
+      holder.add(box);
+      holder.renderOrder = 20;
+      this.overlay.add(holder);
+    }
     for (const p of this.points) {
       const pillar = p.obj.children[0] as THREE.Mesh;
       (pillar.material as THREE.MeshBasicMaterial).color.setHex(p.name === this.selectedPoint ? SELECT_COLOR : pointColor(p.kind));
@@ -651,9 +731,10 @@ export class MapViewport extends ViewportCore {
     const center = this.selectionCenter();
     const canMove = this.selectedPoint ? t === 'move' : this.movable().length > 0;
     if (this.editableValue && (t === 'move' || t === 'rotate' || t === 'scale') && center && canMove) {
-      this.pivot.position.copy(center);
-      this.pivot.rotation.set(0, 0, 0);
       const ids = this.movable();
+      this.pivot.position.copy(this.pivotModeValue === 'active' && ids.length && !this.selectedPoint
+        ? new THREE.Vector3().setFromMatrixPosition(this.currentMatrix(ids[0])) : center);
+      this.pivot.rotation.set(0, 0, 0);
       const local = this.localSpace && !this.selectedPoint && ids.length === 1;
       if (local) {
         const q = new THREE.Quaternion();
@@ -664,9 +745,9 @@ export class MapViewport extends ViewportCore {
       this.pivot.scale.set(1, 1, 1);
       this.pivot.updateMatrixWorld(true);
       this.gizmo.setMode(t === 'move' ? 'translate' : t);
-      // Props stand upright: rotate about Y only; points move on the ground plane.
-      this.gizmo.showX = t !== 'rotate';
-      this.gizmo.showZ = t !== 'rotate';
+      // Points move on the ground plane; props and clutter turn about any axis.
+      this.gizmo.showX = true;
+      this.gizmo.showZ = true;
       this.gizmo.showY = !this.selectedPoint;
       this.gizmo.attach(this.pivot);
     } else {
@@ -678,32 +759,111 @@ export class MapViewport extends ViewportCore {
     if (dragging) {
       this.pivot.updateMatrixWorld(true);
       const snapshot = new Map<number, THREE.Matrix4>();
-      for (const i of this.movable()) { snapshot.set(i, this.currentMatrix(i).clone()); }
-      this.gizmoDrag = { start: this.pivot.matrixWorld.clone(), snapshot, point: this.selectionCenter() ?? undefined };
+      const bottoms = new Map<number, number>();
+      for (const i of this.movable()) {
+        snapshot.set(i, this.currentMatrix(i).clone());
+        // How far each origin sits above its mesh's lowest point, for the surface snap.
+        const bottom = this.bottomOf(i);
+        if (bottom !== null) { bottoms.set(i, new THREE.Vector3().setFromMatrixPosition(this.currentMatrix(i)).y - bottom); }
+      }
+      this.gizmoDrag = { start: this.pivot.matrixWorld.clone(), snapshot, point: this.selectionCenter() ?? undefined,
+        centre: this.pivot.position.clone(), bottoms };
       return;
     }
     const drag = this.gizmoDrag;
     this.gizmoDrag = null;
     this.endDragCulling();
+    this.callbacks.onDragInfo?.(null);
     if (!drag) { return; }
     this.pivot.updateMatrixWorld(true);
     const delta = this.pivot.matrixWorld.clone().multiply(drag.start.clone().invert());
-    if (isIdentity(delta)) { return; }
     if (this.selectedPoint && drag.point) {
+      if (isIdentity(delta)) { return; }
       const p = drag.point.clone().applyMatrix4(delta);
       this.callbacks.onPointMove?.(this.selectedPoint, [p.x, p.y, p.z]);
       return;
     }
     const kind = this.toolValue === 'rotate' ? 'rotate' : this.toolValue === 'scale' ? 'scale' : 'move';
-    const items = [...drag.snapshot].map(([index, m]) => ({ index, matrix: toModelArray(delta.clone().multiply(m)) }));
-    this.callbacks.onTransformCommit?.(items, kind);
+    const ids = [...drag.snapshot.keys()];
+    const next = this.dragResult(drag, delta);
+    if (ids.every((i, k) => next[k].equals(drag.snapshot.get(i)!))) { return; }
+    this.callbacks.onTransformCommit?.(ids.map((index, k) => ({ index, matrix: toModelArray(next[k]) })), kind);
+  }
+
+  // Each dragged item's placement for this pivot change: the pivot mode, then the surface or vertex snap of a move.
+  private dragResult(drag: NonNullable<MapViewport['gizmoDrag']>, delta: THREE.Matrix4): THREE.Matrix4[] {
+    const ids = [...drag.snapshot.keys()];
+    if (this.toolValue === 'move' && this.snapTargetValue === 'vertex' && this.lastPointer) {
+      const v = this.vertexUnder(this.lastPointer.x, this.lastPointer.y, new Set(ids));
+      if (v) { delta = new THREE.Matrix4().makeTranslation(v.x - drag.centre.x, v.y - drag.centre.y, v.z - drag.centre.z); }
+    }
+    const next = applyDrag(delta, ids.map(i => drag.snapshot.get(i)!), this.pivotModeValue, drag.centre);
+    if (this.toolValue === 'move' && this.snapTargetValue === 'surface') {
+      const skip = new Set(ids);
+      next.forEach((m, k) => {
+        const off = drag.bottoms.get(ids[k]);
+        const p = new THREE.Vector3().setFromMatrixPosition(m);
+        const ground = off === undefined ? null : this.groundBelow(p.x, p.z, skip);
+        if (ground !== null) { m.setPosition(p.x, ground + off!, p.z); }
+      });
+    }
+    return next;
+  }
+
+  // The lowest point of instance i's mesh as placed now (its box's corners), or null without a mesh.
+  private bottomOf(i: number): number | null {
+    const inst = this.instances[i];
+    const b = inst.source ? this.localBounds.get(inst.source) : null;
+    if (!b || b.isEmpty()) { return null; }
+    let low = Infinity;
+    for (let k = 0; k < 8; k++) {
+      low = Math.min(low, new THREE.Vector3(k & 1 ? b.max.x : b.min.x, k & 2 ? b.max.y : b.min.y, k & 4 ? b.max.z : b.min.z).applyMatrix4(this.currentMatrix(i)).y);
+    }
+    return low;
+  }
+
+  // The highest world or prop surface under (x, z), leaving out `skip`'s instances; null if there is none.
+  private groundBelow(x: number, z: number, skip: Set<number> = new Set(), layers: MapLayer[] = ['world', 'reference']): number | null {
+    const top = this.worldBox.isEmpty() ? 10000 : this.worldBox.max.y + 10;
+    const ray = new THREE.Raycaster(new THREE.Vector3(x, top, z), new THREE.Vector3(0, -1, 0));
+    const targets = this.content.children.filter(c => c.visible && layers.includes(c.userData['layer']));
+    for (const hit of ray.intersectObjects(targets, false)) {
+      const i = this.instanceOf(hit);
+      if (i === null || !skip.has(i)) { return hit.point.y; }
+    }
+    return null;
+  }
+
+  // The corner of the face under the cursor nearest the hit, in world space (vertex snap), leaving out `skip`.
+  private vertexUnder(clientX: number, clientY: number, skip: Set<number>): THREE.Vector3 | null {
+    const targets = this.content.children.filter(c => c.visible && c.userData['layer'] !== 'sky');
+    for (const hit of this.rayFrom(clientX, clientY).intersectObjects(targets, false)) {
+      const i = this.instanceOf(hit);
+      if ((i !== null && skip.has(i)) || !hit.face) { continue; }
+      const mesh = hit.object as THREE.Mesh;
+      const world = mesh.matrixWorld.clone();
+      if (mesh instanceof THREE.InstancedMesh && hit.instanceId !== undefined) {
+        const m = new THREE.Matrix4();
+        mesh.getMatrixAt(hit.instanceId, m);
+        world.multiply(m);
+      }
+      const pos = mesh.geometry.getAttribute('position');
+      let best: THREE.Vector3 | null = null;
+      for (const v of [hit.face.a, hit.face.b, hit.face.c]) {
+        const p = new THREE.Vector3().fromBufferAttribute(pos, v).applyMatrix4(world);
+        if (!best || p.distanceToSquared(hit.point) < best.distanceToSquared(hit.point)) { best = p; }
+      }
+      return best;
+    }
+    return null;
   }
 
   protected override onGizmoChange(): void {
     const drag = this.gizmoDrag;
     if (!drag) { return; }
-    if (this.toolValue === 'scale') {
-      // Placements carry one scale (the props panel and the game's clutter): an axis handle scales all three.
+    if (this.toolValue === 'scale' && [...drag.snapshot.keys()].some(i => this.instances[i].clutterIndex !== null)) {
+      // Clutter carries one scale (its quaternion layout and scale_inverse): an axis handle scales all three. GEO props
+      // are full matrices and stretch along one axis.
       const s = this.pivot.scale;
       const u = [s.x, s.y, s.z].reduce((a, b) => Math.abs(b - 1) > Math.abs(a - 1) ? b : a, 1);
       s.setScalar(u);
@@ -715,9 +875,12 @@ export class MapViewport extends ViewportCore {
       if (p) { const at = drag.point.clone().applyMatrix4(delta); p.obj.position.set(at.x - p.x, at.y - p.y, at.z - p.z); }
       return;
     }
+    this.callbacks.onDragInfo?.(this.dragText(delta));
     const touched = new Set<THREE.InstancedMesh>();
-    for (const [i, m] of drag.snapshot) {
-      const next = delta.clone().multiply(m);
+    const results = this.dragResult(drag, delta);
+    let k = 0;
+    for (const [i] of drag.snapshot) {
+      const next = results[k++];
       this.live[i].copy(next);
       // Billboards are drawn from their live placement on the next frame.
       if (this.billboards.has(i)) { this.billboardsDirty = true; continue; }
@@ -731,9 +894,139 @@ export class MapViewport extends ViewportCore {
     });
   }
 
+  // The drag so far, as the status bar shows it: the move, the turn or the scale.
+  private dragText(delta: THREE.Matrix4): string {
+    const p = new THREE.Vector3(), q = new THREE.Quaternion(), sc = new THREE.Vector3();
+    delta.decompose(p, q, sc);
+    if (this.toolValue === 'rotate') {
+      const e = new THREE.Euler().setFromQuaternion(q, 'YXZ');
+      return `Turn  X ${THREE.MathUtils.radToDeg(e.x).toFixed(1)}°  Y ${THREE.MathUtils.radToDeg(e.y).toFixed(1)}°  Z ${THREE.MathUtils.radToDeg(e.z).toFixed(1)}°`;
+    }
+    if (this.toolValue === 'scale') { return `Scale  ${this.pivot.scale.x.toFixed(3)} × ${this.pivot.scale.y.toFixed(3)} × ${this.pivot.scale.z.toFixed(3)}`; }
+    return `Move  ΔX ${p.x.toFixed(2)}  ΔY ${p.y.toFixed(2)}  ΔZ ${p.z.toFixed(2)}${this.snapTargetValue !== 'increment' ? ` · snap to ${this.snapTargetValue}` : ''}`;
+  }
+
   private endDragCulling(): void {
     for (const [mesh, culled] of this.dragMeshes) { mesh.computeBoundingSphere(); mesh.frustumCulled = culled; }
     this.dragMeshes.clear();
+  }
+
+  // ------------------------------------------------------------------ clutter brush
+
+  private canPaint(erasing = this.brush.erase): boolean {
+    return this.toolValue === 'paint' && this.editableValue && !!this.placementOptions && (erasing || !!this.brushModel)
+      && !this.lockedLayers.has('clutter') && !this.hiddenLayers.has('clutter');
+  }
+
+  // The world or prop surface under the cursor (the brush paints onto the ground, not onto other clutter).
+  private groundHit(ray: THREE.Raycaster): THREE.Intersection | null {
+    const targets = this.content.children.filter(c => c.visible && (c.userData['layer'] === 'world' || c.userData['layer'] === 'reference'));
+    return ray.intersectObjects(targets, false)[0] ?? null;
+  }
+
+  private updateBrushRing(): void {
+    const p = this.lastPointer;
+    const hit = p && this.toolValue === 'paint' ? this.groundHit(this.rayFrom(p.x, p.y)) : null;
+    this.brushRing.visible = !!hit;
+    if (!hit) { return; }
+    this.brushRing.position.copy(hit.point).add(new THREE.Vector3(0, Math.max(0.05, this.extent * 0.0005), 0));
+    this.brushRing.scale.setScalar(Math.max(0.1, this.brush.radius));
+    (this.brushRing.material as THREE.LineBasicMaterial).color.setHex(this.brush.erase ? 0xff5544 : this.canPaint() ? 0x66ddbb : 0x888888);
+  }
+
+  // Clutter placements of the brush's model (all clutter when it has none), as [index, x, z].
+  private brushClutter(): Array<[number, number, number]> {
+    const out: Array<[number, number, number]> = [];
+    this.instances.forEach((inst, i) => {
+      if (inst.clutterIndex === null || (this.brushModel && inst.model !== this.brushModel) || !this.instanceVisible(i)) { return; }
+      const e = this.display[i].elements;
+      out.push([i, e[12], e[14]]);
+    });
+    return out;
+  }
+
+  // One dab of the stroke at the cursor: placements scattered on the ground under the brush, or clutter marked for
+  // erasing. Dabs come at most every 40% of the radius of cursor travel.
+  private dab(clientX: number, clientY: number): void {
+    const stroke = this.stroke;
+    const hit = stroke ? this.groundHit(this.rayFrom(clientX, clientY)) : null;
+    if (!stroke || !hit) { return; }
+    if (stroke.last && stroke.last.distanceTo(hit.point) < this.brush.radius * 0.4) { return; }
+    stroke.last = hit.point.clone();
+    const { x: cx, z: cz } = hit.point;
+    const clutter = this.brushClutter();
+    if (stroke.erasing) {
+      for (const k of withinRadius(clutter.map(c => [c[1], c[2]]), cx, cz, this.brush.radius)) { stroke.erase.add(clutter[k][0]); }
+      this.refreshOverlay();
+      return;
+    }
+    const near = clutter.map(c => [c[1], c[2]] as [number, number])
+      .concat(stroke.matrices.map(m => [m.elements[12], m.elements[14]] as [number, number]))
+      .filter(([x, z]) => Math.hypot(x - cx, z - cz) <= this.brush.radius + this.brush.spacing);
+    const top = this.worldBox.isEmpty() ? hit.point.y + 1000 : this.worldBox.max.y + 10;
+    for (const [x, z] of keepApart(dabPoints(cx, cz, this.brush.radius, Math.max(1, Math.round(this.brush.density)), stroke.random), near, this.brush.spacing)) {
+      const ground = this.groundHit(new THREE.Raycaster(new THREE.Vector3(x, top, z), new THREE.Vector3(0, -1, 0)));
+      if (!ground) { continue; }
+      const normal = surfaceNormal(ground);
+      if (!slopeOk(normal, this.brush.maxSlope)) { continue; }
+      stroke.matrices.push(placementMatrix(ground.point, normal, samplePlacement(this.placementOptions!, stroke.random), this.placementOptions!.alignSurface));
+    }
+    this.strokeMarks.geometry.dispose();
+    this.strokeMarks.geometry = new THREE.BufferGeometry().setFromPoints(stroke.matrices.map(m => new THREE.Vector3().setFromMatrixPosition(m)));
+  }
+
+  private endStroke(): void {
+    const stroke = this.stroke;
+    this.stroke = null;
+    this.strokeMarks.geometry.dispose();
+    this.strokeMarks.geometry = new THREE.BufferGeometry();
+    if (!stroke) { return; }
+    if (stroke.erasing) {
+      this.refreshOverlay();
+      if (stroke.erase.size) { this.callbacks.onErase?.([...stroke.erase]); }
+    } else if (stroke.matrices.length) {
+      this.callbacks.onScatter?.(stroke.matrices.map(toModelArray));
+    }
+  }
+
+  // ------------------------------------------------------------------ measuring (the map check)
+
+  /**
+   * Every movable placement measured for the map check: the gap between its mesh's bottom and the surface under it
+   * (at most `maxGaps` are measured: each is a ray through the scene) and the triangles it draws.
+   */
+  measureScene(maxGaps = 2000): Measured[] {
+    const out: Measured[] = [];
+    let rays = 0;
+    this.instances.forEach((inst, i) => {
+      if (!isMovable(inst)) { return; }
+      const e = this.display[i].elements;
+      let triangles = 0;
+      for (const { mesh } of this.slots[i]) {
+        const g = mesh.geometry;
+        triangles += (g.index ? g.index.count : g.getAttribute('position').count) / 3;
+      }
+      let gap: number | null = null;
+      const bottom = this.bottomOf(i);
+      if (bottom !== null && rays++ < maxGaps) {
+        const ground = this.groundBelow(e[12], e[14], new Set([i]));
+        if (ground !== null) { gap = bottom - ground; }
+      }
+      out.push({ model: inst.model, instance: inst.instance, geoIndex: inst.geoIndex, clutterIndex: inst.clutterIndex,
+        position: [e[12], e[13], e[14]], gap, triangles: Math.round(triangles) });
+    });
+    return out;
+  }
+
+  /** World boxes of instances (for align and distribute). */
+  worldBounds(indices: number[]): Array<{ min: number[]; max: number[] }> {
+    return indices.map(i => {
+      const inst = this.instances[i];
+      const b = inst?.source ? this.localBounds.get(inst.source) : null;
+      const box = b && !b.isEmpty() ? b.clone().applyMatrix4(this.currentMatrix(i))
+        : new THREE.Box3().setFromPoints([new THREE.Vector3().setFromMatrixPosition(this.currentMatrix(i))]);
+      return { min: box.min.toArray(), max: box.max.toArray() };
+    });
   }
 
   // ------------------------------------------------------------------ pointer
@@ -758,6 +1051,15 @@ export class MapViewport extends ViewportCore {
   private readonly onPointerDown = (e: PointerEvent): void => {
     if (e.button !== 0 || this.orbitWithAlt) { return; }
     if (this.gizmo.dragging || (this.gizmo as unknown as { axis: string | null }).axis) { return; }
+    if (this.toolValue === 'paint') {
+      // Ctrl turns the brush round: paint erases, erase paints.
+      const erasing = this.brush.erase !== (e.ctrlKey || e.metaKey);
+      if (!this.canPaint(erasing)) { return; }
+      this.canvas.setPointerCapture(e.pointerId);
+      this.stroke = { erasing, matrices: [], erase: new Set(), last: null, screen: { x: e.clientX, y: e.clientY }, random: seededRandom(Date.now() & 0x7fffffff) };
+      this.dab(e.clientX, e.clientY);
+      return;
+    }
     if (this.toolValue === 'place') {
       this.placementPointer = { x: e.clientX, y: e.clientY };
       this.updatePlacementGhost();
@@ -774,7 +1076,18 @@ export class MapViewport extends ViewportCore {
 
   private readonly onPointerMove = (e: PointerEvent): void => {
     this.placementPointer = { x: e.clientX, y: e.clientY };
+    this.lastPointer = { x: e.clientX, y: e.clientY };
     this.updatePlacementGhost();
+    if (this.toolValue === 'paint') {
+      this.updateBrushRing();
+      if (this.stroke && (e.buttons & 1)) {
+        // A fast flick moves far between events: dab along the way so the stroke has no gaps.
+        const from = this.stroke.screen, steps = Math.max(1, Math.ceil(Math.hypot(e.clientX - from.x, e.clientY - from.y) / 10));
+        for (let k = 1; k <= steps; k++) { this.dab(from.x + (e.clientX - from.x) * k / steps, from.y + (e.clientY - from.y) * k / steps); }
+        this.stroke.screen = { x: e.clientX, y: e.clientY };
+      }
+      return;
+    }
     if (this.dragStart && (e.buttons & 1)) {
       const dx = e.clientX - this.dragStart.x, dy = e.clientY - this.dragStart.y;
       if (Math.hypot(dx, dy) > 4) {
@@ -800,13 +1113,14 @@ export class MapViewport extends ViewportCore {
 
   // Double-click a prop: open its model in the Model Editor.
   private readonly onDoubleClick = (e: MouseEvent): void => {
-    if (this.toolValue === 'place') { return; }
+    if (this.toolValue === 'place' || this.toolValue === 'paint') { return; }
     const h = this.hit(e.clientX, e.clientY);
     const i = h && !this.pointOf(h) ? this.instanceOf(h) : null;
     if (i !== null) { this.callbacks.onOpenModel?.(i); }
   };
 
   private readonly onPointerUp = (e: PointerEvent): void => {
+    if (this.stroke && e.button === 0) { this.endStroke(); return; }
     const start = this.dragStart;
     this.dragStart = null;
     if (!start || e.button !== 0) { return; }

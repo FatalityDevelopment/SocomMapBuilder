@@ -3,9 +3,12 @@ import { ShortcutReference } from './components/ShortcutReference';
 import { readRenderSettings, writeRenderSettings } from './viewport/renderSettings';
 import type { ViewportStats } from './webview/zipper-core/viewport-core';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { MapProblem, MapValidation, ModelSummary } from './webview/model-editor/asset-client';
-import { decodeMesh, type MeshWire } from './webview/model-editor/mesh-data';
-import { MapViewport, type MapLayer, type MapTool } from './viewport/mapViewport';
+import type { MapProblem, MapValidation, ModelSummary, PrefabDetail, PrefabSummary } from './webview/model-editor/asset-client';
+import { MapViewport, type MapLayer, type MapTool, type SnapTarget } from './viewport/mapViewport';
+import type { PivotMode } from './viewport/arrange';
+import { analyzeScene } from './viewport/mapAnalysis';
+import { ThumbnailRenderer, type ThumbPart } from './viewport/thumbnails';
+import { AssetBrowser, ASSET_DRAG_TYPE, type AssetDrag } from './components/AssetBrowser';
 import { LIGHTINGS, type Lighting, type Shading, type ViewPreset } from './webview/zipper-core/viewport-core';
 import { LAYERS, errText, layerOf, movable, pointKindCounts, problemTarget, type ModelGroup } from './mapModel';
 
@@ -38,10 +41,10 @@ export function MapPage() {
   const mapSession = useMapSession(viewportRef, (vp, keepCamera) => {
     if (!keepCamera) { setFlySpeedState(Math.round(vp.flySpeed)); }
     syncSelection();
-  }, () => { setPlaceModel(null); setSelection([]); setSelectedPoint(null); });
+  }, () => { setPlaceModel(null); setPlacePrefab(null); setSelection([]); setSelectedPoint(null); thumbsRef.current?.clear(); });
   const { client, instancesRef, statusRef, status, setStatus, sceneNs, counts, instances, points, models, setModels,
     busy, progress, loading, loadWarnings, connectionIssue, message, messageIsError, say,
-    retryScene, edit, history, saveCopy, exportPack, openDialog } = mapSession;
+    retryScene, edit, history, saveCopy, exportPack, openDialog, loadModel, texturePixels } = mapSession;
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   // The Map tab's check: rerun while the tab is open whenever the session changes.
   const [check, setCheck] = useState<MapValidation | null>(null);
@@ -49,12 +52,19 @@ export function MapPage() {
   const runCheck = async () => {
     if (!client.session) { return; }
     setChecking(true);
-    try { setCheck(await client.validate()); }
+    try {
+      const server = await client.validate();
+      // The checks that need the drawn scene: floating, stacked and dense placements.
+      const scene = viewportRef.current ? analyzeScene(viewportRef.current.measureScene()) : [];
+      const problems = [...server.problems, ...scene];
+      const counts: Record<string, number> = {};
+      for (const pr of problems) { counts[pr.severity] = (counts[pr.severity] ?? 0) + 1; }
+      setCheck({ ...server, problems, counts, ok: server.ok });
+    }
     catch (err) { say(`Map check failed: ${errText(err)}`, true); }
     finally { setChecking(false); }
   };
   const [query, setQuery] = useState('');
-  const [libQuery, setLibQuery] = useState('');
   const [propTab, setPropTab] = useState<PropTab>('item');
   // Each edit (and each package) gets a fresh check while the Map tab is open.
   useEffect(() => {
@@ -88,14 +98,108 @@ export function MapPage() {
   const [minPlaceScale, setMinPlaceScale] = useState(initialPreferences.minPlaceScale);
   const [maxPlaceScale, setMaxPlaceScale] = useState(initialPreferences.maxPlaceScale);
   const [alignSurface, setAlignSurface] = useState(initialPreferences.alignSurface);
+  const [snapTarget, setSnapTargetState] = useState<SnapTarget>(initialPreferences.snapTarget);
+  const [pivotMode, setPivotModeState] = useState<PivotMode>(initialPreferences.pivotMode);
+  const [placeAs, setPlaceAs] = useState(initialPreferences.placeAs);
+  const [brushRadius, setBrushRadius] = useState(initialPreferences.brushRadius);
+  const [brushSpacing, setBrushSpacing] = useState(initialPreferences.brushSpacing);
+  const [brushDensity, setBrushDensity] = useState(initialPreferences.brushDensity);
+  const [brushSlope, setBrushSlope] = useState(initialPreferences.brushSlope);
+  const [brushErase, setBrushErase] = useState(initialPreferences.brushErase);
+  const [prefabs, setPrefabs] = useState<PrefabSummary[]>([]);
+  const [placePrefab, setPlacePrefab] = useState<PrefabDetail | null>(null);
+  const [dragInfo, setDragInfo] = useState<string | null>(null);
+  const thumbsRef = useRef<ThumbnailRenderer | null>(null);
 
   const dirtyCount = status?.dirty.length ?? 0;
   const single = selection.length === 1 ? instances[selection[0]] ?? null : null;
   const movableCount = selection.filter(i => movable(instances[i])).length;
 
   const { commitTransforms, setField, movePointField, deleteSelection, duplicateSelection, copySelection, paste,
-    editSelection, dropToGround, place, clipboardRef } = useMapEdits(mapSession, viewportRef, selection,
-      next => setTool(next), setPropTab, { model: placeModel });
+    editSelection, dropToGround, place, scatter, erase, arrange, clipboardRef } = useMapEdits(mapSession, viewportRef, selection,
+      next => setTool(next), setPropTab, { model: placeModel, prefab: placePrefab?.name ?? null, placeAs });
+
+  // ------------------------------------------------------------------ assets: models, prefabs, thumbnails
+
+  const sourceOf = (model: string): string | null => {
+    const m = models.find(x => x.name.toLowerCase() === model.toLowerCase());
+    return m ? `${m.archive}:${m.name}` : null;
+  };
+  // A prefab's items as ghost / thumbnail parts (items whose model this package lacks are left out).
+  const prefabParts = async (detail: PrefabDetail): Promise<ThumbPart[]> => {
+    const parts = await Promise.all(detail.items.map(async (it): Promise<ThumbPart | null> => {
+      const source = sourceOf(it.model);
+      const model = source ? await loadModel(source) : null;
+      return model ? { mesh: model.mesh, textureNamespace: model.textureNamespace, matrix: it.matrix } : null;
+    }));
+    return parts.filter((x): x is ThumbPart => !!x);
+  };
+  const thumbnail = (key: string) => {
+    thumbsRef.current ??= new ThumbnailRenderer();
+    return thumbsRef.current.get(key, async () => {
+      if (key.startsWith('prefab:')) { return prefabParts(await client.prefab(key.slice(7))); }
+      const model = await loadModel(key);
+      return model ? [{ mesh: model.mesh, textureNamespace: model.textureNamespace }] : null;
+    }, texturePixels);
+  };
+  useEffect(() => () => { thumbsRef.current?.dispose(); thumbsRef.current = null; }, []);
+
+  const refreshPrefabs = async () => {
+    try { setPrefabs((await client.listPrefabs()).prefabs); }
+    catch (err) { say(`Could not list prefabs: ${errText(err)}`, true); }
+  };
+  useEffect(() => { if (status?.session) { void refreshPrefabs(); } }, [status?.session]);
+
+  const pickModel = (m: ModelSummary) => {
+    setPlacePrefab(null);
+    setPlaceModel(m);
+    if (tool !== 'paint') { setTool('place'); }
+  };
+  const pickPrefab = async (name: string) => {
+    try {
+      const detail = await client.prefab(name);
+      setPlaceModel(null);
+      setPlacePrefab(detail);
+      setTool('place');
+    } catch (err) { say(`Could not open prefab ${name}: ${errText(err)}`, true); }
+  };
+  const savePrefab = async (name: string) => {
+    const sel = selection.map(i => instancesRef.current[i]).filter(i => i && movable(i));
+    const geoIndices = sel.filter(i => i.clutterIndex === null && i.geoIndex !== null).map(i => i.geoIndex!);
+    const clutterIndices = sel.filter(i => i.clutterIndex !== null).map(i => i.clutterIndex!);
+    if (!geoIndices.length && !clutterIndices.length) { say('Select props or clutter to save as a prefab.', true); return; }
+    try {
+      const exists = prefabs.some(f => f.name.toLowerCase() === name.toLowerCase());
+      if (exists && !window.confirm(`Replace the prefab ${name}?`)) { return; }
+      const r = await client.savePrefab({ name, geoIndices, clutterIndices, replace: exists });
+      thumbsRef.current?.clear();
+      await refreshPrefabs();
+      say(`Saved prefab ${r.name}: ${r.items} item(s) (${r.models.join(', ')}). Drag it from Assets › Prefabs to place it.`);
+    } catch (err) { say(`Could not save the prefab: ${errText(err)}`, true); }
+  };
+  const deletePrefab = async (name: string) => {
+    try {
+      await client.deletePrefab(name);
+      if (placePrefab?.name === name) { setPlacePrefab(null); }
+      thumbsRef.current?.clear();
+      await refreshPrefabs();
+      say(`Deleted prefab ${name}.`);
+    } catch (err) { say(`Could not delete the prefab: ${errText(err)}`, true); }
+  };
+
+  // A tile dropped on the map: placed where it lands, with the Place tab's rotation and scale.
+  const dropAsset = async (e: React.DragEvent) => {
+    const raw = e.dataTransfer.getData(ASSET_DRAG_TYPE);
+    const vp = viewportRef.current;
+    if (!raw || !vp) { return; }
+    e.preventDefault();
+    const drag = JSON.parse(raw) as AssetDrag;
+    const at = vp.placementAt(e.clientX, e.clientY);
+    if (!at) { say('Drop onto the map: nothing is under that point.', true); return; }
+    if (drag.kind === 'prefab') { await place(at, { prefab: drag.name }); return; }
+    const model = models.find(m => m.archive === drag.archive && m.name === drag.name);
+    if (model) { setPlacePrefab(null); setPlaceModel(model); await place(at, { model }); }
+  };
 
   // A prop's model in the Model Editor: the same package (and session) with that model selected.
   const openModel = (index: number) => {
@@ -127,7 +231,7 @@ export function MapPage() {
   const setTool = (next: MapTool) => {
     setToolState(next);
     if (viewportRef.current) { viewportRef.current.tool = next; }
-    if (next === 'place') { setPropTab('place'); }
+    if (next === 'place' || next === 'paint') { setPropTab('place'); }
   };
 
   const setShading = (s: Shading) => {
@@ -159,6 +263,9 @@ export function MapPage() {
   const changeSnapMove = (v: number) => { setSnapMove(v); applySnap(snap, v, snapRotate, snapScale); };
   const changeSnapRotate = (v: number) => { setSnapRotate(v); applySnap(snap, snapMove, v, snapScale); };
   const changeSnapScale = (v: number) => { setSnapScale(v); applySnap(snap, snapMove, snapRotate, v); };
+
+  const setSnapTarget = (t: SnapTarget) => { setSnapTargetState(t); if (viewportRef.current) { viewportRef.current.snapTarget = t; } };
+  const setPivotMode = (m: PivotMode) => { setPivotModeState(m); if (viewportRef.current) { viewportRef.current.pivotMode = m; } };
 
   const toggleLocal = () => {
     const next = !gizmoLocal;
@@ -266,11 +373,6 @@ export function MapPage() {
     const q = query.toLowerCase();
     return points.filter(p => !q || p.name.toLowerCase().includes(q));
   }, [points, query]);
-
-  const library = useMemo(() => {
-    const q = libQuery.toLowerCase();
-    return models.filter(m => (m.kind === 'prop' || m.kind === 'library') && (!q || m.name.toLowerCase().includes(q))).slice(0, 400);
-  }, [models, libQuery]);
 
   const layerCounts = useMemo(() => {
     const out = new Map<MapLayer, number>();
@@ -380,6 +482,7 @@ export function MapPage() {
     toolRotate: () => setTool('rotate'),
     toolScale: () => setTool('scale'),
     toolPlace: () => setTool('place'),
+    toolPaint: () => setTool('paint'),
     shading: cycleShading,
     escape: () => { setOpenMenu(null); if (tool !== 'select') { setTool('select'); } else { clearSelection(); } },
   }, !shortcutsOpen);
@@ -387,8 +490,8 @@ export function MapPage() {
   // ------------------------------------------------------------------ viewport wiring
 
   // The viewport calls these; they are read through a ref so they always see the current state.
-  const handlersRef = useRef({ commitTransforms, place, syncSelection, edit, setHover, setPropTab, openDialog, openModel });
-  handlersRef.current = { commitTransforms, place, syncSelection, edit, setHover, setPropTab, openDialog, openModel };
+  const handlersRef = useRef({ commitTransforms, place, syncSelection, edit, setHover, setPropTab, openDialog, openModel, scatter, erase, setDragInfo });
+  handlersRef.current = { commitTransforms, place, syncSelection, edit, setHover, setPropTab, openDialog, openModel, scatter, erase, setDragInfo };
 
   const onViewportReady = useCallback((canvas: HTMLCanvasElement) => {
     if (viewportRef.current) { return; }
@@ -402,6 +505,9 @@ export function MapPage() {
       onPointMove: (name, position) => void handlersRef.current.edit(`move point ${name}`, { op: 'movePoint', name, position }),
       onPlace: transform => void handlersRef.current.place(transform),
       onOpenModel: index => handlersRef.current.openModel(index),
+      onScatter: matrices => void handlersRef.current.scatter(matrices),
+      onErase: indices => void handlersRef.current.erase(indices),
+      onDragInfo: text => handlersRef.current.setDragInfo(text),
     });
     vp.editable = false;
     vp.onStats = setViewportStats;
@@ -411,6 +517,8 @@ export function MapPage() {
     vp.showGrid = initialPreferences.grid;
     vp.showAxes = initialPreferences.grid;
     vp.gizmoLocal = initialPreferences.gizmoLocal;
+    vp.snapTarget = initialPreferences.snapTarget;
+    vp.pivotMode = initialPreferences.pivotMode;
     if (initialPreferences.ortho) { vp.toggleOrtho(); }
     vp.setSnap(initialPreferences.snap ? initialPreferences.snapMove : null,
       initialPreferences.snap ? initialPreferences.snapRotate : null, initialPreferences.snap ? initialPreferences.snapScale : null);
@@ -429,15 +537,22 @@ export function MapPage() {
     let cancelled = false;
     const vp = viewportRef.current;
     vp?.setPlacementMesh(null);
-    if (!vp || !placeModel || !status) { return; }
+    if (!vp || (!placeModel && !placePrefab) || !status) { return; }
     const session = client.session;
-    void client.mesh(placeModel.archive, placeModel.name).then(wire => {
-      if (!cancelled && session === client.session) { vp.setPlacementMesh(decodeMesh(wire as MeshWire)); }
+    const parts = placePrefab ? prefabParts(placePrefab)
+      : loadModel(`${placeModel!.archive}:${placeModel!.name}`).then(m => m ? [{ mesh: m.mesh }] : []);
+    void parts.then(list => {
+      if (!cancelled && session === client.session) { vp.setPlacementParts(list.length ? list : null); }
     }).catch(error => {
-      if (!cancelled) { say(`Could not preview ${placeModel.name}: ${errText(error)}`, true); }
+      if (!cancelled) { say(`Could not preview ${placePrefab?.name ?? placeModel?.name}: ${errText(error)}`, true); }
     });
     return () => { cancelled = true; vp.setPlacementMesh(null); };
-  }, [placeModel, status?.path, status?.revision, say]);
+  }, [placeModel, placePrefab, status?.path, status?.revision, say]);
+
+  useEffect(() => {
+    viewportRef.current?.setBrush({ radius: brushRadius, spacing: brushSpacing, density: brushDensity, maxSlope: brushSlope, erase: brushErase },
+      placeModel?.name ?? null);
+  }, [brushRadius, brushSpacing, brushDensity, brushSlope, brushErase, placeModel]);
 
   useEffect(() => {
     writeRenderSettings(renderSettings);
@@ -447,9 +562,11 @@ export function MapPage() {
 
   useEffect(() => {
     writeEditorPreferences({ shading, lighting, grid, snap, snapMove, snapRotate, snapScale, gizmoLocal, ortho, backfaces,
-      placeYaw, placeScale, randomYaw, randomScale, minPlaceScale, maxPlaceScale, alignSurface });
+      placeYaw, placeScale, randomYaw, randomScale, minPlaceScale, maxPlaceScale, alignSurface,
+      snapTarget, pivotMode, placeAs, brushRadius, brushSpacing, brushDensity, brushSlope, brushErase });
   }, [shading, lighting, grid, snap, snapMove, snapRotate, snapScale, gizmoLocal, ortho, backfaces,
-    placeYaw, placeScale, randomYaw, randomScale, minPlaceScale, maxPlaceScale, alignSurface]);
+    placeYaw, placeScale, randomYaw, randomScale, minPlaceScale, maxPlaceScale, alignSurface,
+    snapTarget, pivotMode, placeAs, brushRadius, brushSpacing, brushDensity, brushSlope, brushErase]);
   // ------------------------------------------------------------------ AI (MCP)
 
   // ui_view on this page: shading, lighting, camera preset, framing.
@@ -520,6 +637,16 @@ export function MapPage() {
             <NumField small min="0.01" step={0.05} value={String(snapScale)} title="Scale snap (factor)" onCommit={v => changeSnapScale(+v || 0.1)} />
           </>
         )}
+        <label className="me-toggle" title="What a move drag snaps to: the increment above, the surface under each item (it slides over the ground), or the nearest vertex under the cursor">Snap to
+          <select aria-label="Snap target" value={snapTarget} onChange={e => setSnapTarget(e.target.value as SnapTarget)}>
+            <option value="increment">Increment</option><option value="surface">Surface</option><option value="vertex">Vertex</option>
+          </select>
+        </label>
+        <label className="me-toggle" title="Where rotate and scale turn about: the selection's centre, each item's own origin, or the first selected item">Pivot
+          <select aria-label="Pivot" value={pivotMode} onChange={e => setPivotMode(e.target.value as PivotMode)}>
+            <option value="center">Centre</option><option value="individual">Each origin</option><option value="active">First selected</option>
+          </select>
+        </label>
         <label className="me-toggle" title="Move a single prop along its own axes (its yaw) instead of the world's"><input type="checkbox" checked={gizmoLocal} onChange={toggleLocal} /> Local</label>
         <label className="me-toggle" title="WASD fly speed (Shift x4)">Fly <NumField small min={1} step={10} value={String(flySpeed)} onCommit={v => setFlySpeed(+v)} /></label>
         <span className="me-spacer" />
@@ -547,8 +674,25 @@ export function MapPage() {
         <label className="me-toggle"><input type="checkbox" checked={renderSettings.showStats} onChange={e => setRenderSettings(s => ({ ...s, showStats: e.target.checked }))} /> Statistics</label>
       </div>
 
-      <div className="me-body no-assets">
-        <aside className="me-assets" />
+      <div className="me-body">
+        <aside className="me-assets">
+          <AssetBrowser
+            models={models}
+            prefabs={prefabs}
+            selectedModel={placePrefab ? null : placeModel}
+            selectedPrefab={placePrefab?.name ?? null}
+            onPickModel={pickModel}
+            onPickPrefab={name => void pickPrefab(name)}
+            thumbnail={thumbnail}
+            thumbnailNow={key => thumbsRef.current?.cached(key)}
+            canSavePrefab={movableCount > 0}
+            onSavePrefab={name => void savePrefab(name)}
+            onDeletePrefab={name => void deletePrefab(name)}
+            onRefreshPrefabs={() => void refreshPrefabs()}
+            onImport={() => void importFromPackage()}
+            readOnly={!status || !!status.readOnly}
+          />
+        </aside>
         <nav className="me-tools">
           {TOOLS.map(t => (
             <button key={t.id} className={`me-tool${tool === t.id ? ' on' : ''}`} onClick={() => setTool(t.id)} title={`${t.label} (${t.key})`}>
@@ -557,7 +701,9 @@ export function MapPage() {
           ))}
         </nav>
 
-        <section className="me-center">
+        <section className="me-center"
+          onDragOver={e => { if (e.dataTransfer.types.includes(ASSET_DRAG_TYPE)) { e.preventDefault(); e.dataTransfer.dropEffect = 'copy'; } }}
+          onDrop={e => void dropAsset(e)}>
           <ViewportView
             onReady={onViewportReady}
             viewLabel={`${viewLabel} · ${toolLabel}`}
@@ -621,11 +767,15 @@ export function MapPage() {
             onDelete={() => void deleteSelection()}
             onDrop={() => void dropToGround()}
             onOpenModel={() => openModel(selection[0])}
-            library={library}
-            libQuery={libQuery}
-            setLibQuery={setLibQuery}
+            onArrange={(axis, how) => void arrange(axis, how)}
             placeModel={placeModel}
-            setPlaceModel={model => { setPlaceModel(model); setTool('place'); }}
+            placePrefab={placePrefab?.name ?? null}
+            placeAs={placeAs}
+            setPlaceAs={setPlaceAs}
+            tool={tool}
+            brush={{ radius: brushRadius, spacing: brushSpacing, density: brushDensity, slope: brushSlope, erase: brushErase }}
+            setBrush={b => { setBrushRadius(b.radius); setBrushSpacing(b.spacing); setBrushDensity(b.density); setBrushSlope(b.slope); setBrushErase(b.erase); }}
+            onPaintTool={() => setTool('paint')}
             placeYaw={placeYaw}
             setPlaceYaw={setPlaceYaw}
             placeScale={placeScale}
@@ -640,7 +790,6 @@ export function MapPage() {
             setMaxPlaceScale={setMaxPlaceScale}
             alignSurface={alignSurface}
             setAlignSurface={setAlignSurface}
-            onImport={() => void importFromPackage()}
             check={check}
             checking={checking}
             onCheck={() => void runCheck()}
@@ -652,7 +801,7 @@ export function MapPage() {
       <div className={`me-statusbar${messageIsError ? ' err' : ''}`}>
         <span>{message}</span>
         <span className="me-spacer" />
-        {hover && <span className="lm-muted">{hover}</span>}
+        {dragInfo ? <span>{dragInfo}</span> : hover && <span className="lm-muted">{hover}</span>}
         <span>{selection.length} selected</span>
       </div>
 

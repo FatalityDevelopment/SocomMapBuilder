@@ -34,6 +34,7 @@ export const SHORTCUTS = {
   toolRotate: key('R', false, (_, k) => k === 'r'),
   toolScale: key('T', false, (_, k) => k === 't'),
   toolPlace: key('P', false, (_, k) => k === 'p'),
+  toolPaint: key('B', false, (_, k) => k === 'b'),
   shading: key('Z', false, (_, k) => k === 'z'),
   help: key('?', false, e => e.key === '?'),
   escape: key('Esc', false, e => e.key === 'Escape'),
@@ -54,7 +55,8 @@ export function matchShortcut(e: KeyboardEvent): ShortcutId | null {
 export const TOOLS: Array<{ id: MapTool; label: string; key: string; glyph: string }> = [
   { id: 'select', label: 'Select (click / box drag)', key: SHORTCUTS.toolSelect.label, glyph: '⬚' },
   { id: 'move', label: 'Move', key: SHORTCUTS.toolMove.label, glyph: '✥' },
-  { id: 'rotate', label: 'Rotate (yaw)', key: SHORTCUTS.toolRotate.label, glyph: '⟳' },
+  { id: 'rotate', label: 'Rotate', key: SHORTCUTS.toolRotate.label, glyph: '⟳' },
   { id: 'scale', label: 'Scale', key: SHORTCUTS.toolScale.label, glyph: '⤢' },
-  { id: 'place', label: 'Place clutter', key: SHORTCUTS.toolPlace.label, glyph: '✚' },
+  { id: 'place', label: 'Place (click a surface)', key: SHORTCUTS.toolPlace.label, glyph: '✚' },
+  { id: 'paint', label: 'Paint clutter (drag; Ctrl erases)', key: SHORTCUTS.toolPaint.label, glyph: '✎' },
 ];
