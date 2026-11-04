@@ -45,3 +45,11 @@ app-map-editor-page { display: block; height: 100vh; }
 .mb-problem-warning .mb-problem-badge { color: #e2c08d; background: rgba(226, 192, 141, 0.14); }
 .mb-problem-info .mb-problem-badge { color: #75beff; background: rgba(117, 190, 255, 0.14); }
 .mb-problem-error { color: #f48771; }
+
+.mb-action-editor .me-card { min-width: 0; }
+.mb-action-editor label { display: block; margin: 5px 0; }
+.mb-action-editor select, .mb-action-editor textarea, .mb-action-editor input:not([type=checkbox]) {
+  box-sizing: border-box; display: block; width: 100%; color: inherit; background: var(--panel, #25282b);
+  border: 1px solid var(--border, #515459); padding: 3px 5px; font: inherit;
+}
+.mb-action-editor button { margin: 3px 4px 3px 0; }
