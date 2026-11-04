@@ -148,7 +148,9 @@ export class MapViewport extends ViewportCore {
   private readonly overlayMaterial = new THREE.LineBasicMaterial({ color: SELECT_COLOR, depthTest: false, transparent: true });
   // Meshes whose culling is off while a gizmo drag moves their instances (bounds are recomputed when it ends).
   private readonly dragMeshes = new Map<THREE.InstancedMesh, boolean>();
-  private points: Array<MapPointInfo & { y: number; obj: THREE.Object3D }> = [];
+  // `figure`: the actor drawn at the point, kept in its own group so it shows with the Points layer hidden.
+  private points: Array<MapPointInfo & { y: number; obj: THREE.Object3D; figure?: THREE.Object3D }> = [];
+  private readonly figureGroup = new THREE.Group();
   // World models whose sky chunks moved to the Sky layer.
   private worldSky: Array<{ source: string; nodes: string[] }> = [];
   // The sky dome encloses the map; hidden until asked for.
@@ -200,7 +202,7 @@ export class MapViewport extends ViewportCore {
 
   constructor(canvas: HTMLCanvasElement, private readonly callbacks: MapCallbacks = {}) {
     super(canvas, () => callbacks.onCameraChange?.());
-    this.scene.add(this.content, this.overlay, this.pointGroup, this.placementGhost);
+    this.scene.add(this.content, this.overlay, this.pointGroup, this.figureGroup, this.placementGhost);
     const ring = new THREE.BufferGeometry().setFromPoints(Array.from({ length: 48 }, (_, k) => new THREE.Vector3(Math.cos(k / 48 * Math.PI * 2), 0, Math.sin(k / 48 * Math.PI * 2))));
     this.brushRing = new THREE.LineLoop(ring, new THREE.LineBasicMaterial({ color: 0x66ddbb, depthTest: false, transparent: true }));
     this.brushRing.renderOrder = 30;
@@ -518,6 +520,9 @@ export class MapViewport extends ViewportCore {
       if (mat) { (mat as THREE.SpriteMaterial).map?.dispose(); mat.dispose(); }
     });
     this.pointGroup.clear();
+    // Figures: their geometry is theirs, their materials are the shared cache's.
+    this.figureGroup.traverse(o => { (o as THREE.Mesh).geometry?.dispose(); });
+    this.figureGroup.clear();
     this.points = [];
     this.figureTargets = [];
   }
@@ -535,7 +540,7 @@ export class MapViewport extends ViewportCore {
   figureBounds(): Array<{ point: string; min: number[]; max: number[] }> {
     const out: Array<{ point: string; min: number[]; max: number[] }> = [];
     for (const p of this.points) {
-      const body = p.obj.children.find(c => c.children.some(m => m.userData['figure']));
+      const body = p.figure;
       if (!body) { continue; }
       body.updateMatrixWorld(true);
       const box = new THREE.Box3().setFromObject(body);
@@ -646,20 +651,25 @@ export class MapViewport extends ViewportCore {
       label.renderOrder = 11;
       const group = new THREE.Group();
       group.add(pillar, label);
+      let holder: THREE.Group | undefined;
       if (figure) {
-        // The character stands on the point; a thin ring keeps the point's colour (and the selection) readable.
+        // The character stands on the point; a thin ring keeps the point's colour (and the selection) readable. It
+        // lives in its own group (a holder that follows the point's drags), so hiding the Points layer leaves it.
         const body = this.buildFigure(figure);
         body.position.set(p.x, y, p.z);
+        holder = new THREE.Group();
+        holder.add(body);
+        holder.userData['point'] = p.name;
+        this.figureGroup.add(holder);
         pillar.geometry.dispose();
         (pillar as THREE.Mesh).geometry = new THREE.RingGeometry(3.2, 4.2, 24).rotateX(-Math.PI / 2);
         pillar.position.set(p.x, y + 0.3, p.z);
         label.position.set(p.x, y + 24, p.z);
         label.scale.set(5 * (label.userData['aspect'] as number), 5, 1);
-        group.add(body);
       }
       group.userData['point'] = p.name;
       this.pointGroup.add(group);
-      this.points.push({ ...p, y, obj: group });
+      this.points.push({ ...p, y, obj: group, figure: holder });
     }
     this.pointGroup.visible = !this.hiddenLayers.has('points');
   }
@@ -1261,7 +1271,11 @@ export class MapViewport extends ViewportCore {
     const delta = this.pivot.matrixWorld.clone().multiply(drag.start.clone().invert());
     if (this.selectedPoint && drag.point) {
       const p = this.points.find(x => x.name === this.selectedPoint);
-      if (p) { const at = drag.point.clone().applyMatrix4(delta); p.obj.position.set(at.x - p.x, at.y - p.y, at.z - p.z); }
+      if (p) {
+        const at = drag.point.clone().applyMatrix4(delta);
+        p.obj.position.set(at.x - p.x, at.y - p.y, at.z - p.z);
+        p.figure?.position.copy(p.obj.position);
+      }
       return;
     }
     this.callbacks.onDragInfo?.(this.dragText(delta));
@@ -1423,6 +1437,8 @@ export class MapViewport extends ViewportCore {
   private hit(clientX: number, clientY: number): THREE.Intersection | null {
     const targets: THREE.Object3D[] = this.content.children.filter(c => c.visible);
     if (this.pointGroup.visible) { targets.push(...this.pointGroup.children); }
+    // Characters stay pickable (selecting their point) with the Points layer hidden.
+    targets.push(...this.figureGroup.children);
     return this.rayFrom(clientX, clientY).intersectObjects(targets, true)[0] ?? null;
   }
 
