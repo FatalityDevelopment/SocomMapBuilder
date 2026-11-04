@@ -22,6 +22,8 @@ import { PropsPanel, type PropTab } from './components/PropsPanel';
 import { MapActionsPanel } from './components/MapActionsPanel';
 import { MissionPanel } from './components/MissionPanel';
 import { actionMarkers } from './viewport/actionMarkers';
+import { planFigures, weaponForValve } from './viewport/actorFigures';
+import type { PoseClip } from './webview/zipper-core/skinning';
 import type { MapActions, MapTables } from './webview/model-editor/asset-client';
 import { ViewportView } from './components/ViewportView';
 import { NumField } from './components/NumField';
@@ -51,7 +53,7 @@ export function MapPage() {
   }, () => { setPlaceModel(null); setPlacePrefab(null); setSelection([]); setSelectedPoint(null); thumbsRef.current?.clear(); });
   const { client, instancesRef, statusRef, status, setStatus, sceneNs, counts, instances, points, models, setModels,
     busy, progress, loading, loadWarnings, connectionIssue, message, messageIsError, say,
-    retryScene, edit, history, saveCopy, exportPack, openDialog, loadModel, texturePixels, jump } = mapSession;
+    retryScene, edit, history, saveCopy, exportPack, openDialog, loadModel, texturePixels, jump, sceneReady } = mapSession;
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   // The Map tab's check: rerun while the tab is open whenever the session changes.
   const [check, setCheck] = useState<MapValidation | null>(null);
@@ -132,6 +134,19 @@ export function MapPage() {
   const [actionNode, setActionNode] = useState<number | null>(null);
   const [actionMarkersOn, setActionMarkersOn] = useState(initialPreferences.actionMarkers);
   const [objectiveMarkersOn, setObjectiveMarkersOn] = useState(initialPreferences.objectiveMarkers);
+  const [figuresOn, setFiguresOn] = useState(initialPreferences.actorFigures);
+  // Stand-in weapons for non-SEAL character types (view only; this viewer's browser): chartype -> "archive:name".
+  const [actorWeapons, setActorWeapons] = useState<Record<string, string>>(() => {
+    try { return JSON.parse(localStorage.getItem('mapbuilder.actorWeapons') ?? '{}') as Record<string, string>; } catch { return {}; }
+  });
+  const chooseActorWeapon = (chartype: string, source: string) => {
+    const next = { ...actorWeapons, [chartype]: source };
+    if (!source) { delete next[chartype]; }
+    setActorWeapons(next);
+    try { localStorage.setItem('mapbuilder.actorWeapons', JSON.stringify(next)); } catch { /* storage unavailable */ }
+  };
+  const clipListRef = useRef<{ session: string; clips: Map<string, string> } | null>(null);
+  const poseCacheRef = useRef(new Map<string, PoseClip | null>());
   // Camera bookmarks, per package (browser storage: a convenience, kept per viewer).
   const [bookmarks, setBookmarks] = useState<Array<{ name: string; camera: CameraState }>>([]);
   const thumbsRef = useRef<ThumbnailRenderer | null>(null);
@@ -302,6 +317,41 @@ export function MapPage() {
     })));
   }, [tables, instances]);
   useEffect(() => { viewportRef.current?.setSelectedObjective(selectedObjective); }, [selectedObjective]);
+  const weaponModels = useMemo(() => models.filter(m => m.kind === 'weapon').map(m => `${m.archive}:${m.name}`), [models]);
+  // Actors as characters at their start points, posed by a standing clip, holding a stand-in weapon.
+  useEffect(() => {
+    let live = true;
+    const vp = viewportRef.current;
+    const session = status?.session;
+    if (!vp || !session || !tables || !figuresOn) { vp?.setActorFigures([]); return; }
+    void (async () => {
+      try {
+        if (clipListRef.current?.session !== session) {
+          const list = await client.listAnimations();
+          clipListRef.current = { session, clips: new Map(list.clips.map(c => [c.name, c.source])) };
+          poseCacheRef.current.clear();
+        }
+        const clips = clipListRef.current.clips;
+        const armory = (tables.mission?.valves ?? []).filter(v => v.name?.startsWith('Enable') && v.value === 1)
+          .map(v => weaponForValve(v.name!, weaponModels)).filter((m): m is string => !!m);
+        const plans = planFigures(tables.actors, points.map(p => p.name), { clips: [...clips.keys()], armory, chosen: actorWeapons });
+        const figures = await Promise.all(plans.map(async plan => {
+          const [character, weapon] = await Promise.all([loadModel(plan.model), plan.weapon ? loadModel(plan.weapon) : Promise.resolve(null)]);
+          let clip: PoseClip | null = null;
+          if (plan.clip) {
+            if (!poseCacheRef.current.has(plan.clip)) {
+              poseCacheRef.current.set(plan.clip, await client.animation(plan.clip, clips.get(plan.clip)).then(c => c as PoseClip).catch(() => null));
+            }
+            clip = poseCacheRef.current.get(plan.clip) ?? null;
+          }
+          return character ? { point: plan.point, character, clip, weapon } : null;
+        }));
+        if (live && client.session === session) { vp.setActorFigures(figures.filter((f): f is NonNullable<typeof f> => !!f)); }
+      } catch (err) { if (live) { say(`Could not draw the actors: ${errText(err)}`, true); } }
+    })();
+    return () => { live = false; };
+  }, [tables, points, figuresOn, actorWeapons, weaponModels, status?.session, sceneReady]);
+  const toggleFigures = () => setFiguresOn(on => !on);
   const toggleActionMarkers = () => {
     const next = !actionMarkersOn;
     setActionMarkersOn(next);
@@ -572,6 +622,7 @@ export function MapPage() {
         { label: 'Back faces', action: toggleBackfaces, checked: () => backfaces },
         { label: 'Action icons', action: toggleActionMarkers, checked: () => actionMarkersOn },
         { label: 'Objective flags', action: toggleObjectiveMarkers, checked: () => objectiveMarkersOn },
+        { label: 'Characters at start points', action: toggleFigures, checked: () => figuresOn },
         { separator: true, label: '' },
         { label: 'Walk mode', shortcut: SHORTCUTS.walk.label, action: toggleWalk, checked: () => walking, disabled: () => !status },
         { label: 'Measure', shortcut: SHORTCUTS.toolMeasure.label, action: () => setTool('measure'), disabled: () => !status },
@@ -724,10 +775,10 @@ export function MapPage() {
     writeEditorPreferences({ shading, lighting, grid, snap, snapMove, snapRotate, snapScale, gizmoLocal, ortho, backfaces,
       placeYaw, placeScale, randomYaw, randomScale, minPlaceScale, maxPlaceScale, alignSurface,
       snapTarget, pivotMode, placeAs, brushRadius, brushSpacing, brushDensity, brushSlope, brushErase,
-      actionMarkers: actionMarkersOn, objectiveMarkers: objectiveMarkersOn });
+      actionMarkers: actionMarkersOn, objectiveMarkers: objectiveMarkersOn, actorFigures: figuresOn });
   }, [shading, lighting, grid, snap, snapMove, snapRotate, snapScale, gizmoLocal, ortho, backfaces,
     placeYaw, placeScale, randomYaw, randomScale, minPlaceScale, maxPlaceScale, alignSurface,
-    snapTarget, pivotMode, placeAs, brushRadius, brushSpacing, brushDensity, brushSlope, brushErase, actionMarkersOn, objectiveMarkersOn]);
+    snapTarget, pivotMode, placeAs, brushRadius, brushSpacing, brushDensity, brushSlope, brushErase, actionMarkersOn, objectiveMarkersOn, figuresOn]);
   // ------------------------------------------------------------------ AI (MCP)
 
   // ui_view on this page: shading, lighting, camera preset, framing.
@@ -757,6 +808,7 @@ export function MapPage() {
     }),
     selectedPoint,
     markers: viewportRef.current?.markerCount() ?? null,
+    characters: viewportRef.current?.figureBounds() ?? null,
     selectedObjective,
   });
   useEffect(() => provideAiState('map', () => aiStateRef.current()), []);
@@ -916,7 +968,7 @@ export function MapPage() {
               <div className="me-note">Open an editable SOCOM II map to manage its actions.</div>}
             mission={status && !status.readOnly ? <MissionPanel tables={tables} error={tablesError} revision={status.revision} busy={busy || loading} edit={edit}
               path={status.path} selectedObjective={selectedObjective} onSelectObjective={row => { setSelectedObjective(row); if (row !== null) { viewportRef.current?.frameObjective(row); } }}
-              onShowObjective={showObjective} /> :
+              onShowObjective={showObjective} weaponModels={weaponModels} actorWeapons={actorWeapons} onChooseWeapon={chooseActorWeapon} /> :
               <div className="me-note">Open an editable SOCOM II map to see its mission tables.</div>}
             tab={propTab}
             setTab={setPropTab}

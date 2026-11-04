@@ -198,6 +198,8 @@ export interface MapObjective {
 }
 export interface MapActor {
   row: number; path: TablePath; name: string | null; display: string | null; character: string | null;
+  /** "archive:name" of the character model its chartype draws as, when the package has it. */
+  model: string | null;
   starts: Array<{ point: string; value: number | string | null }>; teams: number[];
   flags: Array<{ name: string; values: Array<number | string | null> }>;
   ai: Array<{ name: string; value: number | string | null }> | null;

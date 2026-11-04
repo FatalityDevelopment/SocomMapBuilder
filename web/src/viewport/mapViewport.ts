@@ -14,6 +14,7 @@ import { propDrawChunks } from './propFaces';
 import { groupInstancesByLayer, isSkyChunk, layerOf, movable as isMovable, pointColor } from '../mapModel';
 import { actionIconCanvas, objectiveIconCanvas, type ActionKind } from '../shared/actionIcons';
 import { markerAnchor, type ActionMarker } from './actionMarkers';
+import { poseBones, skinChunk, type PoseClip } from '../webview/zipper-core/skinning';
 
 export type MapTool = 'select' | 'move' | 'rotate' | 'scale' | 'place' | 'paint' | 'measure';
 /** A saved camera: where it stands and what it looks at. */
@@ -64,10 +65,23 @@ export interface MapCallbacks {
   onMarkerPick?: (pick: MarkerPick) => void;
 }
 
+/** An actor drawn as its character at an AIMAPS start point, posed by a clip, holding a weapon in its right hand. */
+export interface ActorFigure { point: string; character: MapModel; clip: PoseClip | null; weapon: MapModel | null }
+
 /** What a click on a 3D marker picked. */
 export type MarkerPick = { kind: 'action'; geoIndex: number; instance: number } | { kind: 'objective'; row: number };
 /** A HUD objective's map location (hudobjectives.rdr LOCATION is x, z). */
 export interface ObjectiveMarker { row: number; x: number; z: number; label: string; secondary: boolean }
+
+// Where a held weapon sits in the right hand's frame: SOCOM clips carry a clip-only "rifle" (or "pistol" / "weapon")
+// bone under rhand whose first key places the weapon (as the Animation Editor mounts it); without one, the hand itself.
+function weaponMount(clip: PoseClip | null): THREE.Matrix4 {
+  const track = clip?.bones.find(b => ['rifle', 'weapon', 'pistol'].includes(b.name.toLowerCase()));
+  if (!track) { return new THREE.Matrix4(); }
+  const p = track.positions[0] ? new THREE.Vector3().fromArray(track.positions[0]) : new THREE.Vector3();
+  const q = track.rotations[0] ? new THREE.Quaternion().fromArray(track.rotations[0]) : new THREE.Quaternion();
+  return new THREE.Matrix4().compose(p, q, new THREE.Vector3(1, 1, 1));
+}
 
 // Screen height of a marker icon in CSS pixels, whatever the distance.
 const MARKER_PX = 26;
@@ -179,6 +193,10 @@ export class MapViewport extends ViewportCore {
   private showObjectiveMarkersValue = true;
   private selectedObjective: number | null = null;
   private readonly markerTextures = new Map<string, THREE.CanvasTexture>();
+  // Actors drawn as characters at their start points (by point name, lower case), and the meshes drawn for them.
+  private figures = new Map<string, ActorFigure>();
+  private figureTargets: Array<{ mesh: THREE.Mesh; spec: MaterialSpec }> = [];
+  private lastPoints: MapPointInfo[] = [];
 
   constructor(canvas: HTMLCanvasElement, private readonly callbacks: MapCallbacks = {}) {
     super(canvas, () => callbacks.onCameraChange?.());
@@ -232,7 +250,7 @@ export class MapViewport extends ViewportCore {
   }
 
   protected override flyEnabled(): boolean { return true; }
-  protected materialTargets(): Array<{ mesh: THREE.Mesh; spec: MaterialSpec }> { return this.targets; }
+  protected materialTargets(): Array<{ mesh: THREE.Mesh; spec: MaterialSpec }> { return this.figureTargets.length ? [...this.targets, ...this.figureTargets] : this.targets; }
   protected override onShadingChanged(): void { this.refreshOverlay(); }
   // The base constructor renders a first frame before this class's fields exist, hence the guard.
   protected override onFrame(): void {
@@ -494,12 +512,69 @@ export class MapViewport extends ViewportCore {
     this.pointGroup.traverse(o => {
       const mesh = o as THREE.Mesh;
       mesh.geometry?.dispose();
+      // Figures draw with the shared material cache: those materials are not theirs to dispose.
+      if (o.userData['figure']) { return; }
       const mat = mesh.material as THREE.Material | undefined;
       if (mat) { (mat as THREE.SpriteMaterial).map?.dispose(); mat.dispose(); }
     });
     this.pointGroup.clear();
     this.points = [];
+    this.figureTargets = [];
   }
+
+  /** Actors to draw as characters at their start points (their points' pillars give way to them). */
+  setActorFigures(figures: ActorFigure[]): void {
+    this.figures = new Map(figures.map(f => [f.point.toLowerCase(), f]));
+    this.buildPoints(this.lastPoints);
+    this.refreshOverlay();
+  }
+
+  get figureCount(): number { return this.points.filter(p => this.figures.has(p.name.toLowerCase())).length; }
+
+  /** Where each figure is drawn: its point and world bounds (for ui_state). */
+  figureBounds(): Array<{ point: string; min: number[]; max: number[] }> {
+    const out: Array<{ point: string; min: number[]; max: number[] }> = [];
+    for (const p of this.points) {
+      const body = p.obj.children.find(c => c.children.some(m => m.userData['figure']));
+      if (!body) { continue; }
+      body.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(body);
+      out.push({ point: p.name, min: box.min.toArray().map(v => Math.round(v * 10) / 10), max: box.max.toArray().map(v => Math.round(v * 10) / 10) });
+    }
+    return out;
+  }
+
+  // A figure: the character's chunks skinned by its clip's first frame, and its weapon on the right hand.
+  private buildFigure(f: ActorFigure): THREE.Group {
+    const group = new THREE.Group();
+    const mesh = f.character.mesh;
+    const world = mesh.skeleton ? poseBones(mesh.skeleton, f.clip, 0) : [];
+    const add = (chunk: (typeof mesh.chunks)[number], ns: string | null, matrix?: THREE.Matrix4, skinned = false) => {
+      const geometry = chunkGeometry(chunk);
+      if (skinned && chunk.skin && mesh.skinInfluences) {
+        const positions = new Float32Array(chunk.vertexCount * 3), normals = new Float32Array(chunk.vertexCount * 3);
+        skinChunk(chunk, mesh.skinInfluences, world, positions, normals);
+        geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        geometry.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+        geometry.computeBoundingSphere();
+      }
+      const spec: MaterialSpec = { texture: chunk.texture ? `${ns ?? ''}:${chunk.texture}`.toLowerCase() : null, materialBlend: chunk.materialBlend,
+        colors: chunk.colors, lit: true };
+      const m = new THREE.Mesh(geometry, this.materialFor(spec));
+      m.userData['figure'] = true;
+      if (matrix) { m.matrixAutoUpdate = false; m.matrix.copy(matrix); }
+      group.add(m);
+      this.figureTargets.push({ mesh: m, spec });
+    };
+    for (const chunk of mesh.chunks) { add(chunk, f.character.textureNamespace, undefined, !!mesh.skeleton); }
+    const hand = mesh.skeleton?.findIndex(b => b.name.toLowerCase() === 'rhand') ?? -1;
+    if (f.weapon && hand >= 0) {
+      const grip = world[hand].clone().multiply(weaponMount(f.clip));
+      for (const chunk of f.weapon.mesh.chunks) { add(chunk, f.weapon.textureNamespace, grip); }
+    }
+    return group;
+  }
+
 
   instanceList(): readonly MapInstance[] { return this.instances; }
 
@@ -538,6 +613,7 @@ export class MapViewport extends ViewportCore {
   // ------------------------------------------------------------------ points
 
   private buildPoints(points: MapPointInfo[]): void {
+    this.lastPoints = points;
     this.clearPoints();
     const height = Math.max(4, this.extent * 0.012);
     // Without a height from the AI grid: the highest terrain or prop surface under the point (buildings stand in holes
@@ -559,6 +635,7 @@ export class MapViewport extends ViewportCore {
       pillar.position.set(p.x, y + height / 2, p.z);
       pillar.renderOrder = 10;
       pillar.userData['point'] = p.name;
+      const figure = this.figures.get(p.name.toLowerCase());
       const label = labelSprite(p.name, '#ffffff', 32);
       // These labels live on the map, unlike selection/gizmo overlays. A sky dome
       // or building in front of a point must occlude both its pillar and its label.
@@ -569,6 +646,17 @@ export class MapViewport extends ViewportCore {
       label.renderOrder = 11;
       const group = new THREE.Group();
       group.add(pillar, label);
+      if (figure) {
+        // The character stands on the point; a thin ring keeps the point's colour (and the selection) readable.
+        const body = this.buildFigure(figure);
+        body.position.set(p.x, y, p.z);
+        pillar.geometry.dispose();
+        (pillar as THREE.Mesh).geometry = new THREE.RingGeometry(3.2, 4.2, 24).rotateX(-Math.PI / 2);
+        pillar.position.set(p.x, y + 0.3, p.z);
+        label.position.set(p.x, y + 24, p.z);
+        label.scale.set(5 * (label.userData['aspect'] as number), 5, 1);
+        group.add(body);
+      }
       group.userData['point'] = p.name;
       this.pointGroup.add(group);
       this.points.push({ ...p, y, obj: group });

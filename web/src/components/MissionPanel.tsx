@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react';
 import type { MapTables, TablePath } from '../webview/model-editor/asset-client';
 import { host } from '../shared';
 import { objectiveIconUrl } from '../shared/actionIcons';
+import { isSeal } from '../viewport/actorFigures';
 
 interface Props {
   tables: MapTables | null;
@@ -19,6 +20,10 @@ interface Props {
   onSelectObjective: (row: number | null) => void;
   /** Frame an objective's location in the 3D view. */
   onShowObjective: (row: number) => void;
+  /** Weapon models ("archive:name") and the stand-in weapon picked per character type for the 3D figures. */
+  weaponModels?: string[];
+  actorWeapons?: Record<string, string>;
+  onChooseWeapon?: (chartype: string, source: string) => void;
 }
 
 /** A value that commits on Enter or leaving the field, with an inline check. */
@@ -98,8 +103,19 @@ export function MissionPanel(p: Props) {
     <div className="me-card">
       <div className="me-card-title">Actors ({t.actors.length})</div>
       {t.actors.length === 0 && <p className="me-note">No actors (vehicles.rdr).</p>}
+      {p.onChooseWeapon && (() => {
+        const types = [...new Set(t.actors.filter(a => a.model && a.character && !isSeal(a)).map(a => a.character!))].sort();
+        return types.length > 0 && <details className="mb-mission-actor"><summary>Weapons the 3D characters hold</summary>
+          <p className="me-note">View only. No map file says which weapon an AI carries (the game's shared chartype tables do), so pick a stand-in per character type. SEALs hold the weapons the mission's armory enables.</p>
+          <div className="mb-mission-grid">{types.map(type => <label key={type}>{type}
+            <select value={p.actorWeapons?.[type] ?? ''} onChange={e => p.onChooseWeapon!(type, e.target.value)}>
+              <option value="">None</option>
+              {(p.weaponModels ?? []).map(w => <option key={w} value={w}>{w.slice(w.indexOf(':') + 1)}</option>)}
+            </select></label>)}</div>
+        </details>;
+      })()}
       {t.actors.map(a => <details key={a.row} className="mb-mission-actor">
-        <summary><b>{a.display || a.name}</b> <span className="lm-muted">{a.name}{a.character ? ` · ${a.character}` : ''}</span></summary>
+        <summary><b>{a.display || a.name}</b> <span className="lm-muted">{a.name}{a.character ? ` · ${a.character}` : ''}{a.model ? ` · ${a.model.slice(a.model.indexOf(':') + 1)}` : ''}</span></summary>
         <dl className="mb-mission-facts">
           {a.starts.length > 0 && <><dt>Starts at</dt><dd>{a.starts.map(s => `${s.point}${s.value != null ? ` (${s.value})` : ''}`).join(', ')}</dd></>}
           {a.teams.length > 0 && <><dt>Teams</dt><dd>{a.teams.join(', ')}</dd></>}

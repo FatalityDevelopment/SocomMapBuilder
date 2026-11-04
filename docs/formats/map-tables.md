@@ -63,7 +63,7 @@ A wrapper list of actor rows, each in pair form:
 |---|---|
 | `name` | Actor id (`player`, `able2`, `Road1` …); `mission.rdr`'s `UiVehicles` names the player's team by it |
 | `display` | Name shown in game (`SPECTER`, `Sesseri Smuggler`) |
-| `character` | Character type (`jungle_A51`, `m51_terror01`): chartypes.tsv maps it to a model |
+| `character` | Character type (`jungle_A51`, `m51_terror01`). Which model it draws as is not in the map package; `server/data/chartypes.tsv` (copied from the bots tooling) maps 430 types, e.g. `m51_terror01` → `MESH_alban_ter01`, `jungle_A51` → `MESH_seal_A_woodland_LO`. `assets_map_tables` answers the resolved `model`. Which **weapon** an actor carries is not in any table this editor reads either (most likely the shared chartype tables in `RUN\READERC.ZAR`, not decoded); the Map Builder's figures hold stand-ins |
 | `setup` | List of `[point, number]` pairs: the AIMAPS point(s) the actor starts at. The number is observed 0–7 (a start mode or behaviour, not decoded); several pairs give alternative starts |
 | `team` | Integer list: team / group memberships (1–2 for SEALs, 30–31 sides, others squads) |
 | `nofade`, `noshoot`, `nosnooze` | Flags with value 1 |

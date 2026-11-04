@@ -15,6 +15,44 @@ namespace MapBuilder.Server.Services;
 /// </summary>
 internal sealed partial class ZipperAssetService
 {
+    // chartype -> character model name (drawn as MESH_<name>), shipped as data/chartypes.tsv (copied from the bots
+    // tooling's Mods/SOCOM2/bots/chartypes.tsv). Nothing in a map package itself says which model a chartype is.
+    private static readonly Lazy<Dictionary<string, string>> CharTypes = new(() => ReadCharTypes(Path.Combine(AppContext.BaseDirectory, "data", "chartypes.tsv")));
+
+    internal static Dictionary<string, string> ReadCharTypes(string path)
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (!File.Exists(path)) return map;
+        foreach (string line in File.ReadLines(path))
+        {
+            if (line.StartsWith('#')) continue;
+            string[] cols = line.Split('\t');
+            if (cols.Length >= 2 && cols[0].Trim().Length > 0 && cols[1].Trim().Length > 0) map[cols[0].Trim()] = cols[1].Trim();
+        }
+        return map;
+    }
+
+    /// <summary>Every model record of the package's *_MDL.ZED archives, by name (case-insensitive) as "archive:name".</summary>
+    private static Dictionary<string, string> PackageModels(AssetSession s)
+    {
+        var models = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var leaf in s.Package.Entries.Select(e => e.Leaf).Where(l => l.EndsWith("_MDL.ZED", StringComparison.OrdinalIgnoreCase)))
+        foreach (var node in s.Package.Container(leaf).Nodes)
+            models.TryAdd(node.Name, leaf + ":" + node.Name);
+        return models;
+    }
+
+    /// <summary>The package model ("archive:name") a chartype draws as: its mapped model (MESH_ first), else one named like it.</summary>
+    internal static string? CharacterModel(IReadOnlyDictionary<string, string> models, string? chartype, IReadOnlyDictionary<string, string> types)
+    {
+        if (string.IsNullOrWhiteSpace(chartype)) return null;
+        var names = new List<string>();
+        if (types.TryGetValue(chartype, out var model)) names.AddRange(new[] { "MESH_" + model, model });
+        names.AddRange(new[] { "MESH_" + chartype, chartype });
+        foreach (string name in names) if (models.TryGetValue(name, out var hit)) return hit;
+        return null;
+    }
+
     private static ZedNode? ReaderRecord(AssetSession s, string name) =>
         s.Package.Entry(MissionReader) == null ? null
             : s.Package.Container(MissionReader).Nodes.FirstOrDefault(n => n.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
@@ -92,6 +130,7 @@ internal sealed partial class ZipperAssetService
         }
 
         var actors = new List<object>();
+        Dictionary<string, string>? models = null;
         if (ReaderRecord(s, "vehicles.rdr") is { } vehicles)
         {
             var doc = RdrDocument.Parse(vehicles.Data);
@@ -112,6 +151,7 @@ internal sealed partial class ZipperAssetService
                 {
                     row = i, path,
                     name = Text1(doc, row, "name"), display = Text1(doc, row, "display"), character = Text1(doc, row, "character"),
+                    model = CharacterModel(models ??= PackageModels(s), Text1(doc, row, "character"), CharTypes.Value),
                     starts = setup,
                     teams = Vals(doc, row, "team")?.OfType<int>().ToArray() ?? Array.Empty<int>(),
                     flags = Pairs(doc, row).Where(p => !known.Contains(p.Key)).Select(p => new { name = p.Key, values = doc.Values(p.Value) }).ToArray(),
