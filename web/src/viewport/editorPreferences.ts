@@ -1,4 +1,6 @@
 import type { Lighting, Shading } from '../webview/zipper-core/viewport-core';
+import type { SnapTarget } from './mapViewport';
+import type { PivotMode } from './arrange';
 
 export interface EditorPreferences {
   shading: Shading;
@@ -18,12 +20,23 @@ export interface EditorPreferences {
   minPlaceScale: number;
   maxPlaceScale: number;
   alignSurface: boolean;
+  snapTarget: SnapTarget;
+  pivotMode: PivotMode;
+  // Place clicks add clutter or a GEO prop (placeInstance).
+  placeAs: 'clutter' | 'prop';
+  brushRadius: number;
+  brushSpacing: number;
+  brushDensity: number;
+  brushSlope: number;
+  brushErase: boolean;
 }
 export const EDITOR_PREFERENCES_KEY = 'socom.map.editorPreferences.v1';
 export const DEFAULT_EDITOR_PREFERENCES: EditorPreferences = {
   shading: 'textured', lighting: 'baked', grid: true, snap: false, snapMove: 10, snapRotate: 15,
   snapScale: 0.1, gizmoLocal: false, ortho: false, backfaces: true,
   placeYaw: 0, placeScale: 1, randomYaw: false, randomScale: false, minPlaceScale: 0.8, maxPlaceScale: 1.2, alignSurface: false,
+  snapTarget: 'increment', pivotMode: 'center', placeAs: 'clutter',
+  brushRadius: 20, brushSpacing: 5, brushDensity: 8, brushSlope: 35, brushErase: false,
 };
 export function normalizeEditorPreferences(value: unknown): EditorPreferences {
   const input = value && typeof value === 'object' ? value as Record<string, unknown> : {};
@@ -38,6 +51,9 @@ export function normalizeEditorPreferences(value: unknown): EditorPreferences {
       if (candidate >= minimum && candidate <= 1000000) { Object.assign(result, { [key]: candidate }); }
     }
   }
+  if (input.snapTarget === 'surface' || input.snapTarget === 'vertex' || input.snapTarget === 'increment') { result.snapTarget = input.snapTarget; }
+  if (input.pivotMode === 'individual' || input.pivotMode === 'active' || input.pivotMode === 'center') { result.pivotMode = input.pivotMode; }
+  if (input.placeAs === 'prop' || input.placeAs === 'clutter') { result.placeAs = input.placeAs; }
   if (typeof input.shading === 'string' && ['textured', 'solid', 'wireframe', 'xray'].includes(input.shading)) { result.shading = input.shading as Shading; }
   if (typeof input.lighting === 'string' && ['baked', 'studio', 'unlit'].includes(input.lighting)) {
     result.lighting = input.lighting as Lighting;

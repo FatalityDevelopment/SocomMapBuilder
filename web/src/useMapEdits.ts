@@ -8,14 +8,16 @@ import type { MapTool, MapViewport } from './viewport/mapViewport';
 import type { PropTab } from './components/PropsPanel';
 import { addedClutter, deleteOps, duplicateOps, movable, pickDuplicates, placementOp, yawOf } from './mapModel';
 import { SHORTCUTS } from './mapShortcuts';
+import { alignOffsets, distributeOffsets, type AlignTo, type Axis } from './viewport/arrange';
 import type { useMapSession } from './useMapSession';
 
-export interface PlaceSettings { model: ModelSummary | null }
+// What the Place tool puts down: a model (as clutter or as a GEO prop) or a saved prefab.
+export interface PlaceSettings { model: ModelSummary | null; prefab: string | null; placeAs: 'clutter' | 'prop' }
 
 export function useMapEdits(session: ReturnType<typeof useMapSession>, viewportRef: MutableRefObject<MapViewport | null>, selection: number[],
   setTool: (tool: MapTool) => void, setPropTab: (tab: PropTab) => void, placeSettings: PlaceSettings) {
   const { instances, instancesRef, pointsRef, edit, say } = session;
-  const { model: placeModel } = placeSettings;
+  const { model: placeModel, prefab: placePrefab, placeAs } = placeSettings;
   // Copied clutter placements (model + matrix); they paste into this package or another one that has the model.
   const clipboardRef = useRef<Array<{ model: string; matrix: number[] }>>([]);
 
@@ -124,14 +126,65 @@ export function useMapEdits(session: ReturnType<typeof useMapSession>, viewportR
     else { say('Nothing under the selection to drop onto.'); }
   };
 
-  const place = async (transform: PlacementTransform) => {
-    if (!placeModel) { setPropTab('place'); say('Pick a model in the Place tab first.', true); return; }
-    const raw = await edit(`place ${placeModel.name}`, { op: 'addClutter', model: placeModel.name, matrix: transform.matrix }) as { newClutterIndex?: number } | null;
+  // A Place click or a drop from the asset browser. `what` overrides the Place tool's pick (a dragged tile).
+  const place = async (transform: PlacementTransform, what?: { model?: ModelSummary; prefab?: string }) => {
+    const prefab = what ? what.prefab ?? null : placePrefab;
+    const model = what ? what.model ?? null : placeModel;
+    if (prefab) {
+      const m = transform.matrix;
+      await edit(`place prefab ${prefab}`, { op: 'placePrefab', prefab, position: [m[12], m[13], m[14]], yaw: transform.yaw });
+      return;
+    }
+    if (!model) { setPropTab('place'); say('Pick a model or prefab in the Assets panel first.', true); return; }
+    if (placeAs === 'prop') {
+      const raw = await edit(`place prop ${model.name}`, { op: 'placeInstance', model: model.name, matrix: transform.matrix }) as { newGeoIndex?: number } | null;
+      if (raw && typeof raw.newGeoIndex === 'number') {
+        const i = instancesRef.current.findIndex(x => x.clutterIndex === null && x.geoIndex === raw.newGeoIndex);
+        if (i >= 0) { viewportRef.current?.select([i]); }
+      }
+      return;
+    }
+    const raw = await edit(`place ${model.name}`, { op: 'addClutter', model: model.name, matrix: transform.matrix }) as { newClutterIndex?: number } | null;
     if (raw && typeof raw.newClutterIndex === 'number') {
       const i = instancesRef.current.findIndex(x => x.clutterIndex === raw.newClutterIndex);
       if (i >= 0) { viewportRef.current?.select([i]); }
     }
   };
 
-  return { commitTransforms, setField, movePointField, deleteSelection, duplicateSelection, copySelection, paste, editSelection, dropToGround, place, clipboardRef };
+  // The brush: one stroke is one edit (a batch), so one undo takes it back.
+  const scatter = async (matrices: number[][]) => {
+    if (!placeModel || !matrices.length) { return; }
+    const ops = matrices.map(matrix => ({ op: 'addClutter', model: placeModel.name, matrix: matrix.map(v => Math.fround(v)) }));
+    await edit(`paint ${ops.length} × ${placeModel.name}`, ops.length === 1 ? ops[0] : { op: 'batch', ops });
+  };
+
+  const erase = async (indices: number[]) => {
+    const sel = indices.map(i => instancesRef.current[i]).filter(i => i && i.clutterIndex !== null);
+    if (!sel.length) { return; }
+    viewportRef.current?.clearSelection();
+    const ops = deleteOps(sel);
+    await edit(`erase ${ops.length} clutter`, ops.length === 1 ? ops[0] : { op: 'batch', ops });
+  };
+
+  // Align the selection's boxes on one axis, or space their centres evenly (the outer two stay).
+  const arrange = async (axis: Axis, how: AlignTo | 'distribute') => {
+    const vp = viewportRef.current;
+    const ids = selection.filter(i => movable(instancesRef.current[i]));
+    if (!vp || ids.length < 2) { return; }
+    const boxes = vp.worldBounds(ids);
+    const offsets = how === 'distribute' ? distributeOffsets(boxes, axis) : alignOffsets(boxes, axis, how);
+    const ops = ids.map((i, k) => {
+      if (Math.abs(offsets[k]) < 1e-6) { return null; }
+      const inst = instancesRef.current[i];
+      const position = [inst.matrix[12], inst.matrix[13], inst.matrix[14]];
+      position[axis] += offsets[k];
+      return placementOp(inst, { position });
+    }).filter((o): o is Record<string, unknown> => !!o);
+    if (!ops.length) { say('Already lined up.'); return; }
+    const what = how === 'distribute' ? `distribute on ${'XYZ'[axis]}` : `align ${how} ${'XYZ'[axis]}`;
+    await edit(`${what}: ${ids.length} instances`, ops.length === 1 ? ops[0] : { op: 'batch', ops });
+  };
+
+  return { commitTransforms, setField, movePointField, deleteSelection, duplicateSelection, copySelection, paste, editSelection, dropToGround, place,
+    scatter, erase, arrange, clipboardRef };
 }

@@ -46,6 +46,7 @@ namespace MapBuilder.Server.Services
 
         public void Register(CommandRegistry reg)
         {
+            reg.Add(ObjRefinement.Run, "MESH_REFINE_OBJ");
             reg.Add(c => HandleOpen(c.InputPath), "ASSET_OPEN");
             reg.Add(c => HandleClose(c.AssetSession), "ASSET_CLOSE");
             reg.Add(_ => HandleSessions(), "ASSET_SESSIONS");
