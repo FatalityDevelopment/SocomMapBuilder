@@ -65,6 +65,18 @@ namespace MapBuilder.Server.Services
         private static readonly (string, Dictionary<string, object>) Materials = Arr("materials", "object",
             "Instead of an image: up to 8 [{color: [r, g, b]} | {light, dark}], a 64x64 skin of shaded strips that addMesh shapes' material indices pick.");
 
+        private static readonly (string, Dictionary<string, object>)[] MeshInput =
+        {
+            Arr("shapes", "object", "[{kind: lathe {profile: [[along, radius]], caps?} | cylinder {start, end, radius, radiusEnd?, caps?} | ring {at, inner, outer, thickness?} | " +
+                "sphere {radius, scale?, rings?} | box {min, max, lean?, radius? (rounded edges), bevelSegments? (1-4), puff? (bulge the faces' middles: a stuffed pouch), divisions?, faceUv?: {\"-z\": rect, ...}} | " +
+                "strap {path: [[x, y, z]], width, thickness?, around?: [x, y, z] (wraps round it) | outward?: [x, y, z], steps? (curve pieces per span), caps?}, " +
+                "material (0-7), uvRect?: [u0, v0, u1, v1] (map into that rectangle of a painted texture instead of the material strip; v up), subdivide?: 0-2 (smooth it, 4× triangles a level; edges sharper than crease?: 60° stay sharp), noise?: amount | {amount, scale?: 0.4, seed?} (wrinkles along the normals), axis?: x|y|z (default x), center?, segments?, squash?: [u, w]}]."),
+            Vec("light", 3, "shapes: the light the shades are baked from (default [0.35, 0.85, 0.45])."),
+            F("obj", "string", "OBJ text."), F("objPath", "string", "An OBJ file (instead of obj)."), F("yUp", "boolean", "OBJ is Y up (default true)."),
+            F("scale", "number", "OBJ scale."), Vec("offset", 3, "OBJ offset."), F("primitive", "object", "{kind: cube | plane, size?, center?}."),
+            F("mesh", "object", "{positions, triangles, normals?, uvs?, colors?}."), F("meshPath", "string", "A JSON file holding mesh (instead of mesh).")
+        };
+
         private static (string, Dictionary<string, object>)[] With(IEnumerable<(string, Dictionary<string, object>)> a, params (string, Dictionary<string, object>)[] b) => a.Concat(b).ToArray();
 
         internal static readonly Spec[] All =
@@ -88,6 +100,15 @@ namespace MapBuilder.Server.Services
                 new[] { F("prefab", "string", "From assets_list_prefabs."), Vec("position", 3, "World [x, y, z] of the prefab's origin."), F("yaw", "number", "Degrees about Y.") }),
             new("replaceTexture", "Replace a texture's pixels from an image (or a materials skin).", new[] { "texture" },
                 new[] { F("texture", "string", "The .tif."), Image1, Image2, Materials, F("namespace", "string", "TXR namespace to prefer.") }),
+            new("paintTexture", "Colour where a model draws a texture, by body part (a character's bones, else the model's visuals; assets_uv_layout shows them): a tint keeps the texture's shading and detail, fill replaces it.",
+                new[] { "texture", "model", "regions" },
+                new[] { F("texture", "string", "The .tif to paint."), F("model", "string", "The model whose parts pick the places (MESH_seal_A_woodland_LO)."),
+                    F("archive", "string", "The model's *_MDL.ZED (default: found by name)."),
+                    Arr("regions", "object", "[{parts: [bone or visual names] | all: true, color: [r, g, b] 0-255, fill?: false (tint, keeping shading), strength?: 0-1 (default 1), " +
+                        "uv?: [u0, v0, u1, v1] (only there: part of a bone's area, such as the lower face; assets_uv_layout gives each part's bounds), " +
+                        "grit?: {weave?, grime?, wear?, stitch? 0-1 each, scale?: grime blotch size in pixels (12), seed?} (wear painted after the colour: nylon cross-hatch, dirt blotches, " +
+                        "scuffed lighter UV-island rims, a dashed seam inside them; color may be left out to only wear it)}], applied in order."),
+                    F("namespace", "string", "TXR namespace to prefer (default the model's).") }),
             new("retexture", "Point a model's sections at another texture.", new[] { "archive", "model", "from", "to" },
                 new[] { Archive, Model, F("from", "string", "The texture now named."), F("to", "string", "The texture to name (must exist)."), F("visual", "string", "Only this visual.") }),
             new("tintVertexColors", "Multiply / add the baked vertex colours.", new[] { "archive", "model" },
@@ -105,13 +126,27 @@ namespace MapBuilder.Server.Services
                 With(VertexTransform, Archive, Model, F("faces", "object", "{geometryOffset: [triangle indices]}."))),
             new("addMesh", "Add geometry to a model visual: shapes, OBJ, raw arrays or a primitive.", new[] { "archive", "model", "visual", "texture" },
                 new[] { Archive, Model, F("visual", "string", "An N<node>_<visual> key."), F("texture", "string", "The texture to use (for shapes: a materials skin, addTexture materials)."),
-                    F("replace", "boolean", "Replace the visual's geometry."),
-                    Arr("shapes", "object", "[{kind: lathe {profile: [[along, radius]], caps?} | cylinder {start, end, radius, radiusEnd?, caps?} | ring {at, inner, outer, thickness?} | " +
-                        "sphere {radius, scale?, rings?} | box {min, max, lean?}, material (0-7), axis?: x|y|z (default x), center?, segments?, squash?: [u, w]}]."),
-                    Vec("light", 3, "shapes: the light the shades are baked from (default [0.35, 0.85, 0.45])."),
-                    F("obj", "string", "OBJ text."), F("objPath", "string", "An OBJ file (instead of obj)."), F("yUp", "boolean", "OBJ is Y up (default true)."),
-                    F("scale", "number", "OBJ scale."), Vec("offset", 3, "OBJ offset."), F("primitive", "object", "{kind: cube | plane, size?, center?}."),
-                    F("mesh", "object", "{positions, triangles, normals?, uvs?, colors?}."), F("meshPath", "string", "A JSON file holding mesh (instead of mesh).") }),
+                    F("replace", "boolean", "Replace the visual's geometry.") }.Concat(MeshInput).ToArray()),
+            new("addCharacterMesh", "Add geometry to a skinned character (MESH_*) as a new material section; positions in the character's bind pose (model space). With a bone it moves rigidly with that bone (a helmet, a pack); without, each vertex takes the skin weights of the nearest body vertex, so it bends with the body under it (sleeves, a coat, knee pads across a joint).",
+                new[] { "archive", "model", "texture" },
+                new[] { Archive, Model, F("bone", "string", "Optional: a skeleton bone (assets_describe_model skeleton) to follow rigidly; vertices stay within 8 units of it."),
+                    F("texture", "string", "A texture in the character's TXR namespace (addTexture materials for shapes), at most 15 characters."),
+                    F("lowDetail", "boolean", "Also add it to the character's lower-detail mesh (MESH_x_1 / MESH_x_1_LO) when there is one (default true)."),
+                    F("conform", "object", "true | {offset? (default 0.06), reach? (default 0.5)}: first push vertices behind or within offset of the body's surface out to offset above it, each carrying its piece within reach along, so a vest panel or band takes the chest's curve instead of floating or cutting in.") }.Concat(MeshInput).ToArray()),
+            new("scaleBones", "Grow or thin a skinned character's body parts: each named bone's vertex parts scaled in that bone's own frame about its joint, so the change fades across joints with no seam. Use this to reshape a body (thicker arms, broader chest, bigger head). On limbs and the spine use thickness (scale and length also stretch the part past the next joint); scale suits end bones (head, hands). The lower-detail mesh follows.",
+                new[] { "archive", "model", "bones" },
+                new[] { Archive, Model,
+                    F("bones", "object", "{bone: scale | {scale?, thickness? (across the bone), length? (along it, towards its children)}}, e.g. {rbicep: {thickness: 1.3}, head: 0.9}. Bones from assets_describe_model skeleton."),
+                    F("lowDetail", "boolean", "Also scale the lower-detail mesh (default true).") }),
+            new("transformCharacter", "Move / rotate / scale a skinned character's vertices in its bind pose (model space): all, or a section, a texture or the vertices whose heaviest bone is listed. The selection has a hard edge, so a partial selection steps at its border: to reshape body parts use scaleBones. Skinning stays; the lower-detail mesh follows.",
+                new[] { "archive", "model" },
+                With(VertexTransform, Archive, Model, Arr("bones", "string", "Only vertices whose heaviest bone is one of these (assets_describe_model skeleton)."),
+                    F("texture", "string", "Only sections drawn with this texture."), Int("section", "Only this section.", 0),
+                    F("lowDetail", "boolean", "Also transform the lower-detail mesh (default true)."))),
+            new("removeCharacterSection", "Remove material sections from a skinned character (MESH_*): those drawn with a texture (e.g. gear added earlier), or one by number.",
+                new[] { "archive", "model" },
+                new[] { Archive, Model, F("texture", "string", "Remove every section drawn with this texture."),
+                    Int("section", "Or this section (assets_describe_model chunks' visual sectionN).", 0) }),
             new("hideVisual", "Hide a model visual (it keeps one zero-area triangle; addMesh can fill it again).", new[] { "archive", "model", "visual" },
                 new[] { Archive, Model, F("visual", "string", "An N<node>_<visual> key.") }),
             new("newWeapon", "Copy a weapon (its visuals and GEO definition: LODs, firepoint, aimpoint) under a new name, to reshape with addMesh / hideVisual.", new[] { "template", "name" },

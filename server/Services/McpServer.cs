@@ -30,7 +30,12 @@ namespace MapBuilder.Server.Services
             "(undoable, in memory; dryRun previews an edit) and write with assets_save only when the user asks. assets_validate lints a map " +
             "and assets_history lists what undo would take back. Prefabs (assets_save_prefab, assets_list_prefabs, assets_edit placePrefab) " +
             "reuse groups of props across maps. assets_edit placeInstance adds props; newProp copies a prop to reshape (addTexture materials, " +
-            "addMesh shapes, hideVisual), fitBounds refits it, and placeInstance puts it in the map; " +
+            "addMesh shapes, hideVisual), fitBounds refits it, and placeInstance puts it in the map; addCharacterMesh puts gear on a " +
+            "character, rigid on a bone (assets_describe_model lists its skeleton) or bending with the body without one, removeCharacterSection takes it off, scaleBones reshapes body parts " +
+            "(thicker, longer, bigger, blending across joints), transformCharacter moves whole sections, assets_uv_layout shows where a skin lands " +
+            "and paintTexture colours it by body part, characters_check (also in those edits' " +
+            "replies) flags seams, folds and floating gear; characters_pack ships a " +
+            "character as a memory-card pack under a donor name; " +
             "setPoint renames / retypes spawn points; fs_list finds packages; weapons_* builds weapons from a template archive; " +
             "package_* changes package files on disk. viewer_list / viewer_preview / viewer_edit browse and change any disc file or " +
             "archive record in place as the Asset Viewer does (RDR tables, AI maps, text, icons, GEO scene nodes, ZANIM effect scripts), " +
@@ -193,7 +198,7 @@ namespace MapBuilder.Server.Services
         // Tools that write disk or throw work away (the rest change only the in-memory session or the view).
         private static readonly HashSet<string> Destructive = new(StringComparer.Ordinal)
         {
-            "assets_save", "assets_close", "assets_entry", "assets_export", "package_edit", "weapons_create", "weapons_pack", "mapbuilder_command",
+            "assets_save", "assets_close", "assets_entry", "assets_export", "package_edit", "weapons_create", "weapons_pack", "characters_pack", "mapbuilder_command",
             "assets_delete_prefab", "viewer_extract",
         };
 
@@ -740,7 +745,8 @@ namespace MapBuilder.Server.Services
                 "- deleteFaces / duplicateFaces {archive, model, faces:{geometryOffset:[triangle…]}, …}\n" +
                 "- addMesh {archive, model, visual:\"N000_000\", texture, replace?, shapes | obj | objPath | mesh | meshPath | primitive:{kind:cube|plane, size, center}}: " +
                 "shapes [{kind: lathe {profile:[[along,radius]]} | cylinder {start,end,radius,radiusEnd?} | ring {at,inner,outer,thickness?} | sphere {radius,scale?} | " +
-                "box {min,max,lean?}, material 0-7, axis? x|y|z (default x), center?, segments?, squash?, caps?}] build a mesh shaded from a materials skin (addTexture materials)\n" +
+                "box {min,max,lean?,radius? (rounded),bevelSegments?,puff? (stuffed),divisions?,faceUv?} | strap {path:[[x,y,z]],width,thickness?,around?|outward?,steps?}, " +
+                "material 0-7, uvRect? [u0,v0,u1,v1] (a painted atlas instead of the material strip), subdivide? 0-2 (smoothed, creases kept), noise? amount|{amount,scale,seed}, axis? x|y|z (default x), center?, segments?, squash?, caps?}] build a mesh shaded from a materials skin (addTexture materials)\n" +
                 "- hideVisual {archive, model, visual} (it draws nothing; addMesh can fill it again)\n" +
                 "- newWeapon {template, name, archive?} (copies the weapon's visuals and GEO definition - LODs, firepoint, aimpoint - to reshape with addMesh / hideVisual)\n" +
                 "- importModel {source (package path) | sourceSession, archive, name, targetArchive?, newName?}\n" +
@@ -1019,6 +1025,54 @@ namespace MapBuilder.Server.Services
                     var args = System.Text.Json.Nodes.JsonNode.Parse(a.GetRawText())!.AsObject();
                     args.Remove("session"); args.Remove("reason");
                     return FromCommand(new CommandMessage { Command = "ASSET_WEAPON_PACK", AssetSession = Session(a), AssetJson = args.ToJsonString() },
+                        d => d.TryGetProperty("pack", out var p) ? $"{(Bool(a, "dryRun") ? "dry run: " : "")}{p.GetString()}.CDB" : null!);
+                });
+
+            AddSync("assets_uv_layout", "View UV layout",
+                "Where a model draws a texture: the texture with the model's triangles outlined and tinted per body part (a character's " +
+                "bones, else its visuals), returned as an image, with each part's colour, triangle count and UV bounds. Use it to see " +
+                "which part of a skin is a sleeve, the chest or the face before painting (paintTexture) or drawing a new image " +
+                "(replaceTexture). Risk: read-only.",
+                true, Schema(new[] { "session", "model", "texture" }, session, P("model", "string", "The model (MESH_seal_A_woodland_LO)."),
+                    P("texture", "string", "One of its textures (assets_describe_model lists them)."), P("archive", "string", "The model's *_MDL.ZED (optional).")), a =>
+                {
+                    var (ok, data, error) = Command(new CommandMessage { Command = "ASSET_UV_LAYOUT", AssetSession = Session(a),
+                        AssetJson = JsonSerializer.Serialize(new { model = Str(a, "model"), texture = Str(a, "texture"), archive = Str(a, "archive") }) });
+                    if (!ok || data == null) return ToolResult.Fail(error ?? "ASSET_UV_LAYOUT failed");
+                    using var d = JsonDocument.Parse(data);
+                    var r = new ToolResult { Summary = $"{Str(a, "texture")} on {Str(a, "model")}" };
+                    r.Content.Add(new { type = "image", data = d.RootElement.GetProperty("png").GetString(), mimeType = "image/png" });
+                    r.Content.Add(new { type = "text", text = d.RootElement.GetProperty("info").GetRawText() });
+                    return r;
+                });
+
+            AddSync("characters_check", "Check character",
+                "What the session's edits did to a skinned character, against the package on disk: where the surface stretched or folded " +
+                "(edge length ratios outside 0.6-1.4, by bone and position: a seam, a drooping neck, a wavy limb), vertices whose skin " +
+                "weights do not sum to 1, and how far added gear reaches from the body. ok is false when anything needs a look. The " +
+                "character edits (addCharacterMesh, scaleBones, transformCharacter) answer the same check; look at it, and at ui_screenshot, " +
+                "before calling a reshape done. Risk: read-only.",
+                true, Schema(new[] { "session", "model" }, session, P("model", "string", "The character mesh (MESH_seal_A_woodland_LO).")), a =>
+                    FromCommand(new CommandMessage { Command = "ASSET_CHARACTER_CHECK", AssetSession = Session(a), AssetJson = JsonSerializer.Serialize(new { model = Str(a, "model") }) },
+                        d => d.TryGetProperty("ok", out var ok) ? (ok.GetBoolean() ? "ok" : $"{d.GetProperty("warnings").GetArrayLength()} warning(s)") : null!));
+
+            AddSync("characters_pack", "Pack character",
+                "Package a session's character (a skinned MESH_* as edited: addCharacterMesh gear, removeCharacterSection, retexture) as " +
+                "one memory-card pack <PACK>.CDB that takes over a donor character name, the layout the CA character ports used in game: " +
+                "RUN\\MP\\<PACK>\\CLIB_MDL (the mesh as MESH_<donor>), CLIB_GEO (its skeleton as <donor>), CLIB_TXR (the textures its " +
+                "sections draw with) and CLIB_PAL (their palettes, renumbered into the pack's own ids). Name it as a character the map " +
+                "does not load (con_pow01, spawned by the mp_pow1 chartype on MP10 / MP11) so that chartype spawns it once the pack is " +
+                "loaded. Only the main mesh ships, not the lower-detail one. Written to outputDir (default Documents/CodeDesigner/Exports) " +
+                "with the archives loose beside it; folderCard installs it on a PCSX2 folder card. dryRun builds and writes nothing. Risk: writes disk.",
+                false, Schema(new[] { "session", "model", "donor", "pack" }, session,
+                    P("model", "string", "The session's character mesh (MESH_seal_A_woodland_LO)."),
+                    P("donor", "string", "The character name it takes (con_pow01)."),
+                    P("pack", "string", "Pack name: m + up to 6 letters/digits (mseal1)."), P("outputDir", "string", "Where the pack goes."),
+                    P("folderCard", "string", "A PCSX2 folder memory card to install into."), P("dryRun", "boolean", "Build and report, writing nothing.")), a =>
+                {
+                    var args = System.Text.Json.Nodes.JsonNode.Parse(a.GetRawText())!.AsObject();
+                    args.Remove("session"); args.Remove("reason");
+                    return FromCommand(new CommandMessage { Command = "ASSET_CHARACTER_PACK", AssetSession = Session(a), AssetJson = args.ToJsonString() },
                         d => d.TryGetProperty("pack", out var p) ? $"{(Bool(a, "dryRun") ? "dry run: " : "")}{p.GetString()}.CDB" : null!);
                 });
 

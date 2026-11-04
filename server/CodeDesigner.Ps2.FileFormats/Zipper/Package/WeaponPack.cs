@@ -271,12 +271,15 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
         /// Writes the pack as <c>&lt;outputDir&gt;/&lt;PACK&gt;.CDB</c> plus its archives loose in
         /// <c>&lt;outputDir&gt;/&lt;PACK&gt;/</c> (to inspect), and installs it on a PCSX2 folder card when given.
         /// </summary>
-        public static List<string> Write(Result r, string pack, string outputDir, string? folderCard)
+        public static List<string> Write(Result r, string pack, string outputDir, string? folderCard) => Write(r.Files, pack, outputDir, folderCard);
+
+        /// <summary>Any pack's files (<c>RUN\MP\&lt;PACK&gt;\...</c>) written as <see cref="Write(Result, string, string, string?)"/> does.</summary>
+        public static List<string> Write(IReadOnlyList<(string Path, byte[] Data)> files, string pack, string outputDir, string? folderCard)
         {
-            var written = PackageSave.WriteCdb(r.Files, pack, outputDir, folderCard);
+            var written = PackageSave.WriteCdb(files, pack, outputDir, folderCard);
             string loose = Path.Combine(outputDir, pack.ToUpperInvariant());
             Directory.CreateDirectory(loose);
-            foreach (var (path, data) in r.Files)
+            foreach (var (path, data) in files)
             {
                 string file = Path.Combine(loose, path.Split('\\').Last());
                 File.WriteAllBytes(file, data);

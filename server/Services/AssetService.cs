@@ -70,6 +70,9 @@ namespace MapBuilder.Server.Services
             reg.Add(c => CaRoute(c, "ASSET_EDIT") ?? WithSession(c.AssetSession, "ASSET_EDIT", s => Edit(s, c.AssetJson)), "ASSET_EDIT");
             reg.Add(c => WeaponDefinition(c.AssetJson), "ASSET_WEAPON_DEFINITION");
             reg.Add(c => WithSession(c.AssetSession, "ASSET_WEAPON_PACK", s => WeaponPackOf(s, c.AssetJson)), "ASSET_WEAPON_PACK");
+            reg.Add(c => WithSession(c.AssetSession, "ASSET_CHARACTER_PACK", s => CharacterPackOf(s, c.AssetJson)), "ASSET_CHARACTER_PACK");
+            reg.Add(c => WithSession(c.AssetSession, "ASSET_CHARACTER_CHECK", s => CharacterCheckOf(s, c.AssetJson)), "ASSET_CHARACTER_CHECK");
+            reg.Add(c => WithSession(c.AssetSession, "ASSET_UV_LAYOUT", s => UvLayout(s, c.AssetJson)), "ASSET_UV_LAYOUT");
             reg.Add(c => CaRoute(c, "ASSET_SAVE") ?? WithSession(c.AssetSession, "ASSET_SAVE", s => Save(s, c.AssetJson)), "ASSET_SAVE");
             reg.Add(c => WithSession(c.AssetSession, "ASSET_HISTORY", s => History(s)), "ASSET_HISTORY");
             RegisterPrefabs(reg);
@@ -240,40 +243,120 @@ namespace MapBuilder.Server.Services
                     string visual = Str(a, "visual") ?? throw new ArgumentException("\"visual\" (an N<node>_<visual> key) is required");
                     string texture = Str(a, "texture") ?? throw new ArgumentException("\"texture\" is required");
                     bool replace = a.TryGetProperty("replace", out var rp) && rp.ValueKind == JsonValueKind.True;
-                    MeshTopology.InputMesh input;
-                    string what;
-                    if (a.TryGetProperty("shapes", out var shapes) && shapes.ValueKind == JsonValueKind.Array)
-                    {
-                        input = MeshShapes.Build(shapes, Floats(a, "light"));
-                        what = $"{shapes.GetArrayLength()} shape(s)";
-                    }
-                    else if ((Str(a, "obj") ?? ReadFile(Str(a, "objPath"), "objPath")) is { } obj)
-                    {
-                        bool yUp = !(a.TryGetProperty("yUp", out var yu) && yu.ValueKind == JsonValueKind.False);
-                        float scale = a.TryGetProperty("scale", out var sc) && sc.ValueKind == JsonValueKind.Number ? sc.GetSingle() : 1;
-                        input = MeshTopology.ParseObj(obj, yUp, scale, Floats(a, "offset"));
-                        what = "OBJ";
-                    }
-                    else if (ReadFile(Str(a, "meshPath"), "meshPath") is { } meshText)
-                    {
-                        using var meshDoc = JsonDocument.Parse(meshText);
-                        input = ArraysMesh(meshDoc.RootElement);
-                        what = "mesh";
-                    }
-                    else if (a.TryGetProperty("primitive", out var pr) && pr.ValueKind == JsonValueKind.Object)
-                    {
-                        string kind = Str(pr, "kind") ?? "cube";
-                        float size = pr.TryGetProperty("size", out var sz) && sz.ValueKind == JsonValueKind.Number ? sz.GetSingle() : 10;
-                        input = MeshTopology.Primitive(kind, size, Floats(pr, "center") ?? new float[3]);
-                        what = kind;
-                    }
-                    else if (a.TryGetProperty("mesh", out var me) && me.ValueKind == JsonValueKind.Object)
-                    {
-                        input = ArraysMesh(me);
-                        what = "mesh";
-                    }
-                    else throw new ArgumentException("addMesh needs \"shapes\" [{kind, material, ...}], \"obj\" / \"objPath\" (OBJ), \"mesh\" / \"meshPath\" {positions, triangles, normals?, uvs?, colors?} or \"primitive\" {kind, size, center}");
+                    var input = InputMeshOf(a, out string what);
                     return ApplyTopology(s, Str(a, "label") ?? $"add {what} to {model} {visual}", p => MeshTopology.AddMesh(p, archive, model, visual, texture, input, replace));
+                }
+                case "addCharacterMesh":
+                {
+                    // {archive, model, bone, texture, shapes | obj | mesh | primitive ...}: rigid geometry on a skinned character's bone.
+                    string archive = Str(a, "archive") ?? throw new ArgumentException("\"archive\" is required");
+                    string model = Str(a, "model") ?? throw new ArgumentException("\"model\" is required");
+                    // Without a bone, each vertex takes the skin weights of the body under it.
+                    string? bone = Str(a, "bone");
+                    string texture = Str(a, "texture") ?? throw new ArgumentException("\"texture\" is required");
+                    var input = InputMeshOf(a, out string what);
+                    // The character's lower-detail mesh (drawn at a distance) gets the same geometry unless lowDetail is false.
+                    bool lowDetail = !(a.TryGetProperty("lowDetail", out var ld) && ld.ValueKind == JsonValueKind.False);
+                    string lowName = CharacterEdits.LowDetailName(model);
+                    bool hasLow = lowDetail && pkg.FindModel(archive, lowName) != null;
+                    // conform: true | {offset?, reach?}: fit the gear onto the body's surface first.
+                    (float Offset, float Reach)? conform = null;
+                    if (a.TryGetProperty("conform", out var cf))
+                    {
+                        if (cf.ValueKind == JsonValueKind.True) conform = (0.06f, 0.5f);
+                        else if (cf.ValueKind == JsonValueKind.Object)
+                            conform = (cf.TryGetProperty("offset", out var co) && co.ValueKind == JsonValueKind.Number ? co.GetSingle() : 0.06f,
+                                       cf.TryGetProperty("reach", out var cr) && cr.ValueKind == JsonValueKind.Number ? Math.Max(0, cr.GetSingle()) : 0.5f);
+                        else if (cf.ValueKind != JsonValueKind.False) throw new ArgumentException("\"conform\" is true or {offset?, reach?}");
+                    }
+                    CharacterEdits.Result? made = null, low = null;
+                    CharacterEdits.Fitted? fitted = null;
+                    var result = ApplyEdit(s, Str(a, "label") ?? $"add {what} to {model}{(hasLow ? " and " + lowName : "")} on {bone ?? "the body's skin"}", p =>
+                    {
+                        var mesh = conform is { } c ? (fitted = CharacterEdits.Conform(p, archive, model, input, c.Offset, c.Reach)).Mesh : input;
+                        made = CharacterEdits.AddMesh(p, archive, model, bone, texture, mesh);
+                        if (!hasLow) return made.Changed;
+                        low = CharacterEdits.AddMesh(p, archive, lowName, bone, texture, mesh, made.Changed[p.Entry(archive)!.Leaf]);
+                        return low.Changed;
+                    });
+                    return new
+                    {
+                        result, bone = bone == null ? null : made!.Bone, matrixId = bone == null ? (int?)null : made!.MatrixId,
+                        bones = made!.Bones.Distinct().ToList(), groups = made.Groups, vertices = made.Vertices, triangles = made.Triangles,
+                        lowDetail = low == null ? null : new { model = lowName, groups = low.Groups },
+                        conformed = fitted == null ? null : new { moved = fitted.Moved, maxPush = MathF.Round(fitted.MaxPush, 3) },
+                        check = CheckReport(s, model),
+                    };
+                }
+                case "scaleBones":
+                {
+                    // {archive, model, bones: {name: number | {scale?, thickness?, length?}}, lowDetail?}: body parts grown or
+                    // thinned in their bones' frames, blending across joints (the lower-detail mesh too unless lowDetail is false).
+                    string archive = Str(a, "archive") ?? throw new ArgumentException("\"archive\" is required");
+                    string model = Str(a, "model") ?? throw new ArgumentException("\"model\" is required");
+                    if (!a.TryGetProperty("bones", out var bs) || bs.ValueKind != JsonValueKind.Object || !bs.EnumerateObject().Any())
+                        throw new ArgumentException("\"bones\" {name: scale | {scale?, thickness?, length?}} is required");
+                    var scales = new Dictionary<string, CharacterEdits.BoneScale>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var b in bs.EnumerateObject())
+                    {
+                        float F(string field) => b.Value.TryGetProperty(field, out var x) ? Number(x, $"bones.{b.Name}.{field}") : 1;
+                        scales[b.Name] = b.Value.ValueKind == JsonValueKind.Number
+                            ? new CharacterEdits.BoneScale(Number(b.Value, $"bones.{b.Name}"))
+                            : b.Value.ValueKind == JsonValueKind.Object ? new CharacterEdits.BoneScale(F("scale"), F("thickness"), F("length"))
+                            : throw new ArgumentException($"bones.{b.Name} is a number or {{scale?, thickness?, length?}}");
+                    }
+                    bool lowDetail = !(a.TryGetProperty("lowDetail", out var ld) && ld.ValueKind == JsonValueKind.False);
+                    string lowName = CharacterEdits.LowDetailName(model);
+                    bool hasLow = lowDetail && pkg.FindModel(archive, lowName) != null;
+                    CharacterEdits.Result? made = null, low = null;
+                    var result = ApplyEdit(s, Str(a, "label") ?? $"scale {string.Join(", ", scales.Keys)} of {model}{(hasLow ? " and " + lowName : "")}", p =>
+                    {
+                        made = CharacterEdits.ScaleBones(p, archive, model, scales, null);
+                        if (!hasLow) return made.Changed;
+                        try { low = CharacterEdits.ScaleBones(p, archive, lowName, scales, made.Changed[p.Entry(archive)!.Leaf]); }
+                        catch (ArgumentException) { return made.Changed; }
+                        return low.Changed;
+                    });
+                    return new { result, parts = made!.Vertices, lowDetail = low == null ? null : new { model = lowName, parts = low.Vertices }, check = CheckReport(s, model) };
+                }
+                case "transformCharacter":
+                {
+                    // {archive, model, translate / rotate / scale / pivot | matrix, bones?, texture?, section?, lowDetail?}:
+                    // move a skinned character's vertices in its bind pose (the lower-detail mesh too unless lowDetail is false).
+                    string archive = Str(a, "archive") ?? throw new ArgumentException("\"archive\" is required");
+                    string model = Str(a, "model") ?? throw new ArgumentException("\"model\" is required");
+                    var bones = a.TryGetProperty("bones", out var bs) && bs.ValueKind == JsonValueKind.Array
+                        ? bs.EnumerateArray().Select(x => x.GetString() ?? "").ToHashSet(StringComparer.OrdinalIgnoreCase) : null;
+                    var sel = new CharacterEdits.Selection(bones, Str(a, "texture"), OptInt(a, "section"));
+                    TransformMatrix(a, new float[3]);   // bad translate / rotate / scale fail before the mesh is read
+                    float[] m = Vec(a, "matrix", 16) ?? TransformMatrix(a, Vec(a, "pivot", 3) ?? CharacterEdits.SelectionCentre(pkg, archive, model, sel)
+                        ?? throw new ArgumentException($"No vertex of {model} matches the selection"));
+                    bool lowDetail = !(a.TryGetProperty("lowDetail", out var ld) && ld.ValueKind == JsonValueKind.False);
+                    string lowName = CharacterEdits.LowDetailName(model);
+                    bool hasLow = lowDetail && pkg.FindModel(archive, lowName) != null;
+                    CharacterEdits.Result? made = null, low = null;
+                    var result = ApplyEdit(s, Str(a, "label") ?? $"transform {model}{(hasLow ? " and " + lowName : "")}", p =>
+                    {
+                        made = CharacterEdits.TransformVertices(p, archive, model, m, sel);
+                        if (!hasLow) return made.Changed;
+                        // The lower-detail mesh may have fewer parts in the selection (or none): it follows when it can.
+                        try { low = CharacterEdits.TransformVertices(p, archive, lowName, m, sel, made.Changed[p.Entry(archive)!.Leaf]); }
+                        catch (ArgumentException) { return made.Changed; }
+                        return low.Changed;
+                    });
+                    return new { result, vertices = made!.Vertices, lowDetail = low == null ? null : new { model = lowName, vertices = low.Vertices }, check = CheckReport(s, model) };
+                }
+                case "removeCharacterSection":
+                {
+                    // {archive, model, texture | section}: material sections out of a skinned mesh's chain (e.g. gear added earlier).
+                    string archive = Str(a, "archive") ?? throw new ArgumentException("\"archive\" is required");
+                    string model = Str(a, "model") ?? throw new ArgumentException("\"model\" is required");
+                    string? texture = Str(a, "texture");
+                    int? section = OptInt(a, "section");
+                    List<int> removed = new();
+                    var result = ApplyEdit(s, Str(a, "label") ?? $"remove {texture ?? "section " + section} from {model}",
+                        p => CharacterEdits.RemoveSections(p, archive, model, texture, section, out removed));
+                    return new { result, removed };
                 }
                 case "hideVisual":
                 {
@@ -408,6 +491,44 @@ namespace MapBuilder.Server.Services
                     string? ns = Str(a, "namespace");
                     return ApplyEdit(s, Str(a, "label") ?? $"replace {tif}", p => PackageEdits.ReplaceTexture(p, tif, ns, rgba, w, h));
                 }
+                case "paintTexture":
+                {
+                    // {texture, model, archive?, regions: [{parts?: [...], all?, color, fill?, strength?}], namespace?}: colour the
+                    // places the model draws the texture by body part (assets_uv_layout names them), keeping its shading unless fill;
+                    // grit {weave, grime, wear, stitch, scale, seed} then wears it.
+                    string tif = Str(a, "texture") ?? throw new ArgumentException("\"texture\" is required");
+                    string model = Str(a, "model") ?? throw new ArgumentException("\"model\" (whose parts pick the places) is required");
+                    if (!a.TryGetProperty("regions", out var rs) || rs.ValueKind != JsonValueKind.Array || rs.GetArrayLength() == 0)
+                        throw new ArgumentException("\"regions\" [{parts | all, color: [r, g, b], fill?, strength?}] is required");
+                    var (m, mesh) = MeshOf(s, model, Str(a, "archive"));
+                    var tris = TexturePaint.Triangles(mesh, tif);
+                    if (tris.Count == 0) throw new ArgumentException($"{m.Name} draws nothing with {tif}");
+                    var known = tris.Select(t => t.Label).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                    var regions = new List<TexturePaint.Region>();
+                    foreach (var r in rs.EnumerateArray())
+                    {
+                        var grit = GritOf(r);
+                        var color = Floats(r, "color") is { Length: 3 } c && c.All(x => x >= 0 && x <= 255) ? c.Select(x => (byte)MathF.Round(x)).ToArray()
+                            : r.TryGetProperty("color", out _) || grit == null ? throw new ArgumentException("regions[].color is [r, g, b], 0-255 each (it may be left out when grit is given)") : null;
+                        bool all = r.TryGetProperty("all", out var al) && al.ValueKind == JsonValueKind.True;
+                        var labels = all ? known : r.TryGetProperty("parts", out var ps) && ps.ValueKind == JsonValueKind.Array
+                            ? ps.EnumerateArray().Select(x => x.GetString() ?? "").ToHashSet(StringComparer.OrdinalIgnoreCase)
+                            : throw new ArgumentException("regions[] needs parts [...] or all: true");
+                        if (labels.FirstOrDefault(l => !known.Contains(l)) is { } unknown)
+                            throw new ArgumentException($"{m.Name} draws no part {unknown} with {tif} (parts: {string.Join(", ", known.OrderBy(x => x))})");
+                        float strength = r.TryGetProperty("strength", out var st) ? Math.Clamp(Number(st, "regions[].strength"), 0, 1) : 1;
+                        float[]? uv = Floats(r, "uv");
+                        if (uv != null && (uv.Length != 4 || uv[0] > uv[2] || uv[1] > uv[3])) throw new ArgumentException("regions[].uv is [u0, v0, u1, v1] with u0 <= u1, v0 <= v1");
+                        regions.Add(new TexturePaint.Region(labels, color, r.TryGetProperty("fill", out var fl) && fl.ValueKind == JsonValueKind.True, strength, uv, grit));
+                    }
+                    string? ns = Str(a, "namespace") ?? pkg.TextureNamespace(m.Namespace);
+                    var decoded = pkg.DecodeTexture(tif, ns) ?? throw new KeyNotFoundException($"Texture {tif} not found");
+                    int w = decoded.Texture.Header.Width, h = decoded.Texture.Header.Height;
+                    byte[] rgba = (byte[])decoded.Texture.Rgba.Clone();
+                    var painted = TexturePaint.Paint(rgba, w, h, tris, regions);
+                    var result = ApplyEdit(s, Str(a, "label") ?? $"paint {tif} on {m.Name}", p => PackageEdits.ReplaceTexture(p, tif, decoded.Namespace, rgba, w, h));
+                    return new { result, pixels = painted };
+                }
                 case "addAnimation":
                 {
                     string name = Str(a, "name") ?? throw new ArgumentException("\"name\" (the new clip) is required");
@@ -491,12 +612,7 @@ namespace MapBuilder.Server.Services
         /// </summary>
         private static float[] VertexTransform(AssetSession s, string archive, string model, JsonElement a, List<int>? chunks, Dictionary<int, int[]>? verts)
         {
-            float[] t = Vec(a, "translate", 3) ?? new float[3];
-            float[] r = Vec(a, "rotate", 3) ?? new float[3];
-            float[] sc = a.TryGetProperty("scale", out var sv) && sv.ValueKind == JsonValueKind.Number
-                ? new[] { Number(sv, "scale"), Number(sv, "scale"), Number(sv, "scale") }
-                : Vec(a, "scale", 3) ?? new[] { 1f, 1f, 1f };
-            if (sc.Any(x => x == 0)) throw new ArgumentException("\"scale\" must not be 0");
+            TransformMatrix(a, new float[3]);   // bad translate / rotate / scale fail before the mesh is read
             float[]? pivot = Vec(a, "pivot", 3);
             if (pivot == null)
             {
@@ -513,6 +629,18 @@ namespace MapBuilder.Server.Services
                 }
                 pivot = min[0] <= max[0] ? new[] { (min[0] + max[0]) / 2, (min[1] + max[1]) / 2, (min[2] + max[2]) / 2 } : new float[3];
             }
+            return TransformMatrix(a, pivot);
+        }
+
+        // translate / rotate (degrees, X then Y then Z) / scale about a pivot, as one column-major matrix.
+        private static float[] TransformMatrix(JsonElement a, float[] pivot)
+        {
+            float[] t = Vec(a, "translate", 3) ?? new float[3];
+            float[] r = Vec(a, "rotate", 3) ?? new float[3];
+            float[] sc = a.TryGetProperty("scale", out var sv) && sv.ValueKind == JsonValueKind.Number
+                ? new[] { Number(sv, "scale"), Number(sv, "scale"), Number(sv, "scale") }
+                : Vec(a, "scale", 3) ?? new[] { 1f, 1f, 1f };
+            if (sc.Any(x => x == 0)) throw new ArgumentException("\"scale\" must not be 0");
             static float[] Rot(int axis, float deg)
             {
                 float rad = deg * MathF.PI / 180, c = MathF.Cos(rad), sn = MathF.Sin(rad);
@@ -535,6 +663,44 @@ namespace MapBuilder.Server.Services
             List<int> newChunks = new();
             var result = ApplyEdit(s, description, p => { var r = edit(p); newChunks = r.NewChunks; return r.Changed; });
             return new { result, newChunks };
+        }
+
+        // The geometry of addMesh / addCharacterMesh: shapes, OBJ, raw arrays (inline or from a file) or a primitive.
+        private static MeshTopology.InputMesh InputMeshOf(JsonElement a, out string what)
+        {
+            MeshTopology.InputMesh input;
+            if (a.TryGetProperty("shapes", out var shapes) && shapes.ValueKind == JsonValueKind.Array)
+            {
+                input = MeshShapes.Build(shapes, Floats(a, "light"));
+                what = $"{shapes.GetArrayLength()} shape(s)";
+            }
+            else if ((Str(a, "obj") ?? ReadFile(Str(a, "objPath"), "objPath")) is { } obj)
+            {
+                bool yUp = !(a.TryGetProperty("yUp", out var yu) && yu.ValueKind == JsonValueKind.False);
+                float scale = a.TryGetProperty("scale", out var sc) && sc.ValueKind == JsonValueKind.Number ? sc.GetSingle() : 1;
+                input = MeshTopology.ParseObj(obj, yUp, scale, Floats(a, "offset"));
+                what = "OBJ";
+            }
+            else if (ReadFile(Str(a, "meshPath"), "meshPath") is { } meshText)
+            {
+                using var meshDoc = JsonDocument.Parse(meshText);
+                input = ArraysMesh(meshDoc.RootElement);
+                what = "mesh";
+            }
+            else if (a.TryGetProperty("primitive", out var pr) && pr.ValueKind == JsonValueKind.Object)
+            {
+                string kind = Str(pr, "kind") ?? "cube";
+                float size = pr.TryGetProperty("size", out var sz) && sz.ValueKind == JsonValueKind.Number ? sz.GetSingle() : 10;
+                input = MeshTopology.Primitive(kind, size, Floats(pr, "center") ?? new float[3]);
+                what = kind;
+            }
+            else if (a.TryGetProperty("mesh", out var me) && me.ValueKind == JsonValueKind.Object)
+            {
+                input = ArraysMesh(me);
+                what = "mesh";
+            }
+            else throw new ArgumentException("The op needs \"shapes\" [{kind, material, ...}], \"obj\" / \"objPath\" (OBJ), \"mesh\" / \"meshPath\" {positions, triangles, normals?, uvs?, colors?} or \"primitive\" {kind, size, center}");
+            return input;
         }
 
         private static Dictionary<int, int[]> FaceMap(JsonElement a)
@@ -981,6 +1147,16 @@ namespace MapBuilder.Server.Services
 
         private static int Int(JsonElement a, string name) =>
             a.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Number ? v.GetInt32() : throw new ArgumentException($"\"{name}\" (a number) is required");
+
+        // paintTexture regions[].grit: {weave, grime, wear, stitch} 0-1 each, scale (grime blotch size, pixels), seed.
+        private static TexturePaint.Grit? GritOf(JsonElement r)
+        {
+            if (!r.TryGetProperty("grit", out var g)) return null;
+            if (g.ValueKind != JsonValueKind.Object) throw new ArgumentException("regions[].grit is {weave?, grime?, wear?, stitch?, scale?, seed?}");
+            float F(string n, float d = 0) => g.TryGetProperty(n, out var v) ? Math.Clamp(Number(v, $"grit.{n}"), 0, n == "scale" ? 256 : 1) : d;
+            return new TexturePaint.Grit(F("weave"), F("grime"), F("wear"), F("stitch"), F("scale", 12),
+                g.TryGetProperty("seed", out var sd) && sd.ValueKind == JsonValueKind.Number ? sd.GetInt32() : 0);
+        }
 
         private static float[]? Floats(JsonElement a, string name) =>
             a.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.Array ? v.EnumerateArray().Select(x => x.GetSingle()).ToArray() : null;
@@ -1437,6 +1613,14 @@ namespace MapBuilder.Server.Services
                 fromChains = true,
                 skinned = true,
                 bones = mesh.Skeleton!.Bones.Count,
+                // The bones vertex batches can follow (addCharacterMesh), with their bind position in model space.
+                skeleton = mesh.Skeleton.Bones.Where(b => b.MatrixId >= 0).Select(b => new
+                {
+                    name = b.Name,
+                    matrixId = b.MatrixId,
+                    parent = b.Parent >= 0 ? mesh.Skeleton.Bones[b.Parent].Name : null,
+                    position = new[] { b.World[12], b.World[13], b.World[14] },
+                }).ToList(),
                 visuals = chunks.Select(c => c.visual).Distinct().ToList(),
                 chunks,
                 textures,
