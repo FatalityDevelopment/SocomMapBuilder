@@ -34,7 +34,7 @@ export function AssetViewerPage() {
 
   const request = openRequest();
   useEffect(() => {
-    if (request?.page === 'viewer' && request.path) { void c.openPath(request.path); }
+    if (request?.page === 'viewer' && request.path) { void c.openPath(request.path, request.missionTable); }
   }, [request, c]);
 
   // ui_show page "viewer" with a path: open it here.

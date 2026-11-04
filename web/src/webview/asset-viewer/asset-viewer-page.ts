@@ -287,9 +287,17 @@ export class AssetViewerLogic {
   }
 
   /** Opens a path from outside (the file browser, another page, the AI): archives open, other files are selected in their folder. */
-  async openPath(path: string): Promise<void> {
+  async openPath(path: string, missionTable?: string): Promise<void> {
     try {
       await this.navigate({ path, inner: [] });
+      if (missionTable) {
+        const reader = this.listing()?.items.find(i => i.name.toLowerCase() === 'readerm.zar');
+        if (!reader) { this.say('Mission reader not found.', true); return; }
+        await this.navigate(reader);
+        const record = this.listing()?.items.find(i => i.name.toLowerCase() === missionTable.toLowerCase());
+        if (record) await this.select(record);
+        else this.say('Mission table not found.', true);
+      }
     } catch {
       const dir = path.replace(/[\\/][^\\/]*$/, '');
       await this.navigate({ path: dir, inner: [] }).catch(() => undefined);

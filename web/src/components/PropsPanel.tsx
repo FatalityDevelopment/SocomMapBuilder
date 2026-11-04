@@ -6,16 +6,18 @@ import type { AlignTo, Axis } from '../viewport/arrange';
 
 export interface BrushSettings { radius: number; spacing: number; density: number; slope: number; erase: boolean }
 
-export type PropTab = 'item' | 'place' | 'points' | 'map';
+export type PropTab = 'item' | 'place' | 'points' | 'map' | 'actions';
 
 const TABS: Array<{ id: PropTab; label: string }> = [
   { id: 'item', label: 'Item' },
+  { id: 'actions', label: 'Actions' },
   { id: 'place', label: 'Place' },
   { id: 'points', label: 'Points' },
   { id: 'map', label: 'Map' },
 ];
 
 interface PropsPanelProps {
+  actions: React.ReactNode;
   tab: PropTab;
   setTab: (tab: PropTab) => void;
   status: SessionStatus | null;
@@ -79,6 +81,7 @@ export function PropsPanel(p: PropsPanelProps) {
       </div>
       <div className="me-tab-body">
         {p.tab === 'item' && <ItemTab {...p} />}
+        {p.tab === 'actions' && p.actions}
         {p.tab === 'place' && <PlaceTab {...p} />}
         {p.tab === 'points' && (
           <div className="me-card">

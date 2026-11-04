@@ -175,6 +175,18 @@ export interface PrefabDetail { name: string; description?: string | null; items
 
 export interface AnimationList { packageArchive: string | null; sharedPath: string | null; clips: AnimationSummary[] }
 
+export type ActionFields = Record<string, (string | number)[]>;
+export interface MapActions {
+  revision: number;
+  hasReader: boolean;
+  targets: { index: number; name: string; path: string; model: string; faces: number[] }[];
+  rows: ActionFields[];
+  tables: string[];
+  valves: string[];
+  animations: string[];
+  icons: string[];
+}
+
 export class AssetClient {
   session: string | null = null;
 
@@ -217,6 +229,7 @@ export class AssetClient {
   }
 
   mapPoints(): Promise<{ points: MapPointWire[] }> { return this.call('ASSET_MAP_POINTS'); }
+  mapActions(): Promise<MapActions> { return this.call('ASSET_MAP_ACTIONS'); }
 
   validate(vramBudget?: number): Promise<MapValidation> { return this.withJson('ASSET_VALIDATE', { vramBudget }); }
 

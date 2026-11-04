@@ -77,6 +77,7 @@ namespace MapBuilder.Server.Services
             reg.Add(c => CaRoute(c, "ASSET_SAVE") ?? WithSession(c.AssetSession, "ASSET_SAVE", s => Save(s, c.AssetJson)), "ASSET_SAVE");
             reg.Add(c => WithSession(c.AssetSession, "ASSET_HISTORY", s => History(s)), "ASSET_HISTORY");
             RegisterPrefabs(reg);
+            reg.Add(c => WithSession(c.AssetSession, "ASSET_MAP_ACTIONS", MapActions), "ASSET_MAP_ACTIONS");
             RegisterCharacterPresets(reg);
             RegisterViewer(reg);
             RegisterMovies(reg);
@@ -106,6 +107,10 @@ namespace MapBuilder.Server.Services
             {
                 case "batch":
                     return Batch(s, a);
+                case "mapAction":
+                    return EditMapAction(s, a);
+                case "traversalFace":
+                    return EditTraversalFace(s, a);
                 case "applyCharacterPreset":
                     return ApplyCharacterPreset(s, a);
                 case "placePrefab":
