@@ -29,6 +29,9 @@ export interface EditorPreferences {
   brushDensity: number;
   brushSlope: number;
   brushErase: boolean;
+  // Icons over props with map object actions, and HUD objective flags (View menu).
+  actionMarkers: boolean;
+  objectiveMarkers: boolean;
 }
 export const EDITOR_PREFERENCES_KEY = 'socom.map.editorPreferences.v1';
 export const DEFAULT_EDITOR_PREFERENCES: EditorPreferences = {
@@ -37,6 +40,7 @@ export const DEFAULT_EDITOR_PREFERENCES: EditorPreferences = {
   placeYaw: 0, placeScale: 1, randomYaw: false, randomScale: false, minPlaceScale: 0.8, maxPlaceScale: 1.2, alignSurface: false,
   snapTarget: 'increment', pivotMode: 'center', placeAs: 'clutter',
   brushRadius: 20, brushSpacing: 5, brushDensity: 8, brushSlope: 35, brushErase: false,
+  actionMarkers: true, objectiveMarkers: true,
 };
 export function normalizeEditorPreferences(value: unknown): EditorPreferences {
   const input = value && typeof value === 'object' ? value as Record<string, unknown> : {};

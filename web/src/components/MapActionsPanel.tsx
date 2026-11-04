@@ -1,50 +1,57 @@
-import { useEffect, useRef, useState } from 'react';
+// The Item panel's Actions tab: what a prop does when the player walks up to it (actions.rdr in READERM.ZAR). Rows
+// bind by the name of a placed GEO node; the editor shows them in plain words, groups the map's actions by kind with
+// the same icons the 3D view floats over props, starts a new action from sensible defaults and checks fields inline.
+
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ActionFields, AssetClient, MapActions } from '../webview/model-editor/asset-client';
 import { host } from '../shared';
+import { ACTION_KINDS, ACTION_TYPES, actionIconUrl, actionKind, type ActionKind } from '../shared/actionIcons';
+import { FIELD_HELP, checkAction, cleanFields, defaultsFor, groupRows } from './mapActionsModel';
 
 interface Props {
   client: AssetClient;
+  /** ASSET_MAP_ACTIONS for the current revision, or null while it loads. */
+  data: MapActions | null;
+  error?: string;
   selected: number | null;
   busy: boolean;
   path: string;
   edit: (label: string, op: Record<string, unknown>) => Promise<unknown>;
   model?: string;
   revision: number;
+  /** Select (and frame) a placed node's prop in the 3D view. */
+  onFocusNode?: (geoIndex: number) => void;
 }
-
-const numbers = ['range', 'elevation', 'team', 'points'];
-const types = ['DOOR', 'SWITCH', 'ITEM', 'SATCHEL', 'MPBOMB', 'DEFUSE', 'ACT_BREACH'];
-const labels: Record<string, string> = {
-  type: 'Action type', valve: 'Mission valve', anim: 'Map animations (one per line)', bitmap: 'Prompt icon',
-  descriptor: 'Prompt text', range: 'Range', elevation: 'Elevation', team: 'Team', points: 'Points'
-};
 
 export function MapActionsPanel(p: Props) {
-  const [data, setData] = useState<MapActions | null>(null);
-  const [error, setError] = useState('');
   const focus = useRef({ path: '', row: -1 });
-  useEffect(() => {
-    let live = true;
-    p.client.mapActions().then(r => { if (live) setData(r); }).catch(e => { if (live) setError(String(e)); });
-    return () => { live = false; };
-  }, [p.client, p.revision]);
-  return data && data.revision === p.revision ? <ActionInspector key={data.revision} {...p} data={data} focus={focus.current} /> :
-    <div className="me-note">{error || 'Reading map actions…'}</div>;
+  if (!p.data || p.data.revision !== p.revision) { return <div className="me-note">{p.error || 'Reading map actions…'}</div>; }
+  return <ActionInspector key={`${p.data.revision}:${p.selected}`} {...p} data={p.data} focus={focus.current} />;
 }
 
-function ActionInspector({ data, selected, busy, path, edit, model, client, focus }: Props & { data: MapActions; focus: {path: string; row: number} }) {
+function Icon({ kind, size = 18 }: { kind: ActionKind; size?: number }) {
+  const url = actionIconUrl(kind);
+  return url ? <img className="mb-act-icon" src={url} width={size} height={size} alt="" /> : null;
+}
+
+function Hint({ text, tone }: { text?: string; tone?: 'error' | 'warn' }) {
+  if (!text) { return null; }
+  return <div className={`mb-act-hint${tone ? ' ' + tone : ''}`} role={tone === 'error' ? 'alert' : undefined}>{text}</div>;
+}
+
+function ActionInspector({ data, selected, busy, path, edit, model, client, focus, onFocusNode }: Props & { data: MapActions; focus: { path: string; row: number } }) {
   const hit = data.targets.find(n => n.index === selected);
   // The rendered mesh is often a child of the door that owns the action.
   const bound = hit && data.targets.filter(t => t.index === hit.index || hit.path.startsWith(t.path + '/'))
-    .filter(t => data.rows.some(r => r.node[0] === t.name)).sort((a,b) => b.path.length - a.path.length)[0];
-  const initial = data.targets.find(t => t.path === focus.path) ?? bound ?? hit;
+    .filter(t => data.rows.some(r => r.node[0] === t.name)).sort((a, b) => b.path.length - a.path.length)[0];
+  const initial = (selected === null ? data.targets.find(t => t.path === focus.path) : undefined) ?? bound ?? hit;
   const [index, setIndex] = useState(initial?.index ?? -1);
   const [filter, setFilter] = useState(initial ? '' : model ?? '');
   const initialRow = initial && data.rows[focus.row]?.node[0] === initial.name ? focus.row :
     initial ? data.rows.findIndex(r => r.node[0] === initial.name) : -1;
   const [row, setRow] = useState(initialRow);
-  const [fields, setFields] = useState<ActionFields>(data.rows[initialRow] ?? {});
-  const [error, setError] = useState('');
+  const [fields, setFields] = useState<ActionFields>(() => data.rows[initialRow] ?? (initial ? defaultsFor('DOOR', data, initial.name) : {}));
+  const [touched, setTouched] = useState(false);
   const [profile, setProfile] = useState('climb');
   const [surface, setSurface] = useState('+Z');
   const [uniqueName, setUniqueName] = useState('');
@@ -53,9 +60,10 @@ function ActionInspector({ data, selected, busy, path, edit, model, client, focu
   useEffect(() => {
     let live = true;
     setPreview('');
-    if (data.icons.includes(bitmap)) client.texture(bitmap, 'hud').then(texture => {
-      if (live) setPreview('data:image/png;base64,' + texture.png);
-    }).catch(() => {});
+    const icon = data.icons.find(i => i.toLowerCase() === bitmap.toLowerCase());
+    if (icon) {
+      client.texture(icon, 'hud').then(texture => { if (live) { setPreview('data:image/png;base64,' + texture.png); } }).catch(() => {});
+    }
     return () => { live = false; };
   }, [bitmap, client, data]);
   const target = data.targets.find(t => t.index === index);
@@ -63,86 +71,191 @@ function ActionInspector({ data, selected, busy, path, edit, model, client, focu
   const name = target?.name ?? String(data.rows[row]?.node[0] ?? '');
   const ambiguous = !!target && data.targets.some(t => t.index !== index && t.name.toLowerCase() === name.toLowerCase());
   const rename = row < 0 && ambiguous && !!target?.model;
-  function chooseRow(id: number) {
-    setRow(id); setFields(data.rows[id] ?? {}); setError('');
+  const kind = actionKind(fields);
+  const check = useMemo(() => checkAction(fields, data), [fields, data]);
+  const groups = useMemo(() => groupRows(data.rows), [data.rows]);
+  const nodeRows = target ? data.rows.map((r, i) => ({ r, i })).filter(x => x.r.node[0] === target.name) : [];
+  const valves = useMemo(() => [...new Set([...data.valves, ...data.rows.flatMap(r => (r.valve ?? []).map(String))])].sort(), [data]);
+  const blocked = Object.keys(check.errors).length > 0 || !name || (rename && !uniqueName.trim()) || (row < 0 && ambiguous && !rename);
+
+  function chooseRow(id: number, keepTarget = false) {
+    setRow(id);
+    setTouched(false);
+    setFields(id >= 0 ? { ...data.rows[id] } : defaultsFor('DOOR', data, keepTarget ? target?.name ?? '' : ''));
+    if (id >= 0 && !keepTarget) {
+      const matches = data.targets.filter(t => t.name === data.rows[id].node[0]);
+      setIndex(matches.length === 1 ? matches[0].index : -1);
+      if (matches.length === 1) { onFocusNode?.(matches[0].index); }
+    }
   }
   function chooseTarget(id: number) {
     setIndex(id); setSurface('+Z'); setUniqueName('');
-    chooseRow(data.rows.findIndex(r => r.node[0] === data.targets.find(t => t.index === id)?.name));
+    const t = data.targets.find(x => x.index === id);
+    const r = data.rows.findIndex(x => x.node[0] === t?.name);
+    setRow(r); setTouched(false);
+    setFields(r >= 0 ? { ...data.rows[r] } : defaultsFor('DOOR', data, t?.name ?? ''));
   }
   function setField(key: string, values: (string | number)[] | undefined) {
-    setFields(old => { const next = { ...old }; if (values) next[key] = values; else delete next[key]; return next; });
+    setTouched(true);
+    setFields(old => { const next = { ...old }; if (values && values.length) { next[key] = values; } else if (values && (key === 'one_shot' || key === 'tcm')) { next[key] = []; } else { delete next[key]; } return next; });
+  }
+  function setKind(next: ActionKind) {
+    setTouched(true);
+    if (row < 0 && !touched) { setFields(defaultsFor(next, data, name)); return; }
+    setFields(old => { const n = { ...old }; if (next === 'ANIM') { delete n.type; } else { n.type = [next]; } return n; });
   }
   function submit() {
-    const values: ActionFields = { ...fields, node: [rename ? uniqueName.trim() : name] };
-    for (const key of numbers) {
-      if (!fields[key]) continue;
-      const n = Number(fields[key][0]);
-      if (!Number.isInteger(n) || n < -2147483648 || n > 2147483647) { setError(labels[key] + ' must be a whole number.'); return; }
-      Object.assign(values, { [key]: [n] });
-    }
-    if (fields.anim) values.anim = fields.anim.map(v => String(v).trim()).filter(Boolean);
-    if (Object.keys(values).length < 2) { setError('Set an action type, valve, or animation first.'); return; }
-    if (row < 0) focus.row = data.rows.length;
-    if (rename && target) focus.path = target.path.slice(0,target.path.lastIndexOf('/') + 1) + uniqueName.trim();
+    if (blocked) { return; }
+    const values = cleanFields(fields, rename ? uniqueName.trim() : name);
+    if (row < 0) { focus.row = data.rows.length; }
+    if (rename && target) { focus.path = target.path.slice(0, target.path.lastIndexOf('/') + 1) + uniqueName.trim(); }
     void edit(row < 0 ? 'Add map action' : 'Update map action', { op: 'mapAction', revision: data.revision, row, fields: values,
-      ...(rename ? { renamePlacement:index } : {}) });
+      ...(rename ? { renamePlacement: index } : {}) });
   }
   const available = data.targets.filter(t => t.index === index || (t.path + ' ' + t.model).toLowerCase().includes(filter.toLowerCase()));
+  const text = (key: string) => String(fields[key]?.[0] ?? '');
+  const number = (key: string, placeholder: string) => <label className="mb-act-field">{FIELD_HELP[key].label}
+    <input type="number" step={1} value={text(key)} placeholder={placeholder} aria-invalid={!!check.errors[key]} onChange={e => setField(key, e.target.value ? [e.target.value] : undefined)} />
+    <Hint text={check.errors[key]} tone="error" />
+    <span className="mb-act-sub">{FIELD_HELP[key].hint}</span>
+  </label>;
+
   return <div className="mb-action-editor">
-    <div className="me-card"><div className="me-card-title">Action target</div>
-      <input className="me-search" placeholder="Filter placed GEO nodes" value={filter} onChange={e => setFilter(e.target.value)} />
-      <select aria-label="Placed GEO node" value={index} onChange={e => chooseTarget(+e.target.value)}>
-        <option value={-1}>Choose a placement…</option>
-        {available.map(n => <option key={n.index} value={n.index}>{n.path} · #{n.index}</option>)}
-      </select>
-      <label>Map actions<select value={row} onChange={e => {
-        const id = +e.target.value; chooseRow(id); if (id >= 0) {
-          const matches = data.targets.filter(t => t.name === data.rows[id].node[0]);
-          setIndex(matches.length === 1 ? matches[0].index : -1); setSurface('+Z');
-        }
-      }}><option value={-1}>New binding</option>{data.rows.map((r,i) => <option value={i} key={i}>{String(r.node[0])} · {r.type ?? r.anim ?? r.valve}</option>)}</select></label>
+    {!data.hasReader && <div className="me-card mb-act-empty"><b>This package has no mission reader.</b> Actions live in READERM.ZAR, which only mission and multiplayer maps carry.</div>}
+    {data.hasReader && data.rows.length === 0 && !target && <div className="me-card mb-act-empty">
+      <div className="me-card-title">What are actions?</div>
+      <p>An action is something the player can do with a prop: open a door, flip a switch, pick up an item, plant a charge.
+        The game shows a prompt when the player is close enough, then sets a <b>mission switch</b> (a valve) and plays <b>map animations</b>.</p>
+      <p>This map has none yet. Select a prop in the 3D view, or choose one below, then add an action to it.</p>
+    </div>}
+
+    <div className="me-card">
+      <div className="me-card-title">Prop</div>
+      {target ? <div className="mb-act-target">
+        <span className="mb-act-target-name" title={target.path}>{target.name}</span>
+        <span className="lm-muted">{target.model || 'scene node'} · #{target.index}</span>
+        {onFocusNode && <button type="button" onClick={() => onFocusNode(target.index)} title="Select and frame it in the 3D view">Show</button>}
+      </div> : <p className="me-note">No prop chosen. Click a prop (or its icon) in the 3D view, or pick one here.</p>}
+      {target && nodeRows.length > 0 && <div className="mb-act-chips">{nodeRows.map(({ r, i }) => {
+        const k = actionKind(r);
+        return <button type="button" key={i} className={`mb-act-chip${i === row ? ' on' : ''}`} onClick={() => chooseRow(i, true)}><Icon kind={k} size={14} /> {ACTION_KINDS[k].label}</button>;
+      })}<button type="button" className={`mb-act-chip${row < 0 ? ' on' : ''}`} onClick={() => chooseRow(-1, true)}>+ New</button></div>}
+      <details className="mb-act-picker" open={!target}>
+        <summary>{target ? 'Choose another prop' : 'Choose a prop'}</summary>
+        <input className="me-search" placeholder="Filter by name or model" value={filter} onChange={e => setFilter(e.target.value)} />
+        <select aria-label="Placed GEO node" value={index} onChange={e => chooseTarget(+e.target.value)}>
+          <option value={-1}>Choose a placement…</option>
+          {available.map(n => <option key={n.index} value={n.index}>{n.path} · #{n.index}</option>)}
+        </select>
+      </details>
     </div>
-    <fieldset disabled={busy || !data.hasReader} className="me-card"><legend>Object action</legend>
-      {!data.hasReader && <p>This package has no mission reader.</p>}
-      {row >= 0 && <label>Bound node<select value={index} onChange={e => { setIndex(+e.target.value); setSurface('+Z'); }}>
+
+    <fieldset disabled={busy || !data.hasReader || (!target && row < 0)} className="me-card mb-act-form">
+      <legend>{row < 0 ? 'New action' : `Action ${row + 1} of ${data.rows.length}`}</legend>
+      {row >= 0 && target?.name !== String(data.rows[row].node[0]) && <p className="me-note">Bound to “{String(data.rows[row].node[0])}”, which no placed node is named. Choose a prop above to rebind it.</p>}
+      {row >= 0 && <label className="mb-act-field">Bound to<select value={index} onChange={e => { setIndex(+e.target.value); setSurface('+Z'); }}>
         <option value={-1}>{String(data.rows[row].node[0])}</option>
         {available.map(n => <option key={n.index} value={n.index}>{n.path}</option>)}
+      </select><span className="mb-act-sub">Saving with another node moves the action to it.</span></label>}
+      {row < 0 && data.rows.length > 0 && <label className="mb-act-field">Copy settings from<select value="" onChange={e => { if (e.target.value) { setTouched(true); setFields({ ...data.rows[Number(e.target.value)] }); } }}>
+        <option value="">Defaults for the type below</option>{data.rows.map((r, i) => <option value={i} key={i}>{String(r.node[0])} · {ACTION_KINDS[actionKind(r)].label}</option>)}
       </select></label>}
-      {row < 0 && <label>Start from<select defaultValue="" onChange={e => setFields(e.target.value ? { ...data.rows[Number(e.target.value)] } : {})}>
-        <option value="">Blank action</option>{data.rows.map((r,i) => <option value={i} key={i}>{String(r.node[0])} · {r.type ?? r.anim ?? r.valve}</option>)}
-      </select></label>}
-      {Object.entries(labels).map(([key,label]) => <label key={key}>{label}
-        {key === 'anim' ? <textarea rows={2} value={fields.anim?.join('\n') ?? ''} onChange={e => setField('anim',e.target.value ? e.target.value.split('\n') : undefined)} /> :
-          <input list={'action-options-' + key} type={numbers.includes(key) ? 'number' : 'text'} value={fields[key]?.[0] ?? ''}
-            onChange={e => setField(key,e.target.value ? [e.target.value] : undefined)} />}
-      </label>)}
-      {preview && <img src={preview} alt={bitmap} width={48} height={48} style={{objectFit:'contain'}} />}
-      {data.animations.length > 0 && <label>Append map animation<select value="" onChange={e => {
-        if (e.target.value) setField('anim', [...(fields.anim ?? []), e.target.value]);
-      }}><option value="">Choose from this map…</option>{data.animations.map(v => <option key={v}>{v}</option>)}</select></label>}
-      {['type','bitmap','valve'].map(key => <datalist key={key} id={'action-options-' + key}>
-        {(key === 'type' ? types : key === 'bitmap' ? data.icons : [...new Set([...data.valves, ...data.rows.flatMap(r => r.valve ?? [])])]).map(v => <option key={v} value={v} />)}
-      </datalist>)}
-      {['one_shot','tcm'].map(k => <label key={k}><input type="checkbox" checked={!!fields[k]} onChange={e => setField(k,e.target.checked ? [] : undefined)} /> {k === 'one_shot' ? 'One shot' : 'TCM'}</label>)}
-      {ambiguous && <p>Several placements share this name. A new action needs a unique GEO name.</p>}
-      {rename && <label>Rename this placement for its action<input value={uniqueName} onChange={e => setUniqueName(e.target.value)} /></label>}
-      {error && <p role="alert">{error}</p>}
-      <button disabled={!name || (row < 0 && ambiguous && !(rename && uniqueName.trim()))} onClick={submit}>{row < 0 ? 'Add action' : 'Apply changes'}</button>
-      {row >= 0 && <button onClick={() => void edit('Remove map action',{ op:'mapAction', revision:data.revision, row })}>Remove action</button>}
-      <p className="me-note">The valve and map animations must exist for the intended behavior. Copying a binding also copies its valve.</p>
+
+      <div className="mb-act-group"><div className="mb-act-group-title">{FIELD_HELP.type.label}</div>
+        <div className="mb-act-kinds" role="radiogroup" aria-label="Action type">
+          {[...ACTION_TYPES, 'ANIM' as ActionKind].map(k => <button type="button" role="radio" aria-checked={kind === k} key={k} className={`mb-act-kind${kind === k ? ' on' : ''}`}
+            title={ACTION_KINDS[k].description} onClick={() => setKind(k)}><Icon kind={k} size={22} /><span>{k === 'ANIM' ? 'No prompt' : ACTION_KINDS[k].label}</span></button>)}
+        </div>
+        <div className="mb-act-sub">{ACTION_KINDS[kind].description}{kind === 'OTHER' && ` (${text('type')})`}</div>
+        <Hint text={check.errors.type} tone="error" /><Hint text={check.warnings.type} tone="warn" />
+      </div>
+
+      {kind !== 'ANIM' && <div className="mb-act-group"><div className="mb-act-group-title">Prompt</div>
+        <label className="mb-act-field">{FIELD_HELP.bitmap.label}
+          <div className="mb-act-row">
+            <select value={data.icons.find(i => i.toLowerCase() === bitmap.toLowerCase()) ?? (bitmap ? '__custom' : '')} onChange={e => setField('bitmap', e.target.value && e.target.value !== '__custom' ? [e.target.value] : undefined)}>
+              <option value="">None</option>
+              {data.icons.map(i => <option key={i} value={i}>{i.replace(/^action_/i, '').replace(/\.tif$/i, '').replace(/_/g, ' ')}</option>)}
+              {bitmap && !data.icons.some(i => i.toLowerCase() === bitmap.toLowerCase()) && <option value="__custom">{bitmap}</option>}
+            </select>
+            {preview && <img className="mb-act-preview" src={preview} alt={bitmap} width={40} height={40} />}
+          </div>
+          <Hint text={check.warnings.bitmap} tone="warn" />
+        </label>
+        <label className="mb-act-field">{FIELD_HELP.descriptor.label}<input value={text('descriptor')} placeholder="(none)" aria-invalid={!!check.errors.descriptor} onChange={e => setField('descriptor', e.target.value ? [e.target.value] : undefined)} />
+          <Hint text={check.errors.descriptor} tone="error" /></label>
+        {number('range', '30')}
+        {number('elevation', 'any height')}
+      </div>}
+
+      <div className="mb-act-group"><div className="mb-act-group-title">What happens</div>
+        <label className="mb-act-field">{FIELD_HELP.valve.label}
+          <input list="action-valves" value={text('valve')} placeholder="e.g. door01" aria-invalid={!!check.errors.valve} onChange={e => setField('valve', e.target.value ? [e.target.value] : undefined)} />
+          <datalist id="action-valves">{valves.map(v => <option key={v} value={v} />)}</datalist>
+          <Hint text={check.errors.valve} tone="error" /><Hint text={check.warnings.valve} tone="warn" />
+          <span className="mb-act-sub">{FIELD_HELP.valve.hint}</span>
+        </label>
+        <div className="mb-act-field">{FIELD_HELP.anim.label}
+          {(fields.anim ?? []).length === 0 && <div className="lm-muted">None.</div>}
+          {(fields.anim ?? []).map((a, i) => <div className="mb-act-row" key={i}>
+            <span className="mb-act-step">{i + 1}</span>
+            <input aria-label={`Animation ${i + 1}`} value={String(a)} onChange={e => setField('anim', (fields.anim ?? []).map((x, k) => k === i ? e.target.value : x))} />
+            <button type="button" title="Remove" onClick={() => setField('anim', (fields.anim ?? []).filter((_, k) => k !== i))}>×</button>
+          </div>)}
+          <select aria-label="Add a map animation" value="" onChange={e => { if (e.target.value) { setField('anim', [...(fields.anim ?? []), e.target.value]); } }}>
+            <option value="">{data.animations.length ? '+ Add an animation from this map…' : '+ Add an animation…'}</option>
+            {data.animations.map(v => <option key={v}>{v}</option>)}
+          </select>
+          {!data.animations.length && <button type="button" onClick={() => setField('anim', [...(fields.anim ?? []), ''])}>+ Add by name</button>}
+          <Hint text={check.errors.anim} tone="error" /><Hint text={check.warnings.anim} tone="warn" />
+          <span className="mb-act-sub">{FIELD_HELP.anim.hint}</span>
+        </div>
+        <label className="mb-act-check"><input type="checkbox" checked={!!fields.one_shot} onChange={e => setField('one_shot', e.target.checked ? [] : undefined)} /> {FIELD_HELP.one_shot.label}
+          <span className="mb-act-sub"> · {FIELD_HELP.one_shot.hint}</span></label>
+      </div>
+
+      <details className="mb-act-group"><summary>Advanced</summary>
+        {number('team', 'any team')}
+        {number('points', 'none')}
+        <label className="mb-act-check"><input type="checkbox" checked={!!fields.tcm} onChange={e => setField('tcm', e.target.checked ? [] : undefined)} /> {FIELD_HELP.tcm.label}
+          <span className="mb-act-sub"> · {FIELD_HELP.tcm.hint}</span></label>
+        <label className="mb-act-field">Raw type<input list="action-types" value={text('type')} onChange={e => setField('type', e.target.value ? [e.target.value] : undefined)} />
+          <datalist id="action-types">{ACTION_TYPES.map(t => <option key={t} value={t} />)}</datalist></label>
+      </details>
+
+      {ambiguous && row < 0 && <Hint tone="warn" text={`Several placements are named “${name}”. The game binds by name, so a new action needs a name only this prop has.`} />}
+      {rename && <label className="mb-act-field">New name for this placement<input value={uniqueName} placeholder={`${name}_action`} onChange={e => setUniqueName(e.target.value)} /></label>}
+      <div className="mb-act-buttons">
+        <button type="button" className="primary" disabled={blocked} onClick={submit}>{row < 0 ? 'Add action' : 'Save changes'}</button>
+        {row >= 0 && touched && <button type="button" onClick={() => chooseRow(row, true)}>Revert</button>}
+        {row >= 0 && <button type="button" onClick={() => void edit('Remove map action', { op: 'mapAction', revision: data.revision, row })}>Remove action</button>}
+      </div>
+      <p className="me-note">The valve and animations must exist for the action to work in game. Copying a binding also copies its valve.</p>
     </fieldset>
-    <fieldset className="me-card" disabled={busy || !target}><legend>Climb and ladder surfaces · experimental</legend>
-      <label>Traversal<select value={profile} onChange={e => setProfile(e.target.value)}><option value="climb">Climb (MP51)</option><option value="ladder">Ladder (M51)</option></select></label>
-      <label>Surface<select value={surface} onChange={e => setSurface(e.target.value)}>
-        {['+X','-X','+Z','-Z'].map(side => <option key={side} value={side}>New face on local {side} side</option>)}
-        {target?.faces.map(face => <option key={face} value={face}>Change existing quad #{face}</option>)}
-      </select></label>
-      <button onClick={() => void edit('Set traversal surface',{ op:'traversalFace', revision:data.revision, geoIndex:index, profile,
-        ...(/^[+-]/.test(surface) ? { side:surface } : { face:Number(surface) }) })}>Apply surface</button>
-      <p className="me-note">New faces span the chosen side of the placement’s local bounds. Verify prompt, approach direction, and dismount in game.</p>
-    </fieldset>
-    <details className="me-card"><summary>Mission tables ({data.tables.length})</summary><p className="me-note">Open a table in the Asset Viewer to inspect or edit its values.</p>
-      {data.tables.map(t => <button key={t} onClick={() => host.openMissionTable(path,t)}>{t}</button>)}</details>
+
+    <div className="me-card">
+      <div className="me-card-title">Actions on this map ({data.rows.length})</div>
+      {data.rows.length === 0 && <p className="me-note">None yet.</p>}
+      {groups.map(g => <div key={g.kind} className="mb-act-list-group">
+        <div className="mb-act-list-head"><Icon kind={g.kind} size={16} /> {ACTION_KINDS[g.kind].label} <span className="lm-muted">{g.rows.length}</span></div>
+        <div className="mb-act-list">{g.rows.map(r => <button type="button" key={r.row} className={r.row === row ? 'on' : ''} onClick={() => chooseRow(r.row)}>{r.node}</button>)}</div>
+      </div>)}
+    </div>
+
+    <details className="me-card"><summary>Climb and ladder surfaces · experimental</summary>
+      <fieldset disabled={busy || !target} className="mb-act-plain">
+        <p className="me-note">Adds or changes a four-point traversal face on the chosen prop, copying a profile sampled from a retail map.</p>
+        <label className="mb-act-field">Profile<select value={profile} onChange={e => setProfile(e.target.value)}><option value="climb">Climb (MP51)</option><option value="ladder">Ladder (M51)</option></select></label>
+        <label className="mb-act-field">Surface<select value={surface} onChange={e => setSurface(e.target.value)}>
+          {['+X', '-X', '+Z', '-Z'].map(side => <option key={side} value={side}>New face on local {side} side</option>)}
+          {target?.faces.map(face => <option key={face} value={face}>Change existing quad #{face}</option>)}
+        </select></label>
+        <button type="button" onClick={() => void edit('Set traversal surface', { op: 'traversalFace', revision: data.revision, geoIndex: index, profile,
+          ...(/^[+-]/.test(surface) ? { side: surface } : { face: Number(surface) }) })}>Apply surface</button>
+        <p className="me-note">New faces span the chosen side of the placement’s local bounds. Check the prompt, approach direction and dismount in game.</p>
+      </fieldset>
+    </details>
+    <details className="me-card"><summary>Mission tables ({data.tables.length})</summary><p className="me-note">Open a table in the Asset Viewer to see or edit every value. The Mission tab shows the main ones.</p>
+      {data.tables.map(t => <button type="button" key={t} onClick={() => host.openMissionTable(path, t)}>{t}</button>)}</details>
   </div>;
 }

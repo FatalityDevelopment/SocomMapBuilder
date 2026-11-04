@@ -124,6 +124,84 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.RDR
             return _atoms.Count == 0 ? new object[] { 0, "list", 0, new List<object>() } : Node(0);
         }
 
+        // ------------------------------------------------------------------ named fields and paths
+
+        /// <summary>
+        /// The value of a named field in a list, or -1. Both forms on disc are found: an item that is itself a pair
+        /// <c>[key, value]</c>, and a key string followed by its value in the list itself. A list whose only item is
+        /// another list (a wrapper, as most roots are) is looked through.
+        /// </summary>
+        public int Field(int list, string key) => Field(list, key, own: false);
+
+        private int Field(int list, string key, bool own)
+        {
+            if (TypeOf(list) != List) return -1;
+            if (own) OwnShallow(list);
+            int[] items = Children(list).ToArray();
+            foreach (int item in items)
+                if (TypeOf(item) == List && CountOf(item) == 2 && TypeOf(FirstChild(item)) == String && StringAt(Atom(FirstChild(item)).Value) == key
+                    && FirstChild(item) + 1 < _atoms.Count)
+                    return (own ? OwnShallow(item) : FirstChild(item)) + 1;
+            for (int i = 0; i + 1 < items.Length; i++)
+                if (TypeOf(items[i]) == String && StringAt(Atom(items[i]).Value) == key) return items[i + 1];
+            return items.Length == 1 && TypeOf(items[0]) == List ? Field(items[0], key, own) : -1;
+        }
+
+        /// <summary>The value lists' values (null for a list inside).</summary>
+        public object?[] Values(int list) => Children(list).Select(ValueOf).ToArray();
+
+        /// <summary>Follows a path from the root: a string is a named field (<see cref="Field"/>), an int an item of a list.</summary>
+        public int Resolve(IEnumerable<object> path) => Walk(path, own: false);
+
+        /// <summary>
+        /// Sets the values of the list at <paramref name="path"/> from text, each keeping its type (int, float or
+        /// string), with as many values as the list has. Every list on the way is given its own items first (one level
+        /// at a time), so a value retail files share with other fields changes only here.
+        /// </summary>
+        public void SetValues(IEnumerable<object> path, IReadOnlyList<string> texts)
+        {
+            int list = Walk(path, own: true);
+            if (TypeOf(list) != List) throw new ArgumentException("The path does not lead to a list of values.");
+            if (CountOf(list) != texts.Count) throw new ArgumentException($"Expected {CountOf(list)} value(s), got {texts.Count}.");
+            int first = OwnShallow(list);
+            for (int i = 0; i < texts.Count; i++)
+            {
+                if (TypeOf(first + i) == List) throw new ArgumentException("Only numbers and text can be set here.");
+                SetFromText(first + i, texts[i]);
+            }
+        }
+
+        private int Walk(IEnumerable<object> path, bool own)
+        {
+            int at = 0;
+            if (_atoms.Count == 0) throw new KeyNotFoundException("The table is empty.");
+            foreach (object step in path)
+            {
+                if (TypeOf(at) != List) throw new KeyNotFoundException($"Nothing under {step}.");
+                // Owning each list on the way (Field owns the wrappers it looks through) leaves the target unshared.
+                if (own && step is int) OwnShallow(at);
+                at = step switch
+                {
+                    string key => Field(at, key, own) is int f and >= 0 ? f : throw new KeyNotFoundException($"No field \"{key}\"."),
+                    int n when n >= 0 && n < CountOf(at) => FirstChild(at) + n,
+                    int n => throw new KeyNotFoundException($"No item #{n}."),
+                    _ => throw new ArgumentException("A path step is a field name or an item number."),
+                };
+            }
+            return at;
+        }
+
+        /// <summary>Gives a list a fresh copy of its own items (not of what they hold) and answers the first.</summary>
+        public int OwnShallow(int list)
+        {
+            if (TypeOf(list) != List) throw new InvalidOperationException($"Atom #{list} is not a list.");
+            var items = Children(list).Select(Atom).ToList();
+            int block = _atoms.Count;
+            _atoms.AddRange(items);
+            _atoms[list] = (_atoms[list].Tag, (uint)(block * 8));
+            return block;
+        }
+
         // ------------------------------------------------------------------ editing
 
         public static RdrDocument Create()

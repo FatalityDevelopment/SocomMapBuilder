@@ -77,12 +77,27 @@ internal sealed partial class ZipperAssetService
         {
             revision = s.Revision, hasReader = reader != null, rows, valves, animations = animations.Distinct(),
             targets = ActionTargets(map.Scene.MapRoot).Select(t => new { index = t.Node.Index, name = t.Node.Name, path = t.Path, model = t.Node.ModelReference,
+                anchor = NodeAnchor(t.Node),
                 faces = t.Node.Child("di")?.Children.Where(n => n.Name == "di" && n.Child("points")?.Data.Length == 64 && n.Child("params")?.Data.Length == 12)
                     .Select(n => n.Index).ToArray() ?? Array.Empty<int>() }).ToArray(),
             tables = records.Where(n => n.Name.EndsWith(".rdr", StringComparison.OrdinalIgnoreCase)).Select(n => n.Name).ToArray(),
             icons = s.Package.Entry("HUD_TXR.ZED") == null ? Array.Empty<string>() : s.Package.Container("HUD_TXR.ZED").Nodes
                 .Select(n => n.Name).Where(n => n.StartsWith("action_", StringComparison.OrdinalIgnoreCase)).Distinct().ToArray()
         };
+    }
+
+    // Where a node's marker stands in the map (top middle of its world bounds, else its origin), for nodes that draw
+    // nothing of their own: retail doors and breach points are bare scene nodes whose geometry is in the world model.
+    private static float[]? NodeAnchor(GeoNode node)
+    {
+        float[] m;
+        try { m = node.WorldTransform; } catch (Exception e) when (e is ArgumentException or IndexOutOfRangeException or InvalidDataException) { return null; }
+        if (m.Length != 16 || m.Any(v => !float.IsFinite(v))) return null;
+        float[] At(float x, float y, float z) => new[] { m[0] * x + m[4] * y + m[8] * z + m[12], m[1] * x + m[5] * y + m[9] * z + m[13], m[2] * x + m[6] * y + m[10] * z + m[14] };
+        if (node.Bounds is not { } bounds || bounds.Min.Length < 3 || bounds.Max.Length < 3) return At(0, 0, 0);
+        var (min, max) = bounds;
+        var corners = Enumerable.Range(0, 8).Select(k => At(k % 2 == 0 ? min[0] : max[0], k / 2 % 2 == 0 ? min[1] : max[1], k / 4 == 0 ? min[2] : max[2])).ToArray();
+        return new[] { (corners.Min(c => c[0]) + corners.Max(c => c[0])) / 2, corners.Max(c => c[1]), (corners.Min(c => c[2]) + corners.Max(c => c[2])) / 2 };
     }
 
     private static void CheckActionRevision(AssetSession s, JsonElement a)

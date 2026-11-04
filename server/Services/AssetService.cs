@@ -79,6 +79,7 @@ namespace MapBuilder.Server.Services
             reg.Add(c => WithSession(c.AssetSession, "ASSET_HISTORY", s => History(s)), "ASSET_HISTORY");
             RegisterPrefabs(reg);
             reg.Add(c => WithSession(c.AssetSession, "ASSET_MAP_ACTIONS", MapActions), "ASSET_MAP_ACTIONS");
+            reg.Add(c => WithSession(c.AssetSession, "ASSET_MAP_TABLES", MapTables), "ASSET_MAP_TABLES");
             RegisterCharacterPresets(reg);
             RegisterViewer(reg);
             RegisterMovies(reg);
@@ -112,6 +113,10 @@ namespace MapBuilder.Server.Services
                     return EditMapAction(s, a);
                 case "traversalFace":
                     return EditTraversalFace(s, a);
+                case "mapTable":
+                    return EditMapTable(s, a);
+                case "mapText":
+                    return EditMapText(s, a);
                 case "applyCharacterPreset":
                     return ApplyCharacterPreset(s, a);
                 case "placePrefab":

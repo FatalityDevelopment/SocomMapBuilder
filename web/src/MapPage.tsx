@@ -4,7 +4,7 @@ import { readRenderSettings, writeRenderSettings } from './viewport/renderSettin
 import type { ViewportStats } from './webview/zipper-core/viewport-core';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MapProblem, MapValidation, ModelSummary, PrefabDetail, PrefabSummary } from './webview/model-editor/asset-client';
-import { MapViewport, type CameraState, type MapLayer, type MapTool, type SnapTarget } from './viewport/mapViewport';
+import { MapViewport, type CameraState, type MapLayer, type MarkerPick, type MapTool, type SnapTarget } from './viewport/mapViewport';
 import { CommandPalette } from './shared/CommandPalette';
 import { HistoryList } from './shared/HistoryList';
 import { commandsFromMenus, formatDistance } from './shared/commands';
@@ -20,6 +20,9 @@ import { PageHeader } from './shared/PageHeader';
 import { Outliner } from './components/Outliner';
 import { PropsPanel, type PropTab } from './components/PropsPanel';
 import { MapActionsPanel } from './components/MapActionsPanel';
+import { MissionPanel } from './components/MissionPanel';
+import { actionMarkers } from './viewport/actionMarkers';
+import type { MapActions, MapTables } from './webview/model-editor/asset-client';
 import { ViewportView } from './components/ViewportView';
 import { NumField } from './components/NumField';
 import { activePage, host, openRequest } from './shared';
@@ -119,6 +122,16 @@ export function MapPage() {
   const [measure, setMeasure] = useState<string | null>(null);
   const [walking, setWalking] = useState(false);
   const [hiddenCount, setHiddenCount] = useState(0);
+  // Map object actions and mission tables for this revision, and the 3D markers drawn from them.
+  const [actionData, setActionData] = useState<MapActions | null>(null);
+  const [actionError, setActionError] = useState('');
+  const [tables, setTables] = useState<MapTables | null>(null);
+  const [tablesError, setTablesError] = useState('');
+  const [selectedObjective, setSelectedObjective] = useState<number | null>(null);
+  // An action node picked by its icon that draws nothing to select (a door in the world model).
+  const [actionNode, setActionNode] = useState<number | null>(null);
+  const [actionMarkersOn, setActionMarkersOn] = useState(initialPreferences.actionMarkers);
+  const [objectiveMarkersOn, setObjectiveMarkersOn] = useState(initialPreferences.objectiveMarkers);
   // Camera bookmarks, per package (browser storage: a convenience, kept per viewer).
   const [bookmarks, setBookmarks] = useState<Array<{ name: string; camera: CameraState }>>([]);
   const thumbsRef = useRef<ThumbnailRenderer | null>(null);
@@ -266,6 +279,65 @@ export function MapPage() {
   };
   const goToBookmark = (camera: CameraState) => { viewportRef.current?.setCameraState(camera); setWalking(false); };
   const deleteBookmark = (name: string) => storeBookmarks(bookmarks.filter(b => b.name !== name));
+
+  // ------------------------------------------------------------------ actions, mission tables, markers
+
+  useEffect(() => {
+    let live = true;
+    if (!status || status.readOnly) { setActionData(null); setTables(null); return; }
+    setActionError(''); setTablesError('');
+    client.mapActions().then(r => { if (live) { setActionData(r); } }).catch(e => { if (live) { setActionData(null); setActionError(errText(e)); } });
+    client.mapTables().then(r => { if (live) { setTables(r); } }).catch(e => { if (live) { setTables(null); setTablesError(errText(e)); } });
+    return () => { live = false; };
+  }, [status?.session, status?.revision, status?.readOnly]);
+  useEffect(() => { setSelectedObjective(null); setActionNode(null); }, [status?.session]);
+  useEffect(() => { if (selection.length) { setActionNode(null); } }, [selection]);
+  useEffect(() => {
+    viewportRef.current?.setActionMarkers(actionData ? actionMarkers(actionData, instances) : []);
+  }, [actionData, instances]);
+  useEffect(() => {
+    viewportRef.current?.setObjectiveMarkers((tables?.objectives ?? []).filter(o => o.location).map(o => ({
+      row: o.row, x: o.location![0], z: o.location![1], secondary: o.secondary,
+      label: (o.name && tables?.texts[o.name]) || o.name || `Objective ${o.row + 1}`,
+    })));
+  }, [tables, instances]);
+  useEffect(() => { viewportRef.current?.setSelectedObjective(selectedObjective); }, [selectedObjective]);
+  const toggleActionMarkers = () => {
+    const next = !actionMarkersOn;
+    setActionMarkersOn(next);
+    if (viewportRef.current) { viewportRef.current.showActionMarkers = next; }
+  };
+  const toggleObjectiveMarkers = () => {
+    const next = !objectiveMarkersOn;
+    setObjectiveMarkersOn(next);
+    if (viewportRef.current) { viewportRef.current.showObjectiveMarkers = next; }
+  };
+  // Select a placed node's prop (the node itself or the first placement drawn under it) and frame it.
+  const focusNode = (geoIndex: number) => {
+    const list = instancesRef.current;
+    let i = list.findIndex(inst => inst.geoIndex === geoIndex);
+    if (i < 0 && actionData) {
+      const node = actionData.targets.find(t => t.index === geoIndex);
+      const under = new Set(actionData.targets.filter(t => node && t.path.startsWith(node.path + '/')).map(t => t.index));
+      i = list.findIndex(inst => inst.geoIndex !== null && under.has(inst.geoIndex));
+    }
+    if (i < 0) {
+      viewportRef.current?.clearSelection();
+      setActionNode(geoIndex);
+      setPropTab('actions');
+      return;
+    }
+    setActionNode(null);
+    viewportRef.current?.select([i]);
+    viewportRef.current?.frameSelected();
+    setPropTab('actions');
+  };
+  const showObjective = (row: number) => { setSelectedObjective(row); viewportRef.current?.frameObjective(row); };
+  const pickMarker = (pick: MarkerPick) => {
+    if (pick.kind === 'action') { setActionNode(pick.instance < 0 ? pick.geoIndex : null); setPropTab('actions'); return; }
+    setSelectedObjective(pick.row);
+    setPropTab('mission');
+  };
 
   const hideSelection = () => { const vp = viewportRef.current; if (vp && selection.length) { vp.hideInstances(selection); setHiddenCount(vp.hiddenCount); } };
   const isolateSelection = () => { const vp = viewportRef.current; if (vp && selection.length) { vp.isolateInstances(selection); setHiddenCount(vp.hiddenCount); } };
@@ -498,6 +570,8 @@ export function MapPage() {
         ...LAYERS.map(l => ({ label: l.label, action: () => toggleLayer(l.id), checked: () => !hidden.layers.has(l.id) })),
         { separator: true, label: '' },
         { label: 'Back faces', action: toggleBackfaces, checked: () => backfaces },
+        { label: 'Action icons', action: toggleActionMarkers, checked: () => actionMarkersOn },
+        { label: 'Objective flags', action: toggleObjectiveMarkers, checked: () => objectiveMarkersOn },
         { separator: true, label: '' },
         { label: 'Walk mode', shortcut: SHORTCUTS.walk.label, action: toggleWalk, checked: () => walking, disabled: () => !status },
         { label: 'Measure', shortcut: SHORTCUTS.toolMeasure.label, action: () => setTool('measure'), disabled: () => !status },
@@ -569,8 +643,8 @@ export function MapPage() {
   // ------------------------------------------------------------------ viewport wiring
 
   // The viewport calls these; they are read through a ref so they always see the current state.
-  const handlersRef = useRef({ commitTransforms, place, syncSelection, edit, setHover, setPropTab, openDialog, openModel, scatter, erase, setDragInfo, setMeasure, setWalking });
-  handlersRef.current = { commitTransforms, place, syncSelection, edit, setHover, setPropTab, openDialog, openModel, scatter, erase, setDragInfo, setMeasure, setWalking };
+  const handlersRef = useRef({ commitTransforms, place, syncSelection, edit, setHover, setPropTab, openDialog, openModel, scatter, erase, setDragInfo, setMeasure, setWalking, pickMarker });
+  handlersRef.current = { commitTransforms, place, syncSelection, edit, setHover, setPropTab, openDialog, openModel, scatter, erase, setDragInfo, setMeasure, setWalking, pickMarker };
 
   const onViewportReady = useCallback((canvas: HTMLCanvasElement) => {
     if (viewportRef.current) { return; }
@@ -591,6 +665,7 @@ export function MapPage() {
       onDragInfo: text => handlersRef.current.setDragInfo(text),
       onMeasure: (units, points) => handlersRef.current.setMeasure(units !== null ? `Distance ${formatDistance(units)}` : points === 1 ? 'Measure: click the second point' : null),
       onWalkEnd: () => handlersRef.current.setWalking(false),
+      onMarkerPick: pick => handlersRef.current.pickMarker(pick),
     });
     vp.editable = false;
     vp.onStats = setViewportStats;
@@ -599,6 +674,8 @@ export function MapPage() {
     vp.setBackfaces(initialPreferences.backfaces);
     vp.showGrid = initialPreferences.grid;
     vp.showAxes = initialPreferences.grid;
+    vp.showActionMarkers = initialPreferences.actionMarkers;
+    vp.showObjectiveMarkers = initialPreferences.objectiveMarkers;
     vp.gizmoLocal = initialPreferences.gizmoLocal;
     vp.snapTarget = initialPreferences.snapTarget;
     vp.pivotMode = initialPreferences.pivotMode;
@@ -646,10 +723,11 @@ export function MapPage() {
   useEffect(() => {
     writeEditorPreferences({ shading, lighting, grid, snap, snapMove, snapRotate, snapScale, gizmoLocal, ortho, backfaces,
       placeYaw, placeScale, randomYaw, randomScale, minPlaceScale, maxPlaceScale, alignSurface,
-      snapTarget, pivotMode, placeAs, brushRadius, brushSpacing, brushDensity, brushSlope, brushErase });
+      snapTarget, pivotMode, placeAs, brushRadius, brushSpacing, brushDensity, brushSlope, brushErase,
+      actionMarkers: actionMarkersOn, objectiveMarkers: objectiveMarkersOn });
   }, [shading, lighting, grid, snap, snapMove, snapRotate, snapScale, gizmoLocal, ortho, backfaces,
     placeYaw, placeScale, randomYaw, randomScale, minPlaceScale, maxPlaceScale, alignSurface,
-    snapTarget, pivotMode, placeAs, brushRadius, brushSpacing, brushDensity, brushSlope, brushErase]);
+    snapTarget, pivotMode, placeAs, brushRadius, brushSpacing, brushDensity, brushSlope, brushErase, actionMarkersOn, objectiveMarkersOn]);
   // ------------------------------------------------------------------ AI (MCP)
 
   // ui_view on this page: shading, lighting, camera preset, framing.
@@ -678,6 +756,8 @@ export function MapPage() {
       return inst && { model: inst.model, kind: inst.kind, geoIndex: inst.geoIndex, clutterIndex: inst.clutterIndex, position: inst.position };
     }),
     selectedPoint,
+    markers: viewportRef.current?.markerCount() ?? null,
+    selectedObjective,
   });
   useEffect(() => provideAiState('map', () => aiStateRef.current()), []);
 
@@ -831,9 +911,13 @@ export function MapPage() {
             pickPoint={pickPoint}
           />
           <PropsPanel
-            actions={status && !status.readOnly ? <MapActionsPanel key={[status.session,single?.geoIndex].join(':')}
-              revision={status.revision} client={client} selected={single?.geoIndex ?? null} busy={busy || loading} edit={edit} path={status.path} model={request?.path === status.path ? request.actionsFor : undefined} /> :
+            actions={status && !status.readOnly ? <MapActionsPanel key={status.session} data={actionData} error={actionError} onFocusNode={focusNode}
+              revision={status.revision} client={client} selected={single?.geoIndex ?? actionNode} busy={busy || loading} edit={edit} path={status.path} model={request?.path === status.path ? request.actionsFor : undefined} /> :
               <div className="me-note">Open an editable SOCOM II map to manage its actions.</div>}
+            mission={status && !status.readOnly ? <MissionPanel tables={tables} error={tablesError} revision={status.revision} busy={busy || loading} edit={edit}
+              path={status.path} selectedObjective={selectedObjective} onSelectObjective={row => { setSelectedObjective(row); if (row !== null) { viewportRef.current?.frameObjective(row); } }}
+              onShowObjective={showObjective} /> :
+              <div className="me-note">Open an editable SOCOM II map to see its mission tables.</div>}
             tab={propTab}
             setTab={setPropTab}
             status={status}

@@ -744,6 +744,14 @@ namespace MapBuilder.Server.Services
                 true, Schema(new[] { "session" }, session), a => FromCommand(new CommandMessage { Command = "ASSET_MAP_POINTS", AssetSession = Session(a) },
                     d => d.TryGetProperty("points", out var p) ? $"{p.GetArrayLength()} point(s)" : null!));
 
+            AddSync("assets_map_tables", "Read mission tables",
+                "The map's mission tables decoded: HUD objectives (text, valves, map LOCATION [x, z]), actors (vehicles.rdr: display name, " +
+                "character, start points, teams, AI accuracy / courage), mission settings (AI parameters, satchel timer, valves such as " +
+                "weapon Enable_*), world settings (lighting, fog, clip; read-only), map extents, mission cameras and valves, with the " +
+                "in-game text of their message keys. Each editable row carries its path for assets_edit mapTable; mapText changes a message. Risk: read-only.",
+                true, Schema(new[] { "session" }, session), a => FromCommand(new CommandMessage { Command = "ASSET_MAP_TABLES", AssetSession = Session(a) },
+                    d => $"{d.GetProperty("objectives").GetArrayLength()} objective(s), {d.GetProperty("actors").GetArrayLength()} actor(s)"));
+
             AddSync("assets_list_animations", "List animations",
                 "Character clips: the package's MOTION_S.ZAR (editable) and the shared MOTION_P.ZAR (read-only). Filter by a name substring or source. Risk: read-only.",
                 true, Schema(new[] { "session" }, session, P("query", "string", "Optional clip name substring."), P("source", "string", "Optional source: package or shared.")),
