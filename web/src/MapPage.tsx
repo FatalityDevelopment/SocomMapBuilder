@@ -19,9 +19,10 @@ import { MenuBar, type Menu } from './components/MenuBar';
 import { PageHeader } from './shared/PageHeader';
 import { Outliner } from './components/Outliner';
 import { PropsPanel, type PropTab } from './components/PropsPanel';
+import { MapActionsPanel } from './components/MapActionsPanel';
 import { ViewportView } from './components/ViewportView';
 import { NumField } from './components/NumField';
-import { activePage, host } from './shared';
+import { activePage, host, openRequest } from './shared';
 import { aiView, applyAiCamera, provideAiState } from './shared/aiBridge';
 import { SHORTCUTS, TOOLS } from './mapShortcuts';
 import { useMapKeys } from './useMapKeys';
@@ -69,6 +70,8 @@ export function MapPage() {
   };
   const [query, setQuery] = useState('');
   const [propTab, setPropTab] = useState<PropTab>('item');
+  const request = openRequest();
+  useEffect(() => { if (request?.actionsFor) setPropTab('actions'); }, [request]);
   // Each edit (and each package) gets a fresh check while the Map tab is open.
   useEffect(() => {
     if (propTab === 'map' && status) { void runCheck(); }
@@ -574,7 +577,9 @@ export function MapPage() {
     const vp = new MapViewport(canvas, {
       onSelectionChange: () => {
         handlersRef.current.syncSelection();
-        if (viewportRef.current && (viewportRef.current.selected.size || viewportRef.current.selectedPoint)) { handlersRef.current.setPropTab('item'); }
+        if (viewportRef.current && (viewportRef.current.selected.size || viewportRef.current.selectedPoint)) {
+          handlersRef.current.setPropTab(tab => tab === 'actions' && !viewportRef.current?.selectedPoint ? tab : 'item');
+        }
       },
       onHover: text => handlersRef.current.setHover(text),
       onTransformCommit: (items, kind) => void handlersRef.current.commitTransforms(items, kind),
@@ -826,6 +831,9 @@ export function MapPage() {
             pickPoint={pickPoint}
           />
           <PropsPanel
+            actions={status && !status.readOnly ? <MapActionsPanel key={[status.session,single?.geoIndex].join(':')}
+              revision={status.revision} client={client} selected={single?.geoIndex ?? null} busy={busy || loading} edit={edit} path={status.path} model={request?.path === status.path ? request.actionsFor : undefined} /> :
+              <div className="me-note">Open an editable SOCOM II map to manage its actions.</div>}
             tab={propTab}
             setTab={setPropTab}
             status={status}

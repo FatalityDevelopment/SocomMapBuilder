@@ -110,7 +110,7 @@ const baseOf = (p: string) => p.split(/[\\/]/).pop() ?? p;
 // The page in front, and requests for another page to open something.
 export const activePage = signal<PageId>('map');
 
-export interface OpenRequest { page: PageId; path: string; model?: { archive: string; name: string }; seq: number }
+export interface OpenRequest { page: PageId; path: string; model?: { archive: string; name: string }; missionTable?: string; actionsFor?: string; seq: number }
 export const openRequest = signal<OpenRequest | null>(null);
 let openSeq = 0;
 
@@ -271,6 +271,16 @@ export const host = {
   },
 
   // Brings another page to the front and asks it to open a package (and select a model).
+  openMissionTable(path: string, missionTable: string): void {
+    activePage.set('viewer');
+    openRequest.set({ page: 'viewer', path, missionTable, seq: ++openSeq });
+  },
+
+  openMapActions(path: string, actionsFor: string): void {
+    activePage.set('map');
+    openRequest.set({ page: 'map', path, actionsFor, seq: ++openSeq });
+  },
+
   open(page: PageId, path: string, model?: { archive: string; name: string }): void {
     activePage.set(page);
     openRequest.set({ page, path, model, seq: ++openSeq });

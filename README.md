@@ -197,6 +197,12 @@ After building the web client above, run `dotnet build desktop/MapBuilder.Deskto
 
 Opening the app starts the local server when needed. If MapBuilder is already running at `http://127.0.0.1:8770`, the window connects to that session. Closing the window stops a server it started and leaves a separately started server running.
 
+### Editing map actions
+
+Open a SOCOM II map, select a placed object, and choose **Actions** in the Map Builder inspector. You can also choose a named GEO node directly, including the parent of a visible door. Choose **New binding** to add an action, or select a row under **Map actions** to edit its prompt icon, valve, animation, range, and other fields. **Placement actions…** in the Model Editor opens the map inspector filtered by model. Use **File → Save copy…** to write the edited map.
+
+The same tab offers experimental climb and ladder surfaces and links to the map's mission tables. The disc inventory and limits of the traversal presets are recorded in [Map interactions](docs/map-interactions.md).
+
 ## Working with packages
 
 - **Changes are session-based until you save or export.** **Save copy** (`Ctrl+S`) writes a new `.ZDB` or `.CDB`; **Export memory-card pack** writes `<NAME>.CDB` for `mc0:/BASCUS-97275<NAME>/`. Pack names start with `m` and can contain up to 7 letters or digits.

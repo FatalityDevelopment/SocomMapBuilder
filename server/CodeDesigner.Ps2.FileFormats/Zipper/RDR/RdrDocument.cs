@@ -126,6 +126,63 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.RDR
 
         // ------------------------------------------------------------------ editing
 
+        public static RdrDocument Create()
+        {
+            var doc = new RdrDocument { Version = 1 };
+            doc._atoms.Add((List, 0));
+            return doc;
+        }
+
+        // Repoint just this list. Retail lists can share their child block.
+        private int WriteChildren(int list, List<(uint Tag, uint Value)> items)
+        {
+            Require(list, List);
+            if (items.Count > ushort.MaxValue) throw new InvalidOperationException("Too many list items.");
+            int first = _atoms.Count;
+            _atoms.AddRange(items);
+            _atoms[list] = (List | ((uint)items.Count << 16), (uint)first * 8);
+            return first;
+        }
+
+        public int AppendList(int list)
+        {
+            var items = Children(list).Select(Atom).ToList();
+            items.Add((List, 0));
+            return WriteChildren(list, items) + items.Count - 1;
+        }
+
+        public void RemoveChild(int list, int ordinal)
+        {
+            var items = Children(list).Select(Atom).ToList();
+            items.RemoveAt(ordinal);
+            WriteChildren(list, items);
+        }
+
+        // A named-field object is a list alternating keys and lists of typed values.
+        public void WriteFields(int list, IReadOnlyDictionary<string, object[]> fields)
+        {
+            var items = new List<(uint Tag, uint Value)>();
+            foreach (string key in fields.Keys)
+            {
+                items.Add((String, PoolOffset(key)));
+                items.Add((List, 0));
+            }
+            int valueList = WriteChildren(list, items) + 1;
+            foreach (var (key, values) in fields)
+            {
+                if (values.Length > ushort.MaxValue) throw new ArgumentException("Too many field values.");
+                _atoms[valueList] = (List | ((uint)values.Length << 16), (uint)_atoms.Count * 8);
+                valueList += 2;
+                foreach (var value in values)
+                    _atoms.Add(value switch
+                    {
+                        int number => (Int, unchecked((uint)number)),
+                        string text when text.All(c => c >= ' ' && c <= '~') => (String, PoolOffset(text)),
+                        _ => throw new ArgumentException($"Invalid value for {key}.")
+                    });
+            }
+        }
+
         public void SetInt(int atom, int value) { Require(atom, Int); Set(atom, (uint)value); }
 
         public void SetFloat(int atom, float value)

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Icon } from '../../shared/Icon';
-import { activePage, openRequest, useSignals } from '../../shared';
+import { activePage, host, openRequest, useSignals } from '../../shared';
 import { aiChange, aiView, applyAiCamera, provideAiState } from '../../shared/aiBridge';
 import { PageHeader } from '../../shared/PageHeader';
 import { CommandPalette } from '../../shared/CommandPalette';
@@ -58,6 +58,7 @@ export function ModelEditorPage() {
       {/* Menu bar */}
       <div className="me-menubar">
         <span className="me-brand"><Icon name="library" size={14} /> Model Editor</span>
+        {s && d && !s.readOnly && s.mapNamespace && <button className="lm-tool-btn" onClick={() => host.openMapActions(s.path, d.name)}>Placement actions…</button>}
         {c.menus.map(menu => (
           <div key={menu.id} className={`me-menu${c.openMenu() === menu.id ? ' open' : ''}`}>
             <button className="me-menu-btn" onClick={() => c.toggleMenu(menu.id)} onMouseEnter={() => c.hoverMenu(menu.id)}>{menu.label}</button>
