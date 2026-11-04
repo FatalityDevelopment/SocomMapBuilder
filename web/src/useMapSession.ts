@@ -324,6 +324,24 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
     }
   };
 
+  // Back or forward several steps at once (the History list): that many undos or redos, then one reload.
+  const jump = async (undoSteps: number, redoSteps: number) => {
+    if (!clientRef.current.session || busyRef.current || reloadingRef.current > 0 || statusRef.current?.readOnly) { return; }
+    setBusyFlag(true);
+    try {
+      let last: { description?: string; revision: number } | null = null;
+      for (let i = 0; i < undoSteps; i++) { last = await clientRef.current.undo(); }
+      for (let i = 0; i < redoSteps; i++) { last = await clientRef.current.redo(); }
+      setStatus(await clientRef.current.status());
+      if (last) { say(`${undoSteps ? `Undid ${undoSteps}` : `Redid ${redoSteps}`} step(s), to revision ${last.revision}`); }
+      await reload(true, true);
+    } catch (err) {
+      say(errText(err), true);
+    } finally {
+      setBusyFlag(false);
+    }
+  };
+
   // ------------------------------------------------------------------ save
 
   const save = async (args: { mode: 'zdb' | 'pack'; outputPath?: string; packName?: string }) => {
@@ -372,6 +390,6 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
     status, setStatus, sceneNs, counts, instances, points, models, setModels, busy, progress, loading, sceneReady,
     loadWarnings, connectionIssue, message, messageIsError, say,
     reload, retryScene, edit, history, saveCopy, exportPack, openDialog,
-    loadModel, texturePixels: pixelCacheRef.current,
+    loadModel, texturePixels: pixelCacheRef.current, jump,
   };
 }

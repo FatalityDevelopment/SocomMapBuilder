@@ -47,6 +47,7 @@ namespace MapBuilder.Server.Services
         public void Register(CommandRegistry reg)
         {
             reg.Add(ObjRefinement.Run, "MESH_REFINE_OBJ");
+            StartAutosave();
             reg.Add(c => HandleOpen(c.InputPath), "ASSET_OPEN");
             reg.Add(c => HandleClose(c.AssetSession), "ASSET_CLOSE");
             reg.Add(_ => HandleSessions(), "ASSET_SESSIONS");
@@ -1472,6 +1473,7 @@ namespace MapBuilder.Server.Services
                 canRedo = s.Redo.Count > 0 ? s.Redo.Peek().Description : null,
                 entries = s.Package.Entries.Count,
                 models = models.GroupBy(m => m.Kind).ToDictionary(g => g.Key, g => g.Count()),
+                autosave = AutosaveOf(s),
             };
         }
 

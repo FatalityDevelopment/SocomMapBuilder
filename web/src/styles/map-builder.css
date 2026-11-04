@@ -68,3 +68,20 @@ app-map-editor-page { display: block; height: 100vh; }
 .mb-arrange-row { display: grid; grid-template-columns: 14px repeat(4, 1fr); gap: 4px; align-items: center; }
 .mb-arrange-row .lm-tool-btn { padding: 2px 0; font-size: 11px; }
 .me-header select { margin-left: 6px; color: inherit; background: var(--me-panel, #252526); border: 1px solid var(--me-border); border-radius: 3px; padding: 1px 4px; }
+
+/* Command search (F3), History list, status badges (Wave 4). */
+.cmd-palette { width: min(620px, calc(100vw - 48px)); }
+.cmd-list { list-style: none; margin: 8px 0 0; padding: 0; max-height: 50vh; overflow: auto; }
+.cmd-item { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 4px; cursor: pointer; }
+.cmd-item.active { background: var(--vscode-list-activeSelectionBackground, #04395e); }
+.cmd-item.disabled { opacity: 0.45; cursor: default; }
+.cmd-label { flex: 1; }
+.cmd-group { color: var(--me-muted); font-size: 11px; }
+.cmd-key { font: inherit; font-size: 11px; color: var(--me-muted); }
+.hist-list { list-style: none; margin: 0; padding: 0; max-height: 220px; overflow: auto; font-size: 11px; }
+.hist-step button { width: 100%; text-align: left; background: none; border: none; color: inherit; font: inherit; padding: 2px 4px; border-radius: 3px; cursor: pointer; }
+.hist-step button:hover { background: var(--vscode-list-hoverBackground, #2a2d2e); }
+.hist-redo { opacity: 0.55; }
+.hist-now { color: var(--me-accent); padding: 2px 4px; font-weight: 600; }
+.mb-walk-badge, .mb-measure { color: #ffd040; }
+.mb-hidden-badge { background: none; border: 1px solid var(--me-border); color: inherit; font: inherit; font-size: 11px; border-radius: 3px; cursor: pointer; }

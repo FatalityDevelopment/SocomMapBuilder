@@ -18,6 +18,8 @@ export interface SessionStatus {
   // Set for sessions of another game (SOCOM 3 / Combined Assault), which are read-only for now.
   game?: string;
   readOnly?: boolean;
+  // The last autosave (a recovery copy of unsaved edits), if any.
+  autosave?: { path: string; revision: number; at: string } | null;
 }
 
 export interface ModelSummary {
@@ -193,6 +195,11 @@ export class AssetClient {
   }
 
   status(): Promise<SessionStatus> { return this.call('ASSET_STATUS'); }
+
+  // The undo and redo steps (most recent first), for the History list.
+  history(): Promise<{ revision: number; undo: Array<{ description: string; archives: string[] }>; redo: Array<{ description: string; archives: string[] }>; dirty: string[] }> {
+    return this.call('ASSET_HISTORY');
+  }
 
   listModels(filter: { kind?: string; query?: string; archive?: string } = {}): Promise<ModelSummary[]> {
     return this.withJson('ASSET_LIST_MODELS', filter);
