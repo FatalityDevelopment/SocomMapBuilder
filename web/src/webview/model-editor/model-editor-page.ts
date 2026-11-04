@@ -6,8 +6,9 @@ import * as THREE from 'three';
 import { command } from '../../api/client';
 import { activePage, computed, host, modalOpen, signal } from '../../shared';
 import type { ModelTexturePixels } from '../zipper-core/texture-pixels';
-import { AssetClient, type AnimationSummary, type ExportResult, type ModelDescription, type ModelSummary, type SessionStatus, type TextureInfo } from './asset-client';
+import { AssetClient, type AnimationSummary, type CharacterPresetSummary, type ExportResult, type ModelDescription, type ModelSummary, type SessionStatus, type TextureInfo } from './asset-client';
 import { poseBones, type PoseClip, type WeightMode } from '../zipper-core/skinning';
+import type { TextureBrushMode } from '../zipper-core/texture-brush';
 import { TextureCache } from './model-loader';
 import { decodeMesh, toModelMatrix, toModelPoint, type EditorChunk, type EditorMesh, type MeshWire } from './mesh-data';
 import { EditorViewport, type HoverInfo, type SelectMode, type Shading, type Tool, type ViewPreset, type VertexSelection, type WeightStroke } from './editor-viewport';
@@ -54,6 +55,7 @@ export class ModelEditorPageLogic {
     { id: 'scale', label: 'Scale', key: 'S', glyph: '⤢' },
     { id: 'paint', label: 'Vertex paint', key: 'P', glyph: '🖌' },
     { id: 'weights', label: 'Weight paint (characters)', key: 'B', glyph: '⚖' },
+    { id: 'texture', label: 'Texture paint', key: 'T', glyph: '🎨' },
   ];
   readonly propTabs: Array<{ id: PropTab; label: string }> = [
     { id: 'item', label: 'Item' }, { id: 'material', label: 'Material' }, { id: 'texture', label: 'Texture' }, { id: 'paint', label: 'Paint' }, { id: 'model', label: 'Model' },
@@ -107,6 +109,14 @@ export class ModelEditorPageLogic {
   readonly mirrorX = signal(false);
   readonly extrudeDistance = signal(2);
   readonly insetFactor = signal(0.7);
+  // Texture paint: the brush's mode, colour and strength (its radius is the Paint tab's).
+  readonly textureMode = signal<TextureBrushMode>('colour');
+  readonly textureHex = signal('#c83c28');
+  readonly textureStrength = signal(0.6);
+  // Ambient occlusion bake (static models): how dark a fully enclosed vertex gets.
+  readonly aoStrength = signal(0.6);
+  // Character presets (body shapes, gear sets) to apply to a skinned character.
+  readonly characterPresets = signal<CharacterPresetSummary[]>([]);
   readonly skeletonBones = computed(() => (this.mesh()?.skeleton ?? []).map((b, i) => ({ i, name: b.name, skins: b.matrixId >= 0 })).filter(b => b.skins));
 
   // ------------------------------------------------------------------ export to the other game
@@ -314,6 +324,7 @@ export class ModelEditorPageLogic {
       onTransformCommit: (delta, verts, kind) => void this.commitTransform(delta, verts, kind),
       onPaintCommit: colors => void this.commitPaint(colors),
       onWeightCommit: stroke => void this.commitWeights(stroke),
+      onTextureCommit: names => void this.commitTextures(names),
       onPositionsCommit: (positions, kind) => void this.commitPositions(positions, kind),
       onCameraChange: () => undefined,
     });
@@ -388,6 +399,7 @@ export class ModelEditorPageLogic {
     else if (k === 's') { this.setTool('scale'); }
     else if (k === 'p') { this.setTool('paint'); }
     else if (k === 'b' && this.mesh()?.skeleton) { this.setTool('weights'); }
+    else if (k === 't') { this.setTool('texture'); }
     else if (k === 'i' && this.selectMode() === 'face' && !this.mesh()?.skeleton) { void this.insetSelection(); }
     else if (k === 'z') { this.cycleShading(); }
     else if (['1', '2', '3', '4', '5'].includes(e.key) && !numpad) { this.setSelectMode(this.selectModes[+e.key - 1].id); }
@@ -406,6 +418,7 @@ export class ModelEditorPageLogic {
     }
     this.tool.set(tool);
     this.viewport.tool = tool;
+    if (tool === 'texture') { this.propTab.set('paint'); }
     if (tool === 'weights') {
       this.propTab.set('paint');
       this.weightBone.set(this.viewport.weightViewBone);
@@ -680,6 +693,7 @@ export class ModelEditorPageLogic {
       this.viewport.setMesh(mesh, pixels, keepCamera);
       if (mesh.skeleton && this.poseData) { this.viewport.setPose(poseBones(mesh.skeleton, this.poseData, this.poseTime())); }
       if (mesh.skeleton && !this.poseClips().length) { void this.loadPoseClips(); }
+      if (mesh.skeleton && !this.characterPresets().length) { void this.loadCharacterPresets(); }
       const ext = Math.max(...[0, 1, 2].map(k => {
         let lo = Infinity, hi = -Infinity;
         for (const c of mesh.chunks) { for (let i = k; i < c.positions.length; i += 3) { lo = Math.min(lo, c.positions[i]); hi = Math.max(hi, c.positions[i]); } }
@@ -808,6 +822,51 @@ export class ModelEditorPageLogic {
     });
     const how = [this.softRadius() > 0 ? 'soft' : '', this.mirrorX() ? 'mirrored' : ''].filter(Boolean).join(', ');
     return this.edit(`${kind === 'move' ? 'Move' : kind === 'rotate' ? 'Rotate' : 'Scale'} ${n} vertex(es) (${how})`, { op: 'setVertices', chunks });
+  }
+
+  // A texture-paint stroke: each painted texture's pixels (changed in place in the shared pixel record) as a PNG,
+  // through replaceTexture (one undo step per texture).
+  private async commitTextures(names: string[]): Promise<void> {
+    const desc = this.description();
+    for (const name of names) {
+      const p = this.texturePixels[name.toLowerCase()];
+      if (!p) { continue; }
+      const canvas = document.createElement('canvas');
+      canvas.width = p.width;
+      canvas.height = p.height;
+      const ctx = canvas.getContext('2d')!;
+      ctx.putImageData(new ImageData(new Uint8ClampedArray(p.rgba), p.width, p.height), 0, 0);
+      const pngBase64 = canvas.toDataURL('image/png').split(',')[1];
+      const ns = desc?.textures.find(t => t.name.toLowerCase() === name.toLowerCase())?.namespace ?? desc?.textureNamespace ?? undefined;
+      await this.edit(`Paint ${name}`, { op: 'replaceTexture', texture: name, namespace: ns, pngBase64 });
+    }
+  }
+
+  setTextureMode(mode: TextureBrushMode): void { this.textureMode.set(mode); this.viewport.textureMode = mode; }
+
+  setTextureColour(hex: string): void {
+    this.textureHex.set(hex);
+    const n = parseInt(hex.slice(1), 16);
+    this.viewport.textureColour = [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+
+  setTextureStrength(value: string): void {
+    const v = Math.max(0.05, Math.min(1, Number(value)));
+    if (Number.isFinite(v)) { this.textureStrength.set(v); this.viewport.textureStrength = v; }
+  }
+
+  private async loadCharacterPresets(): Promise<void> {
+    try { this.characterPresets.set((await this.client.listCharacterPresets()).presets); }
+    catch { this.characterPresets.set([]); }
+  }
+
+  async applyCharacterPreset(name: string): Promise<void> {
+    await this.edit(`Apply preset ${name}`, { op: 'applyCharacterPreset', preset: name });
+  }
+
+  async bakeOcclusion(): Promise<void> {
+    const raw = await this.editResult(`Bake occlusion (${this.aoStrength()})`, { op: 'bakeOcclusion', strength: this.aoStrength() }) as { vertices?: number; meanOcclusion?: number } | null;
+    if (raw?.vertices) { this.say(`Baked occlusion into ${raw.vertices} vertices (on average ${Math.round((raw.meanOcclusion ?? 0) * 100)}% enclosed).`); }
   }
 
   setSoftRadius(value: string): void {

@@ -449,6 +449,32 @@ export function ModelEditorPage() {
                   <div className="lm-muted me-note">White at intensity 1 = the texture as-is (GS 0x80). Painting limits itself to the selected chunks when any are selected.</div>
                 </div>
               )}
+              {c.propTab() === 'paint' && (
+                <div className="me-card">
+                  <div className="me-card-title">Texture paint</div>
+                  <div className="me-seg" title="Colour tints toward the brush colour keeping the texture's shading; Dirt darkens in blotches; Scuff lightens with speckle; Blur softens">
+                    {(['colour', 'dirt', 'scuff', 'blur'] as const).map(mode => (
+                      <button key={mode} className={c.textureMode() === mode ? 'on' : ''} onClick={() => c.setTextureMode(mode)}>{mode[0].toUpperCase() + mode.slice(1)}</button>
+                    ))}
+                  </div>
+                  {c.textureMode() === 'colour' && <label className="me-field">Colour <input type="color" value={c.textureHex()} onChange={e => c.setTextureColour(e.target.value)} /></label>}
+                  <label className="me-field">Strength <input type="range" min="0.05" max="1" step="0.05" value={c.textureStrength()} onChange={e => c.setTextureStrength(e.target.value)} /> <span>{c.textureStrength()}</span></label>
+                  <div className="me-actions">
+                    <button className="lm-tool-btn" onClick={() => c.setTool('texture')}>Texture brush (T)</button>
+                  </div>
+                  <div className="lm-muted me-note">Paints the texture under the cursor (the Radius above, in model units). A texture other models use changes on them too. One stroke is one undo; the result is re-quantised to the texture's 8-bit palette.</div>
+                </div>
+              )}
+              {c.propTab() === 'paint' && !m?.skeleton && m?.chunks.some(ch => ch.colors) && (
+                <div className="me-card">
+                  <div className="me-card-title">Ambient occlusion</div>
+                  <label className="me-field">Strength <input type="range" min="0.1" max="1" step="0.05" value={c.aoStrength()} onChange={e => c.aoStrength.set(Number(e.target.value))} /> <span>{c.aoStrength()}</span></label>
+                  <div className="me-actions">
+                    <button className="lm-tool-btn" disabled={c.busy()} onClick={() => void c.bakeOcclusion()}>Bake occlusion</button>
+                  </div>
+                  <div className="lm-muted me-note">Darkens creases, undersides and insides in the baked vertex colours, so the prop looks seated in game. It multiplies what is there: bake once, after the shape is final.</div>
+                </div>
+              )}
               {c.propTab() === 'paint' && m?.skeleton && (
                 <>
                   <div className="me-card">
@@ -501,6 +527,19 @@ export function ModelEditorPage() {
                       </div>
                       {c.missingTextures().length > 0 && <div className="me-card me-warn">Missing textures: {c.missingTextures().join(', ')}</div>}
                     </>
+                  )}
+                  {m?.skeleton && (
+                    <div className="me-card">
+                      <div className="me-card-title">Character presets</div>
+                      {c.characterPresets().length === 0 && <div className="lm-muted me-note">No presets found.</div>}
+                      {c.characterPresets().map(p => (
+                        <div key={p.name} className="me-preset-row" title={p.error ?? p.description ?? ''}>
+                          <span className="me-row-name">{p.name}{p.shipped ? '' : ' (saved)'}</span>
+                          <button className="lm-tool-btn" disabled={c.busy() || !!p.error} onClick={() => void c.applyCharacterPreset(p.name)}>Apply</button>
+                        </div>
+                      ))}
+                      <div className="lm-muted me-note">Body shapes and gear sets, applied as one edit (Undo takes it back). Gear made on another body fits best with its own conform; the AI saves new presets with characters_save_preset.</div>
+                    </div>
                   )}
                   <div className="me-card">
                     <div className="me-card-title">Session</div>

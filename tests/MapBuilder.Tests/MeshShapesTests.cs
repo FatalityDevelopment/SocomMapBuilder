@@ -194,6 +194,34 @@ namespace MapBuilder.Tests
         }
 
         [Fact]
+        public void Decimating_a_sphere_keeps_it_closed_round_and_near_the_asked_triangle_count()
+        {
+            var sphere = Build("[{\"kind\":\"sphere\",\"center\":[0,0,0],\"radius\":2,\"segments\":24,\"rings\":12,\"uvRect\":[0,0,1,1]}]");
+            var low = MeshDecimate.Simplify(sphere, 0.25f);
+            Assert.InRange(low.Triangles.Count, sphere.Triangles.Count / 4 - 4, sphere.Triangles.Count / 4 + 4);
+            AssertClosed(low);
+            AssertOutward(low, new[] { 0f, 0, 0 });
+            // Still a ball: every vertex near the radius, and it spans the poles.
+            Assert.All(low.Positions, p => Assert.InRange(MathF.Sqrt(p[0] * p[0] + p[1] * p[1] + p[2] * p[2]), 1.7f, 2.1f));
+            Assert.True(low.Positions.Max(p => p[1]) > 1.8f && low.Positions.Min(p => p[1]) < -1.8f);
+            Assert.Equal(low.Positions.Count, low.Uvs.Count);
+            // Asking for all of it changes nothing.
+            Assert.Same(sphere, MeshDecimate.Simplify(sphere, 1));
+        }
+
+        [Fact]
+        public void Decimating_an_open_strap_keeps_its_rims()
+        {
+            // A strap with no caps: its two long rims and its ends are open edges, guarded from collapsing inward.
+            var path = Enumerable.Range(0, 13).Select(k => { double a = Math.PI * k / 12; return $"[{2 * Math.Cos(a):0.####},1,{2 * Math.Sin(a):0.####}]"; });
+            var strap = Build($"[{{\"kind\":\"strap\",\"path\":[{string.Join(",", path)}],\"width\":0.6,\"thickness\":0.1,\"around\":[0,1,0],\"caps\":false}}]");
+            var low = MeshDecimate.Simplify(strap, 0.5f);
+            Assert.True(low.Triangles.Count < strap.Triangles.Count);
+            Assert.InRange(low.Positions.Max(p => p[1]), 1.29f, 1.31f);
+            Assert.InRange(low.Positions.Min(p => p[1]), 0.69f, 0.71f);
+        }
+
+        [Fact]
         public void Bad_shapes_say_what_is_wrong()
         {
             Assert.Contains("profile", Assert.Throws<ArgumentException>(() => Build("[{\"kind\":\"lathe\"}]")).Message);

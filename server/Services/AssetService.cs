@@ -77,6 +77,7 @@ namespace MapBuilder.Server.Services
             reg.Add(c => CaRoute(c, "ASSET_SAVE") ?? WithSession(c.AssetSession, "ASSET_SAVE", s => Save(s, c.AssetJson)), "ASSET_SAVE");
             reg.Add(c => WithSession(c.AssetSession, "ASSET_HISTORY", s => History(s)), "ASSET_HISTORY");
             RegisterPrefabs(reg);
+            RegisterCharacterPresets(reg);
             RegisterViewer(reg);
             RegisterMovies(reg);
             reg.Add(c => WithSession(c.AssetSession, "ASSET_VALIDATE", s => Validate(s, c.AssetJson)), "ASSET_VALIDATE");
@@ -105,6 +106,8 @@ namespace MapBuilder.Server.Services
             {
                 case "batch":
                     return Batch(s, a);
+                case "applyCharacterPreset":
+                    return ApplyCharacterPreset(s, a);
                 case "placePrefab":
                     return PlacePrefab(s, a);
                 case "moveClutter":
@@ -209,6 +212,19 @@ namespace MapBuilder.Server.Services
                     string label = Str(a, "label") ?? $"edit {count} vertex(es) of {model}";
                     return ApplyEdit(s, label, p => ZipperModelMesh.SetVertices(p, archive, model, byChunk));
                 }
+                case "bakeOcclusion":
+                {
+                    // {archive, model, rays?, distance?, strength?, chunks?}: ambient occlusion multiplied into the baked
+                    // vertex colours (creases and undersides darken; the game has no real lighting).
+                    string archive = Str(a, "archive") ?? throw new ArgumentException("\"archive\" is required");
+                    string model = Str(a, "model") ?? throw new ArgumentException("\"model\" is required");
+                    var (_, mesh) = MeshOf(s, model, archive);
+                    var chunks = a.TryGetProperty("chunks", out var bc) && bc.ValueKind == JsonValueKind.Array ? bc.EnumerateArray().Select(x => x.GetInt32()).ToHashSet() : null;
+                    float F(string n, float d) => a.TryGetProperty(n, out var v) ? Number(v, n) : d;
+                    var baked = MeshOcclusion.Bake(mesh, new MeshOcclusion.Options((int)F("rays", 32), F("distance", 0), F("strength", 0.6f), chunks));
+                    var result = ApplyEdit(s, Str(a, "label") ?? $"bake occlusion into {model}", p => ZipperModelMesh.SetVertices(p, archive, model, baked.Edits));
+                    return new { result, vertices = baked.Vertices, meanOcclusion = Math.Round(baked.MeanOcclusion, 3), distance = Math.Round(baked.Distance, 2) };
+                }
                 case "transformVertices":
                 {
                     string archive = Str(a, "archive") ?? throw new ArgumentException("\"archive\" is required");
@@ -268,8 +284,10 @@ namespace MapBuilder.Server.Services
                     string? bone = Str(a, "bone");
                     string texture = Str(a, "texture") ?? throw new ArgumentException("\"texture\" is required");
                     var input = InputMeshOf(a, out string what);
-                    // The character's lower-detail mesh (drawn at a distance) gets the same geometry unless lowDetail is false.
+                    // The character's lower-detail mesh (drawn at a distance) gets the geometry simplified to lowDetail of its
+                    // triangles (a ratio; default 0.5, 1 keeps it whole), or nothing when lowDetail is false.
                     bool lowDetail = !(a.TryGetProperty("lowDetail", out var ld) && ld.ValueKind == JsonValueKind.False);
+                    float lowRatio = ld.ValueKind == JsonValueKind.Number ? Math.Clamp(ld.GetSingle(), 0.05f, 1f) : 0.5f;
                     string lowName = CharacterEdits.LowDetailName(model);
                     bool hasLow = lowDetail && pkg.FindModel(archive, lowName) != null;
                     // conform: true | {offset?, reach?}: fit the gear onto the body's surface first.
@@ -284,19 +302,21 @@ namespace MapBuilder.Server.Services
                     }
                     CharacterEdits.Result? made = null, low = null;
                     CharacterEdits.Fitted? fitted = null;
+                    MeshTopology.InputMesh? lowMesh = null;
                     var result = ApplyEdit(s, Str(a, "label") ?? $"add {what} to {model}{(hasLow ? " and " + lowName : "")} on {bone ?? "the body's skin"}", p =>
                     {
                         var mesh = conform is { } c ? (fitted = CharacterEdits.Conform(p, archive, model, input, c.Offset, c.Reach)).Mesh : input;
                         made = CharacterEdits.AddMesh(p, archive, model, bone, texture, mesh);
                         if (!hasLow) return made.Changed;
-                        low = CharacterEdits.AddMesh(p, archive, lowName, bone, texture, mesh, made.Changed[p.Entry(archive)!.Leaf]);
+                        lowMesh = lowRatio < 1 ? MeshDecimate.Simplify(mesh, lowRatio) : mesh;
+                        low = CharacterEdits.AddMesh(p, archive, lowName, bone, texture, lowMesh, made.Changed[p.Entry(archive)!.Leaf]);
                         return low.Changed;
                     });
                     return new
                     {
                         result, bone = bone == null ? null : made!.Bone, matrixId = bone == null ? (int?)null : made!.MatrixId,
                         bones = made!.Bones.Distinct().ToList(), groups = made.Groups, vertices = made.Vertices, triangles = made.Triangles,
-                        lowDetail = low == null ? null : new { model = lowName, groups = low.Groups },
+                        lowDetail = low == null ? null : new { model = lowName, groups = low.Groups, triangles = lowMesh?.Triangles.Count },
                         conformed = fitted == null ? null : new { moved = fitted.Moved, maxPush = MathF.Round(fitted.MaxPush, 3) },
                         check = CheckReport(s, model),
                     };

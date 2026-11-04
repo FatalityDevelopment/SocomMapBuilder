@@ -11,11 +11,12 @@ import type { ModelTexturePixels } from '../zipper-core/texture-pixels';
 import { SELECT_COLOR, ViewportCore, chunkGeometry, disposeObjectResources, isIdentity, type MaterialSpec } from '../zipper-core/viewport-core';
 import type { BoneWire, EditorChunk, EditorMesh } from './mesh-data';
 import { paintWeight, skinChunk, weightColor, weightOf, type WeightMode } from '../zipper-core/skinning';
+import { stamp, texelsPerUnit, type TextureBrushMode } from '../zipper-core/texture-brush';
 
 export type { Shading, ViewPreset } from '../zipper-core/viewport-core';
 
 export type SelectMode = 'object' | 'visual' | 'chunk' | 'vertex' | 'face';
-export type Tool = 'select' | 'move' | 'rotate' | 'scale' | 'paint' | 'weights';
+export type Tool = 'select' | 'move' | 'rotate' | 'scale' | 'paint' | 'weights' | 'texture';
 /** Per chunk index, per vertex, the new influence weights (one per skin slot). */
 export type WeightStroke = Map<number, Map<number, number[]>>;
 
@@ -38,6 +39,8 @@ export interface ViewportCallbacks {
   onPaintCommit?: (colors: Map<number, Map<number, [number, number, number, number]>>) => void;
   // A soft or mirrored move ended: every moved vertex's new position (model space), per chunk index.
   onPositionsCommit?: (positions: Map<number, Map<number, [number, number, number]>>, kind: 'move' | 'rotate' | 'scale') => void;
+  // A texture-paint stroke ended: the textures it painted (their pixels were changed in place).
+  onTextureCommit?: (textures: string[]) => void;
   // A weight-paint stroke ended: the new weights of every vertex it touched.
   onWeightCommit?: (weights: WeightStroke) => void;
   onCameraChange?: () => void;
@@ -68,6 +71,11 @@ export class EditorViewport extends ViewportCore {
   // Weight paint: the mode and, for set, the weight it sets.
   weightMode: WeightMode = 'add';
   weightSetTo = 1;
+  // Texture paint: what the brush does, its colour, and how hard (the radius is brushRadius, in model units).
+  textureMode: TextureBrushMode = 'colour';
+  textureColour: [number, number, number] = [200, 60, 40];
+  textureStrength = 0.6;
+  private textureStroke: { keys: Set<string>; seed: number } | null = null;
   // Soft selection: unselected vertices within this distance of a selected one follow it, fading out (0: off).
   softRadius = 0;
   // Mirror X: a move also moves the vertices at the selection's mirror image across X = 0, mirrored.
@@ -253,6 +261,30 @@ export class EditorViewport extends ViewportCore {
       v.mesh.material = this.weightMaterial;
     }
     if (this.weightBone === null) { this.refreshMaterials(); }
+  }
+
+  // One texture-paint dab under the cursor: the hit's uv is the brush's centre in the texture, and its radius in
+  // texels is brushRadius times the texture's density on the hit triangle.
+  private paintTextureAt(e: PointerEvent): void {
+    this.hover(e);
+    const hit = this.pick(e.clientX, e.clientY);
+    const stroke = this.textureStroke;
+    if (!hit || !stroke || !hit.uv || hit.faceIndex == null) { return; }
+    const view = this.views[hit.object.userData['chunk'] as number];
+    const name = view?.chunk.texture;
+    const pixels = name ? this.texturePixels[name.toLowerCase()] : undefined;
+    if (!view || !name || !pixels) { return; }
+    const idx = view.geometry.getIndex()!, pos = view.geometry.getAttribute('position'), uv = view.geometry.getAttribute('uv');
+    const corner = [0, 1, 2].map(k => idx.getX(hit.faceIndex! * 3 + k));
+    const tpu = texelsPerUnit(corner.map(i => [pos.getX(i), pos.getY(i), pos.getZ(i)]), corner.map(i => [uv.getX(i), uv.getY(i)]), pixels.width, pixels.height);
+    const radius = Math.max(1, Math.min(pixels.width / 2, this.brushRadius * (tpu || 1)));
+    const changed = stamp(pixels.rgba, pixels.width, pixels.height, {
+      x: hit.uv.x * pixels.width, y: hit.uv.y * pixels.height, radius, mode: this.textureMode, colour: this.textureColour, strength: this.textureStrength * 0.5, seed: stroke.seed,
+    });
+    if (changed) {
+      stroke.keys.add(name);
+      this.markTextureDirty(name);
+    }
   }
 
   private pendingWeights(chunk: number, vertex: number): number[] | undefined {
@@ -791,6 +823,12 @@ export class EditorViewport extends ViewportCore {
       this.paintAt(e);
       return;
     }
+    if (this.toolValue === 'texture') {
+      this.textureStroke = { keys: new Set(), seed: Math.floor(Math.random() * 1e6) };
+      this.controls.enabled = false;
+      this.paintTextureAt(e);
+      return;
+    }
     if (this.toolValue === 'weights') {
       this.weightStroke = new Map();
       this.controls.enabled = false;
@@ -803,6 +841,7 @@ export class EditorViewport extends ViewportCore {
   private readonly onPointerMove = (e: PointerEvent): void => {
     if (this.painting) { this.paintAt(e); return; }
     if (this.weightStroke) { this.paintWeightsAt(e); return; }
+    if (this.textureStroke) { this.paintTextureAt(e); return; }
     if (this.dragStart && (e.buttons & 1)) {
       const dx = e.clientX - this.dragStart.x, dy = e.clientY - this.dragStart.y;
       if (Math.hypot(dx, dy) > 4) {
@@ -821,6 +860,13 @@ export class EditorViewport extends ViewportCore {
   };
 
   private readonly onPointerUp = (e: PointerEvent): void => {
+    if (this.textureStroke) {
+      const keys = [...this.textureStroke.keys];
+      this.textureStroke = null;
+      this.controls.enabled = true;
+      if (keys.length) { this.callbacks.onTextureCommit?.(keys); }
+      return;
+    }
     if (this.weightStroke) {
       const stroke = this.weightStroke;
       this.weightStroke = null;
@@ -846,7 +892,7 @@ export class EditorViewport extends ViewportCore {
 
   private hover(e: PointerEvent): void {
     const hit = this.pick(e.clientX, e.clientY);
-    if ((this.toolValue === 'paint' || this.toolValue === 'weights') && hit) {
+    if ((this.toolValue === 'paint' || this.toolValue === 'weights' || this.toolValue === 'texture') && hit) {
       const n = hit.face?.normal ?? new THREE.Vector3(0, 1, 0);
       this.brush.position.copy(hit.point).addScaledVector(n, this.extent * 0.002);
       this.brush.lookAt(hit.point.clone().add(n));
