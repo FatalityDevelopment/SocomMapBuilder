@@ -556,6 +556,16 @@ namespace MapBuilder.Server.Services
 
             var session = P("session", "string", "Session id (assets_open / assets_sessions).");
 
+            AddSync("mesh_refine_obj", "Round an OBJ mesh",
+                "Subdivide an exported model, sharing geometry across chunk and UV seams. Writes a new OBJ, retaining material references. Place it beside its MTL and textures. Returns before/after triangle counts.",
+                false, Schema(new[] { "inputPath", "outputPath" }, P("inputPath", "string", "Source OBJ path."),
+                    P("outputPath", "string", "New OBJ path (must not exist)."), N("levels", "integer", "4× triangles per level. Default 1.", 1, 2),
+                    N("crease", "number", "Preserve edges sharper than this angle in degrees. Default 105.", 0, 180),
+                    N("strength", "number", "Fraction of full smoothing per level. Default 0.75.", 0, 1),
+                    A("brushes", "object", "Optional local shaping before subdivision, in order. Each {center:[x,y,z], radius:[rx,ry,rz], scale:[sx,sy,sz]} in OBJ space, with smooth falloff.", maxItems: 32)),
+                a => FromCommand(new CommandMessage { Command = "MESH_REFINE_OBJ", InputPath = Str(a, "inputPath"),
+                    OutputPath = Str(a, "outputPath"), AssetJson = a.GetRawText() }));
+
             // ── sessions
             AddSync("assets_open", "Open package",
                 "Open a SOCOM II package (a .ZDB / .CDB, a loose .ZED / .ZAR, or an unpacked package folder; SOCOM 3 / Combined Assault and " +

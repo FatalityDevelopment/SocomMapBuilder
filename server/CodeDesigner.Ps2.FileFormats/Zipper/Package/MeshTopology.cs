@@ -345,35 +345,44 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
         /// OBJ text (v / vt / vn / f; polygons fanned into triangles) as a model-space mesh. <paramref name="yUp"/>:
         /// the file is Y up (Blender, the editors' OBJ export), which is model space as it is; false flips a Y-down file.
         /// </summary>
-        public static InputMesh ParseObj(string text, bool yUp = true, float scale = 1, float[]? offset = null)
+        public static InputMesh ParseObj(string text, bool yUp = true, float scale = 1, float[]? offset = null,
+            Action<int, string>? onDirective = null)
         {
             var v = new List<float[]>(); var vt = new List<float[]>(); var vn = new List<float[]>();
             var mesh = new InputMesh();
-            var keys = new Dictionary<string, int>();
+            var keys = new Dictionary<(int, int, int), int>();
             float F(string s) => float.Parse(s, CultureInfo.InvariantCulture);
             float sy = yUp ? 1 : -1;
             int Vertex(string token)
             {
-                if (keys.TryGetValue(token, out int k)) return k;
                 string[] p = token.Split('/');
                 int Idx(string s, int count) { int i = int.Parse(s, CultureInfo.InvariantCulture); return i < 0 ? count + i : i - 1; }
-                var pos = v[Idx(p[0], v.Count)];
+                int vi = Idx(p[0], v.Count);
+                int ti = p.Length > 1 && p[1].Length > 0 ? Idx(p[1], vt.Count) : -1;
+                int ni = p.Length > 2 && p[2].Length > 0 ? Idx(p[2], vn.Count) : -1;
+                var key = (vi, ti, ni);
+                if (keys.TryGetValue(key, out int k)) return k;
+                var pos = v[vi];
                 k = mesh.Positions.Count;
                 mesh.Positions.Add(new[] { pos[0] * scale + (offset?[0] ?? 0), pos[1] * sy * scale + (offset?[1] ?? 0), pos[2] * scale + (offset?[2] ?? 0) });
-                mesh.Uvs.Add(p.Length > 1 && p[1].Length > 0 ? vt[Idx(p[1], vt.Count)] : new[] { 0f, 0f });
-                var n = p.Length > 2 && p[2].Length > 0 ? vn[Idx(p[2], vn.Count)] : null;
+                mesh.Uvs.Add(ti != -1 ? vt[ti] : new[] { 0f, 0f });
+                var n = ni != -1 ? vn[ni] : null;
                 mesh.Normals.Add(n != null ? new[] { n[0], n[1] * sy, n[2] } : new[] { 0f, 0f, 0f });
                 mesh.Colors.Add(new byte[] { 128, 128, 128, 128 });
-                keys[token] = k;
+                keys[key] = k;
                 return k;
             }
             foreach (string raw in text.Split('\n'))
             {
-                string line = raw.Trim();
+                int comment = raw.IndexOf('#');
+                string line = (comment < 0 ? raw : raw[..comment]).Trim();
                 if (line.Length == 0 || line[0] == '#') continue;
                 string[] t = line.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
                 switch (t[0])
                 {
+                    case "o": case "g": case "usemtl": case "mtllib": case "s":
+                        onDirective?.Invoke(mesh.Triangles.Count, line);
+                        break;
                     case "v": v.Add(new[] { F(t[1]), F(t[2]), F(t[3]) }); break;
                     case "vt": vt.Add(new[] { F(t[1]), t.Length > 2 ? F(t[2]) : 0 }); break;
                     case "vn": vn.Add(new[] { F(t[1]), F(t[2]), F(t[3]) }); break;

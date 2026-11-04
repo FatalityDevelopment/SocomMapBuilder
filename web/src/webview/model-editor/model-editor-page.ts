@@ -3,6 +3,7 @@
 // UV editor only preview. The React view (ModelEditorPage.tsx) renders it; signals come from the shared shim.
 
 import * as THREE from 'three';
+import { command } from '../../api/client';
 import { activePage, computed, host, modalOpen, signal } from '../../shared';
 import type { ModelTexturePixels } from '../zipper-core/texture-pixels';
 import { AssetClient, type ExportResult, type ModelDescription, type ModelSummary, type SessionStatus, type TextureInfo } from './asset-client';
@@ -180,6 +181,8 @@ export class ModelEditorPageLogic {
     return `${m.chunks.length} chunks · ${v} verts · ${t} tris`;
   });
   readonly canAdd = computed(() => !!this.mesh() && !!this.targetVisual() && !!this.targetTexture().trim());
+  readonly canRoundBox = computed(() => this.canImport() && !!this.mesh() && !!this.targetTexture().trim()
+    && (!!this.description()?.skinned || !!this.targetVisual()));
   readonly pendingActive = computed(() => this.pendingRot().some(v => v !== 0) || this.pendingScale().some(v => v !== 1));
 
   readonly menus: Menu[] = [
@@ -192,6 +195,8 @@ export class ModelEditorPageLogic {
         { label: 'Export memory-card pack…', action: () => void this.exportPack(), disabled: () => !this.dirtyCount() },
         { separator: true, label: '' },
         { label: 'Export model as OBJ…', action: () => void this.exportObj(), disabled: () => !this.mesh() },
+        { label: 'Export rounded model as OBJ…', action: () => void this.exportObj(true), disabled: () => !this.mesh() || this.busy() },
+        { label: 'Round an OBJ file…', action: () => void this.roundFile(), disabled: () => this.busy() },
         // Converting to the other game: GTA / CA models -> SOCOM II, SOCOM II -> SOCOM 3 / CA.
         { label: () => `Export to ${this.exportTarget() ?? 'another game'}`, shortcut: 'Ctrl+E', action: () => void this.quickExport(), disabled: () => !this.exportTarget() || this.busy() },
         { label: 'Export with options…', action: () => void this.openExport(), disabled: () => !this.exportTarget() || this.busy() },
@@ -243,6 +248,7 @@ export class ModelEditorPageLogic {
       id: 'add', label: 'Add', items: [
         { label: 'Plane', action: () => void this.addPrimitive('plane'), disabled: () => !this.canAdd() },
         { label: 'Cube', action: () => void this.addPrimitive('cube'), disabled: () => !this.canAdd() },
+        { label: 'Rounded box', action: () => void this.addRoundedBox(), disabled: () => !this.canRoundBox() },
         { separator: true, label: '' },
         { label: 'Import OBJ…', action: () => void this.importObj(), disabled: () => !this.canAdd() },
       ],
@@ -1006,6 +1012,22 @@ export class ModelEditorPageLogic {
     });
   }
 
+  async addRoundedBox(): Promise<void> {
+    if (!this.canRoundBox()) { return; }
+    const center = this.placementPoint(), size = this.primSize();
+    await this.edit('Add rounded box', {
+      ...(this.description()?.skinned ? { op: 'addCharacterMesh' } : { op: 'addMesh', visual: this.targetVisual() }),
+      texture: this.targetTexture().trim(),
+      shapes: [{ kind: 'box', min: center.map(v => v - size / 2), max: center.map(v => v + size / 2),
+        radius: size * 0.15, bevelSegments: 3, uvRect: [0, 0, 1, 1] }],
+    });
+  }
+
+  async shapeBone(bone: string, thickness: number, length: number): Promise<void> {
+    if (!this.canImport() || !this.description()?.skeleton?.some(b => b.name === bone)) { return; }
+    await this.edit(`Shape ${bone}`, { op: 'scaleBones', bones: { [bone]: { thickness, length } } });
+  }
+
   // The geometry targets follow the selection (its visual and texture).
   private followSelection(): void {
     const m = this.mesh();
@@ -1089,7 +1111,7 @@ export class ModelEditorPageLogic {
     }
   }
 
-  async exportObj(): Promise<void> {
+  async exportObj(rounded = false): Promise<void> {
     const m = this.mesh();
     if (!m) { return; }
     const lines = [`# ${m.archive}:${m.name} exported by the Map Builder Model Editor (Y up)`, `mtllib ${m.name}.mtl`];
@@ -1105,7 +1127,38 @@ export class ModelEditorPageLogic {
       }
       base += c.vertexCount;
     }
-    this.say(`Downloaded ${host.saveFile(`${m.name}.obj`, { text: lines.join('\n') }, 'text/plain')}`);
+    const text = lines.join('\n');
+    if (rounded) { await this.roundObj(text, m.name); }
+    else { this.say(`Downloaded ${host.saveFile(`${m.name}.obj`, { text }, 'text/plain')}`); }
+  }
+
+  async roundFile(): Promise<void> {
+    const picked = await host.pickFile('.obj', 'text');
+    if (picked?.text !== undefined) { await this.roundObj(picked.text, picked.name.replace(/\.obj$/i, '')); }
+  }
+
+  private async roundObj(text: string, stem: string): Promise<void> {
+    const vector = /^-?(?:\d+\.?\d*|\.\d+)(?:\s*,\s*-?(?:\d+\.?\d*|\.\d+)){2}$/;
+    const options = await host.prompt('Round mesh and download OBJ', [
+      { key: 'levels', label: 'Subdivision levels (1 = 4× faces, 2 = 16×)', value: '1', pattern: /^[12]$/ },
+      { key: 'crease', label: 'Keep edges sharper than (degrees, 0–180)', value: '105', pattern: /^(?:\d|[1-9]\d|1[0-7]\d|180)$/ },
+      { key: 'strength', label: 'Rounding strength (0–1)', value: '0.75', pattern: /^(?:0?(?:\.\d+)|0|1(?:\.0+)?)$/ },
+      { key: 'center', label: 'Local shaping center X,Y,Z (optional, OBJ coordinates)', value: '', optional: true, pattern: vector },
+      { key: 'radius', label: 'Shaping radius along X,Y,Z', value: '1,1,1', pattern: vector },
+      { key: 'scale', label: 'Shaping scale along X,Y,Z (1 = unchanged)', value: '1,1,1', pattern: vector },
+    ], 'Download');
+    if (!options) { return; }
+    this.busy.set(true);
+    try {
+      const xyz = (value: string) => value.split(',').map(Number);
+      const brushes = options.center.trim() ? [{ center: xyz(options.center), radius: xyz(options.radius), scale: xyz(options.scale) }] : [];
+      const r = await command<{ obj: string; before: number; triangles: number }>('MESH_REFINE_OBJ', {
+        Data: text, AssetJson: JSON.stringify({ levels: +options.levels, crease: +options.crease, strength: +options.strength, brushes }),
+      });
+      const name = host.saveFile(`${stem}_rounded.obj`, { text: r.obj }, 'text/plain');
+      this.say(`Downloaded ${name} · ${r.before} → ${r.triangles} triangles`);
+    } catch (err) { this.say(`Round mesh failed: ${errText(err)}`, true); }
+    finally { this.busy.set(false); }
   }
 }
 

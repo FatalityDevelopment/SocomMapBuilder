@@ -15,10 +15,10 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
         /// <param name="reshade">Gives a vertex its uv again from its new normal (the material strip shades by normal);
         /// null keeps the interpolated uvs.</param>
         public static MeshTopology.InputMesh Refine(MeshTopology.InputMesh m, int subdivide, float crease, Noise? noise,
-            Func<float[], float[], float[]>? reshade = null)
+            Func<float[], float[], float[]>? reshade = null, float strength = 1)
         {
             float cosCrease = MathF.Cos(crease * MathF.PI / 180);
-            for (int level = 0; level < subdivide; level++) m = Subdivide(m, cosCrease);
+            for (int level = 0; level < subdivide; level++) m = Subdivide(m, cosCrease, strength);
             if (noise is { Amount: not 0 } nz) Displace(m, nz, cosCrease);
             Renormal(m, cosCrease);
             if (reshade != null)
@@ -49,7 +49,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             return new[] { e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0] };
         }
 
-        private static MeshTopology.InputMesh Subdivide(MeshTopology.InputMesh m, float cosCrease)
+        private static MeshTopology.InputMesh Subdivide(MeshTopology.InputMesh m, float cosCrease, float strength)
         {
             int[] w = Weld(m, out int nw);
             var wpos = new float[nw][];
@@ -93,7 +93,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
                     foreach (int u in ring[v]) sum = Add(sum, wpos[u]);
                     q = Mix(p, 1 - n * beta, sum, beta);
                 }
-                moved[v] = q;
+                moved[v] = strength == 1 ? q : Mix(p, 1 - strength, q, strength);
             }
 
             var o = new MeshTopology.InputMesh();
@@ -116,6 +116,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
                 float[] p = Crease(l)
                     ? Mix(wpos[wa], 0.5f, wpos[wb], 0.5f)
                     : Add(Mix(wpos[wa], 0.375f, wpos[wb], 0.375f), Mix(wpos[l[0].Opp], 0.125f, wpos[l[1].Opp], 0.125f));
+                if (strength != 1) p = Mix(Mix(wpos[wa], 0.5f, wpos[wb], 0.5f), 1 - strength, p, strength);
                 o.Positions.Add(p);
                 o.Normals.Add(Normalise(Add(m.Normals[a], m.Normals[b])));
                 o.Uvs.Add(new[] { (m.Uvs[a][0] + m.Uvs[b][0]) / 2, (m.Uvs[a][1] + m.Uvs[b][1]) / 2 });
