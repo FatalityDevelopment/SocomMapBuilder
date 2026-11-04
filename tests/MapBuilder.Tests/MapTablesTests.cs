@@ -217,4 +217,31 @@ public sealed class MapTablesTests
         Assert.Equal(new object?[] { 0.4f }, doc.Values(doc.Resolve(new object[] { 0, 1, "ai_params", "accuracy" })));
         Assert.Equal(new object?[] { 0.1f }, doc.Values(doc.Resolve(new object[] { 0, 2, "ai_params", "accuracy" })));
     }
+
+    [Fact]
+    public void A_chartype_resolves_to_its_mapped_character_model_else_one_named_like_it()
+    {
+        var models = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["MESH_alban_ter01"] = "CLIB_MDL.ZED:MESH_alban_ter01", ["alban_ter02"] = "CLIB_MDL.ZED:alban_ter02", ["MESH_civ"] = "CLIB_MDL.ZED:MESH_civ",
+        };
+        var types = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["m51_terror01"] = "alban_ter01", ["m51_terror02"] = "alban_ter02" };
+        Assert.Equal("CLIB_MDL.ZED:MESH_alban_ter01", MapBuilder.Server.Services.ZipperAssetService.CharacterModel(models, "M51_TERROR01", types));
+        Assert.Equal("CLIB_MDL.ZED:alban_ter02", MapBuilder.Server.Services.ZipperAssetService.CharacterModel(models, "m51_terror02", types));
+        Assert.Equal("CLIB_MDL.ZED:MESH_civ", MapBuilder.Server.Services.ZipperAssetService.CharacterModel(models, "civ", types));
+        Assert.Null(MapBuilder.Server.Services.ZipperAssetService.CharacterModel(models, "nobody", types));
+        Assert.Null(MapBuilder.Server.Services.ZipperAssetService.CharacterModel(models, null, types));
+
+        string file = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(file, "# comment\nbasic_seal\t\njungle_A51\tseal_A_woodland_LO\r\n");
+            var read = MapBuilder.Server.Services.ZipperAssetService.ReadCharTypes(file);
+            Assert.Equal("seal_A_woodland_LO", read["JUNGLE_A51"]);
+            Assert.False(read.ContainsKey("basic_seal"));
+        }
+        finally { File.Delete(file); }
+        // The shipped list is copied next to the server.
+        Assert.True(File.Exists(Path.Combine(AppContext.BaseDirectory, "data", "chartypes.tsv")));
+    }
 }

@@ -1,0 +1,482 @@
+# SOCOM II chartype -> character model (MESH_<model>), from the bots tooling (Mods/SOCOM2/bots/chartypes.tsv). Names only.
+basic_seal	
+able1	
+able2	
+bravo1	
+bravo2	
+jungle_A	seal_A
+jungle_B	seal_B
+jungle_C	seal_D
+jungle_D	seal_C
+jungle_A_woodland	seal_A_woodland
+jungle_A_woodland_LO	seal_A_woodland_LO
+jungle_B_woodland	seal_B_woodland
+jungle_B_woodland_LO	seal_B_woodland_LO
+jungle_C_woodland	seal_C_woodland
+jungle_C_woodland_LO	seal_C_woodland_LO
+jungle_D_woodland	seal_D_woodland
+jungle_D_woodland_LO	seal_D_woodland_LO
+jungle_D_woodland_m51	seal_B_woodland_LO
+jungle_E_woodland	seal_E_woodland
+jungle_E_woodland_LO	seal_E_woodland_LO
+jungle_A_tiger	seal_A_tiger_jungle
+jungle_A_tiger_LO	seal_A_tiger_jungle_LO
+jungle_B_tiger	seal_B_tiger_jungle
+jungle_B_tiger_LO	seal_B_tiger_jungle_LO
+jungle_C_tiger	seal_C_tiger_jungle
+jungle_C_tiger_LO	seal_C_tiger_jungle_LO
+jungle_D_tiger	seal_D_tiger_jungle
+jungle_D_tiger_LO	seal_D_tiger_jungle_LO
+jungle_E_tiger	seal_E_tiger_jungle
+jungle_E_tiger_LO	seal_E_tiger_jungle_LO
+jungle_A_flak	seal_A_flak
+jungle_B_flak	seal_B_flak
+jungle_C_flak	seal_D_flak
+jungle_D_flak	seal_C_flak
+jungle_E_flak	seal_E_jungle_flak
+desert_A	seal_A_des
+desert_A_LO	seal_A_desert_LO
+desert_B	seal_B_des
+desert_B_LO	seal_B_desert_LO
+desert_C	seal_D_des
+desert_C_LO	seal_D_desert_LO
+desert_D	seal_C_des
+desert_D_LO	seal_C_desert_LO
+desert_D_73	seal_B_desert_LO
+desert_E	seal_E_desert
+desert_E_LO	seal_E_desert_LO
+desert_A_flak	seal_A_des_flak
+desert_B_flak	seal_B_des_flak
+desert_C_flak	seal_D_des_flak
+desert_D_flak	seal_C_des_flak
+desert_E_flak	seal_E_desert_flak
+arctic_A	seal_A_arc
+arctic_B	seal_A_arc
+arctic_C	seal_A_arc
+arctic_D	seal_A_arc
+arctic_E	seal_E_arctic
+woodland_A_cold	seal_A_cold_woodland
+woodland_D_cold	seal_D_cold_woodland
+scuba_A	seal_A_scuba
+scuba_B	seal_B_scuba
+scuba_C	seal_D_scuba
+scuba_D	seal_C_scuba
+scuba_E	seal_E_scuba
+cqb_A	seal_A_cqb
+cqb_B	seal_A_cqb
+cqb_D	seal_A_cqb
+cqb_C	seal_A_cqb
+cqb_E	seal_E_cqb
+rus_spets01	Spetsnaz
+rus_spets02	Spetsnaz
+SAS_A	SAS_01
+SAS_B	SAS_01
+guard	
+guard_alb	
+guard_bra	
+guard_alg	
+guard_rus	
+leader	
+hostage	
+hostage2	
+albanian_terrorist01	alban_ter01
+albanian_terrorist02	alban_ter02
+albanian_terrorist03	alban_ter03
+albanian_Rugova	alban_Rugova
+albanian_Castrioti	alban_Castrioti
+albanian_Pius	alban_Pius
+albanian_leader02	alban_leader02
+albanian_foreman	alban_foreman
+albanian_informant	alban_informant
+algerian_terrorist01	alg_ter01
+algerian_terrorist02	alg_ter02
+algerian_terrorist03	alg_ter03
+algerian_officer	alg_officer
+algerian_UN01	alg_UN01
+algerian_UN02	alg_UN02
+algerian_UNworker	alg_UNworker
+algerian_businessman	alg_businessman
+algerian_Juki	alg_Juki
+brazilian_terrorist01	braz_ter01
+brazilian_terrorist02	braz_ter02
+brazilian_terrorist03	braz_ter03
+brazilian_coke_worker01	braz_coke01
+brazilian_dweller01	braz_dweller01
+brazilian_dweller02	braz_dweller02
+brazilian_butcher	braz_butcher
+brazilian_hooker	braz_hooker
+brazilian_Felix	braz_Felix
+brazilian_Llucas	braz_Llucas
+brazilian_damworker01	braz_damworker01
+brazilian_leader	braz_leader
+brazilian_Lucimar	braz_Lucimar
+brazilian_Marcela	braz_Marcela
+seal_Marcela	seal_Marcela
+russian_snowterrorist01	rus_snowter01
+russian_snowterrorist02	rus_snowter02
+russian_snowterrorist03	rus_snowter03
+russian_terrorist01	rus_ter01
+russian_terrorist02	rus_ter02
+russian_leader	rus_leader
+russian_Arjan	rus_Arjan
+russian_valeska	rus_Valeska
+russian_terrorist03	al_gman03
+russian_terrorist04	al_gman04
+russian_officer	al_kola
+russian_specialist	rus_specialist
+russian_escort01	rus_escort01
+russian_escort02	rus_escort02
+russian_escort03	rus_escort03
+mp_seal	
+mp_terror	
+mp_hostage_extract	
+mp_hostage_escort	
+mp_seal1	
+mp_seal3	
+mp_seal2	
+mp_seal4	
+mp_seal5	
+mp_seal6	
+mp_seal7	
+mp_seal8	
+mp_seal9	
+mp_terror1_alb	
+mp_terror2_alb	
+mp_terror3_alb	
+mp_terror4_alb	
+mp_terror4_bra	
+mp_terror2_bra	
+mp_terror3_bra	
+mp_terror1_bra	
+mp_terror1_alg	
+mp_terror2_alg	
+mp_terror3_alg	
+mp_terror4_alg	
+mp_terror1_rus	
+mp_terror2_rus	
+mp_terror3_rus	
+mp_terror4_rus	
+mp_terror5_rus	
+mp_terror1_euro	
+mp_terror2_euro	
+mp_terror3_euro	
+mp_terror4_euro	
+mp_terror1_thai	
+mp_terror2_thai	
+mp_terror3_thai	
+mp_terror4_thai	
+mp1_seal1	seal_A_arc
+mp1_seal2	seal_E_arctic
+mp1_seal3	seal_A_arc
+mp1_seal4	seal_A_arc
+mp1_terror1	al_arctic02
+mp1_terror2	al_gman01
+mp1_terror3	al_kola
+mp1_terror4	al_gman02
+mp2_seal1	seal_A_scuba
+mp2_seal2	seal_E_scuba
+mp2_seal3	seal_D_scuba
+mp2_seal4	seal_C_scuba
+mp2_terror1	al_gman01
+mp2_terror2	al_gman02
+mp2_terror3	al_leader
+mp2_terror4	al_captain
+mp5_seal1	seal_A
+mp5_seal2	seal_E_jungle_flak
+mp5_seal3	seal_C
+mp5_seal4	seal_D
+mp5_terror1	thai_terrorist02
+mp5_terror2	thai_terrorist01
+mp5_terror3	thai_adv02
+mp5_terror4	thai_leader
+mp6_seal1	seal_A_des
+mp6_seal2	seal_E_desert_flak
+mp6_seal3	seal_C_des_flak
+mp6_seal4	seal_D_des
+mp6_terror1	afg_taliban03_mp
+mp6_terror2	afg_ter02_mp
+mp6_terror3	afg_taliban04_mp
+mp6_terror4	afg_taliban05_mp
+mp7_seal1	seal_A_des
+mp7_seal2	seal_E_desert_flak
+mp7_seal3	seal_C_des_flak
+mp7_seal4	seal_D_des
+mp7_terror1	afg_taliban03_mp
+mp7_terror2	afg_ter02_mp
+mp7_terror3	afg_taliban04_mp
+mp7_terror4	afg_taliban05_mp
+mp8_seal1	seal_A_des
+mp8_seal2	seal_E_desert_flak
+mp8_seal3	seal_C_des_flak
+mp8_seal4	seal_D_des
+mp8_terror1	afg_taliban03_mp
+mp8_terror2	afg_ter02_mp
+mp8_terror3	afg_taliban04_mp
+mp8_terror4	afg_taliban05_mp
+mp9_seal1	seal_A
+mp9_seal2	seal_E_jungle_flak
+mp9_seal3	seal_C
+mp9_seal4	seal_D
+mp9_terror1	con_merc03
+mp9_terror2	con_cook
+mp9_terror3	con_leader
+mp9_terror4	con_torturer_mp
+mp10_seal1	seal_A
+mp10_seal2	seal_E_jungle_flak
+mp10_seal3	seal_C
+mp10_seal4	seal_D
+mp10_terror1	con_merc03
+mp10_terror2	con_cook
+mp10_terror3	con_leader
+mp10_terror4	con_torturer_mp
+mp11_seal1	seal_A
+mp11_seal2	seal_E_jungle_flak
+mp11_seal3	seal_C
+mp11_seal4	seal_D
+mp11_terror1	con_merc03
+mp11_terror2	con_cook
+mp11_terror3	con_leader
+mp11_terror4	con_torturer_mp
+mp12_seal1	seal_A
+mp12_seal2	seal_E_jungle_flak
+mp12_seal3	seal_C
+mp12_seal4	seal_D
+mp12_terror1	thai_terrorist02
+mp12_terror2	thai_terrorist01
+mp12_terror3	thai_adv02
+mp12_terror4	thai_leader
+mp51_seal1	seal_B_woodland
+mp51_seal2	seal_E_woodland
+mp51_seal3	seal_C_woodland
+mp51_seal4	SAS_01
+mp51_terror1	alban_Castrioti
+mp51_terror2	alban_foreman
+mp51_terror3	alban_Rugova
+mp51_terror4	alban_Pius
+mp52_seal1	seal_B_woodland
+mp52_seal2	seal_E_woodland
+mp52_seal3	seal_C_woodland
+mp52_seal4	SAS_01
+mp52_terror1	alban_Castrioti
+mp52_terror2	alban_foreman
+mp52_terror3	alban_Rugova
+mp52_terror4	alban_Pius
+mp53_seal1	seal_B_woodland_LO
+mp53_seal2	seal_E_woodland_LO
+mp53_seal3	seal_C_woodland_LO
+mp53_seal4	SAS_01
+mp53_terror1	alban_Castrioti
+mp53_terror2	alban_foreman
+mp53_terror3	alban_Rugova
+mp53_terror4	alban_Pius
+mp61_seal1	seal_A_tiger_jungle
+mp61_seal2	seal_E_tiger_jungle
+mp61_seal3	seal_C_tiger_jungle
+mp61_seal4	seal_Marcela
+mp61_terror1	braz_ter02
+mp61_terror2	braz_Lucimar
+mp61_terror3	braz_butcher
+mp61_terror4	braz_leader
+mp62_seal1	seal_A_tiger_jungle
+mp62_seal2	seal_E_tiger_jungle
+mp62_seal3	seal_C_tiger_jungle
+mp62_seal4	seal_Marcela
+mp62_terror1	braz_ter02
+mp62_terror2	braz_Lucimar
+mp62_terror3	braz_butcher
+mp62_terror4	braz_leader
+mp64_seal1	seal_A_tiger_jungle
+mp64_seal2	seal_E_tiger_jungle
+mp64_seal3	seal_C_tiger_jungle
+mp64_seal4	seal_Marcela
+mp64_terror1	braz_ter02
+mp64_terror2	braz_Lucimar
+mp64_terror3	braz_butcher
+mp64_terror4	braz_leader
+mp71_seal1	seal_A_des
+mp71_seal2	seal_E_desert_flak
+mp71_seal3	seal_D_des_flak
+mp71_seal4	SAS_01
+mp71_terror1	alg_ter01
+mp71_terror2	alg_ter03
+mp71_terror3	alg_ter02
+mp71_terror4	alg_officer
+mp72_seal1	seal_A_des
+mp72_seal2	seal_E_desert_flak
+mp72_seal3	seal_D_des_flak
+mp72_seal4	SAS_01
+mp72_terror1	alg_ter01
+mp72_terror2	alg_ter03
+mp72_terror3	alg_ter02
+mp72_terror4	alg_officer
+mp73_seal1	seal_A_des
+mp73_seal2	seal_E_desert_flak
+mp73_seal3	seal_D_des_flak
+mp73_seal4	SAS_01
+mp73_terror1	alg_ter01
+mp73_terror2	alg_ter03
+mp73_terror3	alg_ter02
+mp73_terror4	alg_officer
+mp81_seal1	seal_A_scuba
+mp81_seal2	seal_E_scuba
+mp81_seal3	Spetsnaz
+mp81_seal4	rus_specialist
+mp81_terror1	rus_snowter01
+mp81_terror2	rus_snowter03
+mp81_terror3	rus_ter01
+mp81_terror4	rus_Valeska
+mp82_seal1	seal_A_arc
+mp82_seal2	seal_E_arctic
+mp82_seal3	Spetsnaz
+mp82_seal4	rus_specialist
+mp82_terror1	rus_snowter01
+mp82_terror2	rus_snowter03
+mp82_terror3	rus_ter01
+mp82_terror4	rus_Valeska
+mp83_seal1	seal_A_arc
+mp83_seal2	seal_E_arctic
+mp83_seal3	Spetsnaz
+mp83_seal4	rus_specialist
+mp83_terror1	rus_snowter01
+mp83_terror2	rus_snowter03
+mp83_terror3	rus_ter01
+mp83_terror4	rus_Valeska
+mp_algerian_h1	alg_UN01
+mp_algerian_h2	alg_UN02
+mp_algerian_h3	alg_UNworker
+mp_fem1	thai_biologist01
+mp_fem2	thai_biologist02
+mp_fem3	thai_wife
+mp_pow1	con_pow01
+mp_pow2	con_pow02
+mp_pow3	con_pow01
+mp_vip1	rus_escort01
+mp_vip2	rus_escort03
+mp_vip3	rus_escort03
+jungle_A51	seal_A_woodland_LO
+jungle_B51	seal_B_woodland_LO
+jungle_C51	seal_E_woodland_LO
+jungle_D51	seal_B_woodland_LO
+urban_A52	seal_A_cqb
+urban_B52	seal_A_cqb
+SAS_C52	SAS_01
+SAS_D52	SAS_01
+tiger_A53	seal_A_tiger_jungle_LO
+tiger_B53	seal_B_tiger_jungle_LO
+SAS_C53	SAS_01
+SAS_D53	SAS_01
+jungle_A61	seal_A_tiger_jungle
+jungle_B61	seal_B_tiger_jungle
+jungle_C61	seal_E_tiger_jungle
+jungle_D61	seal_D_tiger_jungle
+jungle_A62	seal_A_tiger_jungle
+jungle_B62	seal_B_tiger_jungle
+jungle_C62	seal_A_tiger_jungle
+jungle_D62	seal_D_tiger_jungle
+M63_cqb_A	seal_A_cqb
+M63_cqb_B	seal_A_cqb
+M63_cqb_C	seal_E_cqb
+M63_cqb_D	seal_A_cqb
+desert_A71	seal_A_des
+desert_B71	seal_B_des
+desert_C71	seal_E_desert
+desert_D71	seal_C_des
+desert_A72	seal_A_desert_LO
+desert_B72	seal_B_desert_LO
+desert_C72	seal_E_desert_LO
+desert_D72	seal_C_desert_LO
+desert_A73	seal_A_desert_LO
+desert_B73	seal_B_desert_LO
+desert_C73	seal_E_desert_LO
+desert_D73	seal_B_desert_LO
+arctic_A81	seal_A_arc
+arctic_B81	seal_A_arc
+arctic_C81	Spetsnaz
+arctic_D81	Spetsnaz
+arctic_A82	seal_A_arc
+arctic_B82	seal_A_arc
+arctic_C82	Spetsnaz
+arctic_D82	Spetsnaz
+scuba_A83	seal_A_scuba
+scuba_B83	seal_B_scuba
+scuba_C83	seal_E_scuba
+scuba_D83	seal_C_scuba
+arctic_A99	seal_A_arc
+m51_terror01	alban_ter01
+m51_terror02	alban_ter02
+m51_foreman	alban_foreman
+m51_sniper	alban_ter02
+m52_terror01	alban_ter01
+m52_terror02	alban_ter02
+m52_sniper01	alban_ter01
+m52_Rugova	alban_Rugova
+m53_terror01	alban_ter03
+m53_terror02	alban_ter01
+m53_Castrioti	alban_Castrioti
+m53_Pius	alban_Pius
+m53_Aide	alban_leader02
+m61_terror01	braz_ter01
+m61_terror02	braz_ter02
+m61_terror03	braz_ter03
+m61_sniper01	braz_ter01
+m61_chef	braz_butcher
+m61_hooker	braz_hooker
+m61_kid	braz_Llucas
+m61_leader	braz_Lucimar
+m61_leader2	braz_leader
+m62_terror01	braz_ter01
+m62_terror02	braz_coke01
+m62_terror03	braz_dweller01
+M63_terror01	braz_ter01
+M63_terror02	braz_ter01
+M63_terror03	braz_ter03
+M63_sniper	braz_ter01
+M63_Trigger	braz_ter01
+M63_Quixada	braz_leader
+m71_terror01	alg_ter01
+m71_terror02	alg_ter02
+m71_terror03	alg_ter02
+m71_sniper01	alg_ter01
+m71_officer	alg_officer
+m72_terror01	alg_ter03
+m72_terror02	alg_ter02
+m72_sniper01	alg_ter03
+m72_sniper02	alg_ter02
+m72_officer	alg_officer
+m72_CHA	alg_UN01
+m72_CHA2	alg_UN02
+m73_terror01	alg_ter03
+m73_terror02	alg_ter02
+m73_terror03	alg_ter03
+m73_terror04	alg_ter02
+m73_sniper01	alg_ter03
+m73_sniper02	alg_ter02
+m81_terror01	rus_snowter01
+m81_terror02	rus_snowter02
+m81_terror03	rus_ter01
+m81_sniper01	rus_ter01
+m81_officer	rus_snowter02
+specialist	rus_specialist
+m82_terror01	rus_snowter03
+m82_terror02	rus_snowter01
+m82_terror03	rus_snowter02
+m82_officer	rus_snowter03
+m83_terror01	rus_ter02
+m83_terror02	rus_ter01
+m83_terror03	rus_snowter03
+m83_sniper01	rus_ter02
+m83_officer	rus_leader
+m83_valeska	rus_Valeska
+UiCharType1	seal_A_tiger_jungle
+UiCharType2	seal_E_tiger_jungle
+UiCharType3	seal_C_tiger_jungle
+UiCharType4	seal_Marcela
+UiCharType5	braz_ter02
+UiCharType6	braz_Lucimar
+UiCharType7	braz_butcher
+UiCharType8	braz_leader
+netchar1	seal_E_tiger_jungle
+netchar2	seal_C_tiger_jungle
+netchar3	seal_Marcela
+netchar4	seal_A_tiger_jungle
+netchar5	seal_E_tiger_jungle
