@@ -328,8 +328,28 @@ export function ModelEditorPage() {
                     <div className="me-actions">
                       <button className="lm-tool-btn" disabled={c.busy() || !c.canAdd()} onClick={() => void c.addPrimitive('plane')}>Add plane</button>
                       <button className="lm-tool-btn" disabled={c.busy() || !c.canAdd()} onClick={() => void c.addPrimitive('cube')}>Add cube</button>
+                      <button className="lm-tool-btn" disabled={!c.canRoundBox()} onClick={() => void c.addRoundedBox()}>Rounded box</button>
                       <button className="lm-tool-btn" disabled={c.busy() || !c.canAdd()} onClick={() => void c.importObj()}>Import OBJ…</button>
                     </div>
+                    {d?.skinned && !!d.skeleton?.length && !s?.readOnly && (
+                      <form key={d.name} className="me-card" onSubmit={e => {
+                        e.preventDefault();
+                        const data = new FormData(e.currentTarget);
+                        void c.shapeBone(String(data.get('bone')), Number(data.get('thickness')), Number(data.get('length')));
+                      }}>
+                        <div className="me-card-title">Body proportions</div>
+                        <label className="me-field me-field-wide">Bone
+                          <select name="bone">{d.skeleton.map(b => <option key={b.name}>{b.name}</option>)}</select>
+                        </label>
+                        <label className="me-field me-field-wide">Thickness ×
+                          <input name="thickness" type="number" min="0.01" step="any" defaultValue="1" required />
+                        </label>
+                        <label className="me-field me-field-wide">Length ×
+                          <input name="length" type="number" min="0.01" step="any" defaultValue="1" required />
+                        </label>
+                        <button className="lm-tool-btn" type="submit" disabled={c.busy()}>Apply to bone</button>
+                      </form>
+                    )}
                     <div className="me-actions">
                       <button className="lm-tool-btn" disabled={c.busy() || !counts.vertices} onClick={() => void c.duplicateSelection()}>Duplicate (Shift+D)</button>
                       <button className="lm-tool-btn lm-danger-btn" disabled={c.busy() || !counts.vertices} onClick={() => void c.deleteSelection()}>Delete faces (X)</button>

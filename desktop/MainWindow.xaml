@@ -1,0 +1,12 @@
+<Window x:Class="MapBuilder.Desktop.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:wv="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
+        Title="Map Builder" Width="1280" Height="800" WindowStartupLocation="CenterScreen"
+        Background="#17191C" Loaded="OnLoaded" Closed="OnClosed">
+    <Grid>
+        <wv:WebView2 x:Name="Browser" />
+        <TextBlock x:Name="LoadingMessage" Text="Opening Map Builder…" Foreground="White"
+                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+    </Grid>
+</Window>

@@ -81,6 +81,8 @@ export interface ModelDescription {
   textureNamespace: string | null;
   geoArchive: string | null;
   fromChains: boolean;
+  skinned?: boolean;
+  skeleton?: { name: string }[];
   visuals: string[];
   chunks: ChunkInfo[];
   textures: TextureInfo[];
