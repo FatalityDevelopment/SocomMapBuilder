@@ -13,7 +13,9 @@ import type { EditorMesh } from '../webview/model-editor/mesh-data';
 import { propDrawChunks } from './propFaces';
 import { groupInstancesByLayer, isSkyChunk, layerOf, movable as isMovable, pointColor } from '../mapModel';
 
-export type MapTool = 'select' | 'move' | 'rotate' | 'scale' | 'place' | 'paint';
+export type MapTool = 'select' | 'move' | 'rotate' | 'scale' | 'place' | 'paint' | 'measure';
+/** A saved camera: where it stands and what it looks at. */
+export interface CameraState { position: [number, number, number]; target: [number, number, number] }
 /** What a move drag snaps to beyond the increment snap: nothing, the surface under each item, or the nearest vertex under the cursor. */
 export type SnapTarget = 'increment' | 'surface' | 'vertex';
 export interface BrushOptions extends ScatterOptions { erase: boolean }
@@ -52,12 +54,19 @@ export interface MapCallbacks {
   onErase?: (indices: number[]) => void;
   // What a gizmo drag is doing right now (null when it ends), for the status bar.
   onDragInfo?: (text: string | null) => void;
+  // The measure tool: the distance between its two points (null when cleared).
+  onMeasure?: (units: number | null, points: number) => void;
+  // Walk mode turned itself off (Escape).
+  onWalkEnd?: () => void;
 }
 
 // Model space is Y up like the display, so placements are used as they are (column-major).
 function toDisplay(m: ArrayLike<number>): THREE.Matrix4 {
   return new THREE.Matrix4().fromArray(Array.from(m));
 }
+
+// A hidden instance's matrix: nothing drawn, nothing picked.
+const ZERO = new THREE.Matrix4().makeScale(0, 0, 0);
 
 export function toModelArray(d: THREE.Matrix4): number[] {
   return d.toArray();
@@ -141,6 +150,14 @@ export class MapViewport extends ViewportCore {
   private stroke: { erasing: boolean; matrices: THREE.Matrix4[]; erase: Set<number>; last: THREE.Vector3 | null; screen: { x: number; y: number };
     random: () => number; } | null = null;
   private readonly eraseMaterial = new THREE.LineBasicMaterial({ color: 0xff5544, depthTest: false, transparent: true });
+  // Instances hidden with H / isolate (drawn at zero scale, never picked).
+  private readonly hiddenInstances = new Set<number>();
+  // The measure tool's points and the line between them.
+  private measurePoints: THREE.Vector3[] = [];
+  private readonly measureLine = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0xffd040, depthTest: false, transparent: true }));
+  private readonly measureDots = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ color: 0xffd040, size: 8, sizeAttenuation: false, depthTest: false }));
+  // Walk mode: the eye stays this high over the ground under it; the fly speed it replaced comes back after.
+  private walking: { eye: number; flySpeed: number } | null = null;
   private worldBox = new THREE.Box3();
 
   constructor(canvas: HTMLCanvasElement, private readonly callbacks: MapCallbacks = {}) {
@@ -153,6 +170,10 @@ export class MapViewport extends ViewportCore {
     this.strokeMarks = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ color: 0x66ddbb, size: 6, sizeAttenuation: false, depthTest: false }));
     this.strokeMarks.renderOrder = 31;
     this.scene.add(this.brushRing, this.strokeMarks);
+    this.measureLine.renderOrder = 32;
+    this.measureDots.renderOrder = 33;
+    this.scene.add(this.measureLine, this.measureDots);
+    canvas.addEventListener('keydown', e => { if (e.key === 'Escape' && this.walking) { this.setWalk(false); this.callbacks.onWalkEnd?.(); } }, { signal: this.listenerAbort.signal });
     this.placementGhost.visible = false;
     this.placementGhost.matrixAutoUpdate = false;
     this.boxEl = document.createElement('div');
@@ -182,6 +203,7 @@ export class MapViewport extends ViewportCore {
     (this.brushRing.material as THREE.Material).dispose();
     this.strokeMarks.geometry.dispose();
     (this.strokeMarks.material as THREE.Material).dispose();
+    for (const o of [this.measureLine, this.measureDots]) { o.geometry.dispose(); (o.material as THREE.Material).dispose(); }
     this.disposeCore();
   }
 
@@ -191,6 +213,7 @@ export class MapViewport extends ViewportCore {
   // The base constructor renders a first frame before this class's fields exist, hence the guard.
   protected override onFrame(): void {
     if (this.billboards) { this.updateBillboards(); }
+    if (this.walking) { this.keepEyeHeight(); }
     if (this.placementGhost && this.placementPointer && this.toolValue === 'place') {
       const cameraChanged = !this.placementCameraPosition.equals(this.camera.position)
         || !this.placementCameraRotation.equals(this.camera.quaternion)
@@ -279,7 +302,7 @@ export class MapViewport extends ViewportCore {
     this.billboardsDirty = false;
     const touched = new Set<THREE.InstancedMesh>();
     for (const [i, axis] of this.billboards) {
-      const m = this.billboardMatrix(i, axis);
+      const m = this.hiddenInstances.has(i) ? ZERO : this.billboardMatrix(i, axis);
       for (const s of this.slots[i]) { s.mesh.setMatrixAt(s.slot, m); touched.add(s.mesh); }
       this.overlayHolders.get(i)?.matrix.copy(m);
     }
@@ -304,6 +327,7 @@ export class MapViewport extends ViewportCore {
       return;
     }
     this.clearContent();
+    this.hiddenInstances.clear();
     this.worldSky = [];
     this.builtModels = new Map([...models]);
     this.setTexturePixels(textures);
@@ -410,7 +434,7 @@ export class MapViewport extends ViewportCore {
     const touched = new Set<THREE.InstancedMesh>();
     instances.forEach((_, i) => {
       if (this.billboards.has(i)) { return; }
-      for (const s of this.slots[i]) { s.mesh.setMatrixAt(s.slot, this.display[i]); touched.add(s.mesh); }
+      for (const s of this.slots[i]) { s.mesh.setMatrixAt(s.slot, this.hiddenInstances.has(i) ? ZERO : this.display[i]); touched.add(s.mesh); }
     });
     touched.forEach(m => { m.instanceMatrix.needsUpdate = true; m.computeBoundingSphere(); });
     this.billboardsDirty = true;
@@ -555,7 +579,121 @@ export class MapViewport extends ViewportCore {
 
   private instanceVisible(i: number): boolean {
     const inst = this.instances[i];
-    return !this.hiddenLayers.has(layerOf(inst)) && !(inst.source && this.hiddenModels.has(inst.source));
+    return !this.hiddenInstances.has(i) && !this.hiddenLayers.has(layerOf(inst)) && !(inst.source && this.hiddenModels.has(inst.source));
+  }
+
+  // ------------------------------------------------------------------ hide / isolate (view only)
+
+  /** Hides instances from the view and from picking (H); the map is not changed. */
+  hideInstances(indices: number[]): void {
+    for (const i of indices) { if (this.instances[i]) { this.hiddenInstances.add(i); this.selected.delete(i); } }
+    this.applyInstanceHiding();
+  }
+
+  /** Hides every prop and clutter instance but these (Shift+H); the world model and sky stay. */
+  isolateInstances(indices: number[]): void {
+    const keep = new Set(indices);
+    this.instances.forEach((inst, i) => { if (!keep.has(i) && isMovable(inst)) { this.hiddenInstances.add(i); } });
+    this.applyInstanceHiding();
+  }
+
+  unhideInstances(): void {
+    this.hiddenInstances.clear();
+    this.applyInstanceHiding();
+  }
+
+  get hiddenCount(): number { return this.hiddenInstances.size; }
+
+  private applyInstanceHiding(): void {
+    const touched = new Set<THREE.InstancedMesh>();
+    this.instances.forEach((_, i) => {
+      if (this.billboards.has(i)) { return; }
+      for (const s of this.slots[i]) { s.mesh.setMatrixAt(s.slot, this.hiddenInstances.has(i) ? ZERO : this.currentMatrix(i)); touched.add(s.mesh); }
+    });
+    touched.forEach(m => { m.instanceMatrix.needsUpdate = true; m.computeBoundingSphere(); });
+    this.billboardsDirty = true;
+    this.selectionChanged();
+  }
+
+  // ------------------------------------------------------------------ camera bookmarks and walk mode
+
+  cameraState(): CameraState {
+    return { position: this.camera.position.toArray() as [number, number, number], target: this.controls.target.toArray() as [number, number, number] };
+  }
+
+  setCameraState(c: CameraState): void {
+    if (this.walking) { this.setWalk(false); this.callbacks.onWalkEnd?.(); }
+    this.camera.position.fromArray(c.position);
+    this.controls.target.fromArray(c.target);
+    this.controls.update();
+  }
+
+  get isWalking(): boolean { return !!this.walking; }
+
+  /**
+   * Walk mode: the camera stands at a player's eye height (16 units) on the ground under the view's centre and keeps
+   * to the ground as WASD moves it (Shift runs); dragging looks round. Escape or setWalk(false) gives the free
+   * camera back.
+   */
+  setWalk(on: boolean): void {
+    if (!on) {
+      if (this.walking) { this.flySpeed = this.walking.flySpeed; this.walking = null; }
+      return;
+    }
+    if (this.walking) { return; }
+    const eye = 16;
+    const at = this.controls.target.clone();
+    let ground = this.groundBelow(at.x, at.z);
+    if (ground === null) {
+      // Nothing under the orbit target (Frame all on an L-shaped map centres on empty space): stand on the surface
+      // in the middle of the view instead.
+      const rect = this.canvas.getBoundingClientRect();
+      const targets = this.content.children.filter(c => c.visible && (c.userData['layer'] === 'world' || c.userData['layer'] === 'reference'));
+      const hit = this.rayFrom(rect.left + rect.width / 2, rect.top + rect.height / 2).intersectObjects(targets, false)[0];
+      if (hit) { at.set(hit.point.x, hit.point.y, hit.point.z); ground = hit.point.y; }
+    }
+    ground ??= at.y;
+    const forward = at.clone().sub(this.camera.position).setY(0);
+    if (forward.lengthSq() < 1e-6) { forward.set(0, 0, -1); }
+    forward.normalize();
+    this.walking = { eye, flySpeed: this.flySpeed };
+    this.flySpeed = 45;
+    this.camera.position.set(at.x, ground + eye, at.z);
+    this.controls.target.copy(this.camera.position).addScaledVector(forward, 2);
+    this.controls.update();
+    this.canvas.focus();
+  }
+
+  // The eye at walking height over the ground under it (stepping up to half a body: kerbs, stairs).
+  private keepEyeHeight(): void {
+    const w = this.walking!;
+    const p = this.camera.position;
+    const top = this.worldBox.isEmpty() ? p.y + 1000 : this.worldBox.max.y + 10;
+    const ray = new THREE.Raycaster(new THREE.Vector3(p.x, Math.min(top, p.y - w.eye + w.eye * 0.5), p.z), new THREE.Vector3(0, -1, 0));
+    const targets = this.content.children.filter(c => c.visible && (c.userData['layer'] === 'world' || c.userData['layer'] === 'reference'));
+    const hit = ray.intersectObjects(targets, false)[0];
+    if (!hit) { return; }
+    const dy = hit.point.y + w.eye - p.y;
+    if (Math.abs(dy) < 1e-4) { return; }
+    p.y += dy;
+    this.controls.target.y += dy;
+    this.controls.update();
+  }
+
+  // ------------------------------------------------------------------ measure
+
+  clearMeasure(): void {
+    this.measurePoints = [];
+    this.drawMeasure();
+  }
+
+  private drawMeasure(): void {
+    this.measureLine.geometry.dispose();
+    this.measureLine.geometry = new THREE.BufferGeometry().setFromPoints(this.measurePoints);
+    this.measureDots.geometry.dispose();
+    this.measureDots.geometry = new THREE.BufferGeometry().setFromPoints(this.measurePoints);
+    const [a, b] = this.measurePoints;
+    this.callbacks.onMeasure?.(a && b ? a.distanceTo(b) : null, this.measurePoints.length);
   }
 
   // A locked layer stays visible (and something to drop onto or place on) but can't be picked.
@@ -1051,6 +1189,13 @@ export class MapViewport extends ViewportCore {
   private readonly onPointerDown = (e: PointerEvent): void => {
     if (e.button !== 0 || this.orbitWithAlt) { return; }
     if (this.gizmo.dragging || (this.gizmo as unknown as { axis: string | null }).axis) { return; }
+    if (this.toolValue === 'measure') {
+      const hit = this.hit(e.clientX, e.clientY);
+      if (!hit) { return; }
+      this.measurePoints = this.measurePoints.length >= 2 ? [hit.point.clone()] : [...this.measurePoints, hit.point.clone()];
+      this.drawMeasure();
+      return;
+    }
     if (this.toolValue === 'paint') {
       // Ctrl turns the brush round: paint erases, erase paints.
       const erasing = this.brush.erase !== (e.ctrlKey || e.metaKey);
@@ -1113,7 +1258,7 @@ export class MapViewport extends ViewportCore {
 
   // Double-click a prop: open its model in the Model Editor.
   private readonly onDoubleClick = (e: MouseEvent): void => {
-    if (this.toolValue === 'place' || this.toolValue === 'paint') { return; }
+    if (this.toolValue === 'place' || this.toolValue === 'paint' || this.toolValue === 'measure') { return; }
     const h = this.hit(e.clientX, e.clientY);
     const i = h && !this.pointOf(h) ? this.instanceOf(h) : null;
     if (i !== null) { this.callbacks.onOpenModel?.(i); }
@@ -1142,7 +1287,7 @@ export class MapViewport extends ViewportCore {
       const point = h ? this.pointOf(h) : null;
       const i = h && !point ? this.instanceOf(h) : null;
       if (point) { if (!this.lockedLayers.has('points')) { this.selected.clear(); this.selectedPoint = point; } }
-      else if (i !== null && layerOf(this.instances[i]) !== 'world' && this.selectable(i)) {
+      else if (i !== null && layerOf(this.instances[i]) !== 'world' && this.selectable(i) && !this.hiddenInstances.has(i)) {
         if (subtract) { this.selected.delete(i); } else { this.selected.add(i); }
       }
     }

@@ -67,6 +67,13 @@ Inspect the assembled level with its world model, props, clutter, sky, textures,
 - Facade trees face the camera, as they do in game.
 - View style, grid, projection, snapping and placement preferences are remembered in your browser.
 - Open **Help → Keyboard shortcuts…** (or press `?`) to search the controls.
+- **Command search** (F3 or Ctrl+Shift+P): type a few letters of any menu command ("sv cp" finds *Save copy…*) and press Enter to run it. The Model Editor has it too.
+- **History** (Map tab): every undo and redo step in order. Click a step to go back to before it, or forward to it.
+- **Hide / isolate / show all** (H, Shift+H, Alt+H) changes only the view: hidden props and clutter are not drawn and cannot be picked. A badge in the status bar counts them; click it to show them again.
+- **Measure** (M): click two points to see the distance in units and in metres (about 10.5 units to a metre).
+- **Walk mode** (Shift+F, or View menu): walk the map at eye height with W A S D (Shift runs); the eye stays 16 units above the ground under it. Escape stops.
+- **Camera bookmarks** (View › Bookmark this view…): save a view by name and jump back to it later; they are kept per package in your browser.
+- **Autosave**: every 3 minutes, a recovery copy of each session with unsaved edits goes to `%LOCALAPPDATA%\MapBuilder\autosave\<package>.autosave.ZDB` (set `MAPBUILDER_AUTOSAVE` for another folder, `MAPBUILDER_AUTOSAVE_MINUTES` for another interval, 0 to turn it off). The session itself stays unsaved.
 - Loading warnings stay visible with a **Retry map loading** action. A failed package switch clears the old map, and scene-loading failures block editing until a reload succeeds.
 
 ### Model Editor
@@ -87,6 +94,7 @@ Edit props, vehicles, weapons, and skinned characters using object-level and geo
 - **Textures**: retexture sections, replace a texture from any image (PNG, JPG, BMP, WebP), create a **new texture from an image** (with its own palette, or reusing one), **import a texture from another package**, create a **palette from an image**, export PNG.
 - **Import from package…** (Assets panel or File menu): copy a model from another package.
 - Export OBJ; convert models to SOCOM 3 / Combined Assault, and CA or GTA: San Andreas models to SOCOM II.
+- **Command search** (F3 or Ctrl+Shift+P) and a **History** tab in the bottom panel, as in the Map Builder.
 
 For a softer silhouette, choose **File → Export rounded model as OBJ** on an open model or **File → Round an OBJ file** for an existing export. One subdivision level multiplies the triangle count by four. Strength controls how far the surface moves, and the crease angle controls which edges stay sharp. Use the optional XYZ center, radius and scale to shape a local region. The OBJ keeps its material references and needs its MTL and images alongside it.
 
@@ -219,6 +227,10 @@ The same tab offers experimental climb and ladder surfaces and links to the map'
 | Shading | Z cycles textured, solid, wire, X-ray |
 | Lighting / backdrop | Baked · Studio · Unlit in the header / image icon in the activity bar |
 | Undo / redo / save copy | Ctrl+Z / Ctrl+Y / Ctrl+S |
+| Command search | F3 or Ctrl+Shift+P (Map Builder and Model Editor) |
+| Hide / isolate / show all | H / Shift+H / Alt+H |
+| Measure | M (click two points) |
+| Walk mode | Shift+F; W A S D walk, Shift runs, Esc stops |
 | Asset Viewer | Double-click / Enter opens · Backspace up · Alt+Left / Right back / forward · arrows move · Space plays a clip |
 
 ## How it fits together

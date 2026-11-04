@@ -16,7 +16,7 @@ import { UvEditor, type UvEdits } from './uv-editor';
 import type { Lighting } from '../zipper-core/viewport-core';
 
 export type PropTab = 'item' | 'material' | 'texture' | 'paint' | 'model';
-export type BottomTab = 'uv' | 'log';
+export type BottomTab = 'uv' | 'log' | 'history';
 
 export interface MenuItem {
   label: string | (() => string);
@@ -92,6 +92,8 @@ export class ModelEditorPageLogic {
   readonly ortho = signal(false);
   readonly loading = signal(false);
   readonly busy = signal(false);
+  // The command search (F3 or Ctrl+Shift+P).
+  readonly paletteOpen = signal(false);
 
   // ------------------------------------------------------------------ skin: weight paint and pose
   // The weight view's bone (skeleton index; null shows the materials), the brush's mode and the weight Set paints.
@@ -236,6 +238,9 @@ export class ModelEditorPageLogic {
       id: 'edit', label: 'Edit', items: [
         { label: 'Undo', shortcut: 'Ctrl+Z', action: () => void this.undo(), disabled: () => !this.status()?.canUndo },
         { label: 'Redo', shortcut: 'Ctrl+Y', action: () => void this.redo(), disabled: () => !this.status()?.canRedo },
+        { label: 'History', action: () => { this.bottomTab.set('history'); this.showBottom.set(true); }, disabled: () => !this.status() },
+        { separator: true, label: '' },
+        { label: 'Search commands…', shortcut: 'F3 / Ctrl+Shift+P', action: () => this.paletteOpen.set(true) },
       ],
     },
     {
@@ -364,14 +369,15 @@ export class ModelEditorPageLogic {
 
   private readonly onKey = (e: KeyboardEvent): void => {
     // Every page listens on the window; only the one in front (with no prompt open) takes keys.
-    if (activePage() !== 'models' || modalOpen()) { return; }
+    if (activePage() !== 'models' || modalOpen() || this.paletteOpen()) { return; }
     const target = e.target as HTMLElement;
     if (target && ['INPUT', 'SELECT', 'TEXTAREA'].includes(target.tagName)) { return; }
     const ctrl = e.ctrlKey || e.metaKey;
     const k = e.key.toLowerCase();
     const numpad = e.code.startsWith('Numpad');
     let handled = true;
-    if (ctrl && k === 'z') { void this.undo(); }
+    if (e.key === 'F3' || (ctrl && e.shiftKey && k === 'p')) { this.paletteOpen.set(true); }
+    else if (ctrl && k === 'z') { void this.undo(); }
     else if (ctrl && (k === 'y' || (e.shiftKey && k === 'z'))) { void this.redo(); }
     else if (ctrl && k === 's') { void this.saveZdbCopy(); }
     else if (ctrl && k === 'o') { this.pickPackage(); }
@@ -1266,6 +1272,29 @@ export class ModelEditorPageLogic {
 
   async undo(): Promise<void> { await this.history(true); }
   async redo(): Promise<void> { await this.history(false); }
+
+  /** The session's undo and redo steps (ASSET_HISTORY), for the History list. */
+  loadHistory(): ReturnType<AssetClient['history']> { return this.client.history(); }
+
+  /** Back or forward several steps at once (the History list): that many undos or redos, then one reload. */
+  async jump(undoSteps: number, redoSteps: number): Promise<void> {
+    if (!this.client.session || this.busy() || this.status()?.readOnly) { return; }
+    this.busy.set(true);
+    try {
+      let revision: number | null = null;
+      for (let i = 0; i < undoSteps; i++) { revision = (await this.client.undo()).revision; }
+      for (let i = 0; i < redoSteps; i++) { revision = (await this.client.redo()).revision; }
+      const status = await this.client.status();
+      this.textures.invalidate(status.revision);
+      this.status.set(status);
+      if (revision !== null) { this.say(`${undoSteps ? `Undid ${undoSteps}` : `Redid ${redoSteps}`} step(s), to revision ${revision}`); }
+      await this.reload(true);
+    } catch (err) {
+      this.say(errText(err), true);
+    } finally {
+      this.busy.set(false);
+    }
+  }
 
   private async history(undo: boolean): Promise<void> {
     if (!this.client.session) { return; }

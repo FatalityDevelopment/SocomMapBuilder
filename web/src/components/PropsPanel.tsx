@@ -69,6 +69,8 @@ interface PropsPanelProps {
   checking: boolean;
   onCheck: () => void;
   onPickProblem: (problem: MapProblem) => void;
+  // The edit history list (Map tab).
+  history: React.ReactNode;
 }
 
 export function PropsPanel(p: PropsPanelProps) {
@@ -106,6 +108,11 @@ export function PropsPanel(p: PropsPanelProps) {
               </div>
             )}
             <ProblemsCard {...p} />
+            <div className="me-card">
+              <div className="me-card-title">History</div>
+              {p.history}
+              <div className="lm-muted me-note">Click a step to go back to just before it (or forward to it). Autosave keeps a recovery copy of unsaved edits every few minutes{p.status?.autosave ? ` (last: ${new Date(p.status.autosave.at).toLocaleTimeString()})` : ''}.</div>
+            </div>
             <div className="me-card">
               <div className="me-card-title">Session</div>
               <div className="me-note">Edits stay in the session until you save. File › Save copy… writes a .ZDB; File › Export memory-card pack… writes a CDB.</div>

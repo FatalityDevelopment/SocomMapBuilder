@@ -3,6 +3,9 @@ import { Icon } from '../../shared/Icon';
 import { activePage, host, openRequest, useSignals } from '../../shared';
 import { aiChange, aiView, applyAiCamera, provideAiState } from '../../shared/aiBridge';
 import { PageHeader } from '../../shared/PageHeader';
+import { CommandPalette } from '../../shared/CommandPalette';
+import { HistoryList } from '../../shared/HistoryList';
+import { commandsFromMenus } from '../../shared/commands';
 import { ModelEditorPageLogic } from './model-editor-page';
 import { LIGHTINGS } from '../zipper-core/viewport-core';
 
@@ -51,6 +54,7 @@ export function ModelEditorPage() {
   return (
     <div className="me-app has-header" onPointerDown={e => c.closeMenusOutside(e.nativeEvent)}>
       <PageHeader icon="library" title="Model Editor" subtitle="Meshes, textures and vertex colours of SOCOM II models" />
+      {c.paletteOpen() && <CommandPalette commands={commandsFromMenus(c.menus)} onClose={() => c.paletteOpen.set(false)} />}
       {/* Menu bar */}
       <div className="me-menubar">
         <span className="me-brand"><Icon name="library" size={14} /> Model Editor</span>
@@ -221,6 +225,7 @@ export function ModelEditorPage() {
             <div className="me-bottom-tabs">
               <button className={c.bottomTab() === 'uv' ? 'on' : ''} onClick={() => { c.bottomTab.set('uv'); c.showBottom.set(true); c.refreshUv(); }}>UV Editor</button>
               <button className={c.bottomTab() === 'log' ? 'on' : ''} onClick={() => { c.bottomTab.set('log'); c.showBottom.set(true); }}>Info</button>
+              <button className={c.bottomTab() === 'history' ? 'on' : ''} onClick={() => { c.bottomTab.set('history'); c.showBottom.set(true); }}>History</button>
               <span className="me-spacer" />
               {c.bottomTab() === 'uv' && c.showBottom() && (
                 <>
@@ -242,6 +247,11 @@ export function ModelEditorPage() {
               <div className="me-log" hidden={c.bottomTab() !== 'log'}>
                 {c.logLines().map((line, i) => <div key={i} className={line.error ? 'err' : ''}>{line.text}</div>)}
               </div>
+              {c.bottomTab() === 'history' && (
+                <div className="me-log me-history">
+                  <HistoryList load={() => c.loadHistory()} revision={s?.revision} busy={c.busy()} onJump={(u, r) => void c.jump(u, r)} />
+                </div>
+              )}
             </div>
           </div>
         </section>

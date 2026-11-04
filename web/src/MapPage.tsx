@@ -4,7 +4,10 @@ import { readRenderSettings, writeRenderSettings } from './viewport/renderSettin
 import type { ViewportStats } from './webview/zipper-core/viewport-core';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { MapProblem, MapValidation, ModelSummary, PrefabDetail, PrefabSummary } from './webview/model-editor/asset-client';
-import { MapViewport, type MapLayer, type MapTool, type SnapTarget } from './viewport/mapViewport';
+import { MapViewport, type CameraState, type MapLayer, type MapTool, type SnapTarget } from './viewport/mapViewport';
+import { CommandPalette } from './shared/CommandPalette';
+import { HistoryList } from './shared/HistoryList';
+import { commandsFromMenus, formatDistance } from './shared/commands';
 import type { PivotMode } from './viewport/arrange';
 import { analyzeScene } from './viewport/mapAnalysis';
 import { ThumbnailRenderer, type ThumbPart } from './viewport/thumbnails';
@@ -45,7 +48,7 @@ export function MapPage() {
   }, () => { setPlaceModel(null); setPlacePrefab(null); setSelection([]); setSelectedPoint(null); thumbsRef.current?.clear(); });
   const { client, instancesRef, statusRef, status, setStatus, sceneNs, counts, instances, points, models, setModels,
     busy, progress, loading, loadWarnings, connectionIssue, message, messageIsError, say,
-    retryScene, edit, history, saveCopy, exportPack, openDialog, loadModel, texturePixels } = mapSession;
+    retryScene, edit, history, saveCopy, exportPack, openDialog, loadModel, texturePixels, jump } = mapSession;
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   // The Map tab's check: rerun while the tab is open whenever the session changes.
   const [check, setCheck] = useState<MapValidation | null>(null);
@@ -112,6 +115,12 @@ export function MapPage() {
   const [prefabs, setPrefabs] = useState<PrefabSummary[]>([]);
   const [placePrefab, setPlacePrefab] = useState<PrefabDetail | null>(null);
   const [dragInfo, setDragInfo] = useState<string | null>(null);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [measure, setMeasure] = useState<string | null>(null);
+  const [walking, setWalking] = useState(false);
+  const [hiddenCount, setHiddenCount] = useState(0);
+  // Camera bookmarks, per package (browser storage: a convenience, kept per viewer).
+  const [bookmarks, setBookmarks] = useState<Array<{ name: string; camera: CameraState }>>([]);
   const thumbsRef = useRef<ThumbnailRenderer | null>(null);
 
   const dirtyCount = status?.dirty.length ?? 0;
@@ -227,6 +236,48 @@ export function MapPage() {
     if (added) { setPlaceModel(added); setTool('place'); }
     const warn = result.warnings.length ? ' ' + result.warnings.join(' ') : '';
     say(`Imported ${result.name} into ${result.archive} (${result.textures.length} texture(s), ${Object.keys(result.palettes).length} palette(s)); click the ground to place it.${warn}`, !!warn);
+  };
+
+  // ------------------------------------------------------------------ bookmarks, hide / isolate, walk
+
+  const bookmarkKey = (path: string) => `mapbuilder.bookmarks.${path.toLowerCase()}`;
+  useEffect(() => {
+    if (!status?.path) { setBookmarks([]); return; }
+    try { setBookmarks(JSON.parse(localStorage.getItem(bookmarkKey(status.path)) ?? '[]')); } catch { setBookmarks([]); }
+  }, [status?.path]);
+  const storeBookmarks = (next: Array<{ name: string; camera: CameraState }>) => {
+    setBookmarks(next);
+    try { if (status?.path) { localStorage.setItem(bookmarkKey(status.path), JSON.stringify(next)); } } catch { /* storage unavailable */ }
+  };
+  // The app's own dialog, not window.prompt (which embedded browsers may block).
+  const addBookmark = async () => {
+    const vp = viewportRef.current;
+    if (!vp || !status) { return; }
+    const camera = vp.cameraState();
+    const name = (await host.prompt('Bookmark this view', [{ key: 'name', label: 'Name', value: `View ${bookmarks.length + 1}` }], 'Save'))?.name?.trim();
+    if (!name) { return; }
+    storeBookmarks([...bookmarks.filter(b => b.name !== name), { name, camera }]);
+    say(`Saved the view as “${name}” (View › Bookmarks).`);
+  };
+  const deleteBookmarkAsk = async () => {
+    const names = bookmarks.map(b => b.name).join(', ');
+    const n = (await host.prompt('Delete a bookmark', [{ key: 'name', label: `Which one? (${names})`, value: bookmarks.at(-1)?.name ?? '' }], 'Delete'))?.name?.trim();
+    if (n) { deleteBookmark(n); }
+  };
+  const goToBookmark = (camera: CameraState) => { viewportRef.current?.setCameraState(camera); setWalking(false); };
+  const deleteBookmark = (name: string) => storeBookmarks(bookmarks.filter(b => b.name !== name));
+
+  const hideSelection = () => { const vp = viewportRef.current; if (vp && selection.length) { vp.hideInstances(selection); setHiddenCount(vp.hiddenCount); } };
+  const isolateSelection = () => { const vp = viewportRef.current; if (vp && selection.length) { vp.isolateInstances(selection); setHiddenCount(vp.hiddenCount); } };
+  const unhideAll = () => { const vp = viewportRef.current; if (vp) { vp.unhideInstances(); setHiddenCount(0); } };
+
+  const toggleWalk = () => {
+    const vp = viewportRef.current;
+    if (!vp) { return; }
+    const next = !vp.isWalking;
+    vp.setWalk(next);
+    setWalking(next);
+    if (next) { say('Walk mode: W A S D walk (Shift runs), drag to look round, Esc to stop.'); }
   };
 
   // ------------------------------------------------------------------ view
@@ -420,12 +471,18 @@ export function MapPage() {
         { label: 'Drop to ground', shortcut: SHORTCUTS.drop.label, action: () => void dropToGround(), disabled: () => !movableCount },
         { separator: true, label: '' },
         { label: 'Open model…', action: () => openModel(selection[0]), disabled: () => selection.length !== 1 || !single?.source },
+        { separator: true, label: '' },
+        { label: 'History… (Map tab)', action: () => setPropTab('map'), disabled: () => !status },
       ],
     },
     {
       id: 'select', label: 'Select', items: [
         { label: 'None', shortcut: SHORTCUTS.escape.label, action: clearSelection },
         { label: 'All of this model', shortcut: SHORTCUTS.selectSame.label, action: selectSameModel, disabled: () => selection.length === 0 },
+        { separator: true, label: '' },
+        { label: 'Hide selected', shortcut: SHORTCUTS.hide.label, action: hideSelection, disabled: () => selection.length === 0 },
+        { label: 'Isolate selected', shortcut: SHORTCUTS.isolate.label, action: isolateSelection, disabled: () => selection.length === 0 },
+        { label: 'Show all hidden', shortcut: SHORTCUTS.unhide.label, action: unhideAll, disabled: () => hiddenCount === 0 },
       ],
     },
     {
@@ -441,10 +498,18 @@ export function MapPage() {
         ...LAYERS.map(l => ({ label: l.label, action: () => toggleLayer(l.id), checked: () => !hidden.layers.has(l.id) })),
         { separator: true, label: '' },
         { label: 'Back faces', action: toggleBackfaces, checked: () => backfaces },
+        { separator: true, label: '' },
+        { label: 'Walk mode', shortcut: SHORTCUTS.walk.label, action: toggleWalk, checked: () => walking, disabled: () => !status },
+        { label: 'Measure', shortcut: SHORTCUTS.toolMeasure.label, action: () => setTool('measure'), disabled: () => !status },
+        { separator: true, label: '' },
+        { label: 'Bookmark this view…', action: () => void addBookmark(), disabled: () => !status },
+        ...bookmarks.map(b => ({ label: `Go to “${b.name}”`, action: () => goToBookmark(b.camera) })),
+        ...(bookmarks.length ? [{ label: 'Delete a bookmark…', action: () => void deleteBookmarkAsk() }] : []),
       ],
     },
     {
       id: 'help', label: 'Help', items: [
+        { label: 'Search commands…', shortcut: SHORTCUTS.commands.label, action: () => setPaletteOpen(true) },
         { label: 'Keyboard shortcuts…', shortcut: SHORTCUTS.help.label, action: () => setShortcutsOpen(true) },
         { separator: true, label: '' },
         { label: 'Fly: W A S D, Q / E down / up, Shift faster (viewport focused)' },
@@ -486,15 +551,26 @@ export function MapPage() {
     toolScale: () => setTool('scale'),
     toolPlace: () => setTool('place'),
     toolPaint: () => setTool('paint'),
+    toolMeasure: () => setTool('measure'),
+    commands: () => setPaletteOpen(true),
+    hide: () => { if (!selection.length) { return false; } hideSelection(); },
+    isolate: () => { if (!selection.length) { return false; } isolateSelection(); },
+    unhide: unhideAll,
+    walk: toggleWalk,
     shading: cycleShading,
-    escape: () => { setOpenMenu(null); if (tool !== 'select') { setTool('select'); } else { clearSelection(); } },
-  }, !shortcutsOpen);
+    escape: () => {
+      setOpenMenu(null);
+      if (walking) { toggleWalk(); return; }
+      if (tool === 'measure') { viewportRef.current?.clearMeasure(); }
+      if (tool !== 'select') { setTool('select'); } else { clearSelection(); }
+    },
+  }, !shortcutsOpen && !paletteOpen);
 
   // ------------------------------------------------------------------ viewport wiring
 
   // The viewport calls these; they are read through a ref so they always see the current state.
-  const handlersRef = useRef({ commitTransforms, place, syncSelection, edit, setHover, setPropTab, openDialog, openModel, scatter, erase, setDragInfo });
-  handlersRef.current = { commitTransforms, place, syncSelection, edit, setHover, setPropTab, openDialog, openModel, scatter, erase, setDragInfo };
+  const handlersRef = useRef({ commitTransforms, place, syncSelection, edit, setHover, setPropTab, openDialog, openModel, scatter, erase, setDragInfo, setMeasure, setWalking });
+  handlersRef.current = { commitTransforms, place, syncSelection, edit, setHover, setPropTab, openDialog, openModel, scatter, erase, setDragInfo, setMeasure, setWalking };
 
   const onViewportReady = useCallback((canvas: HTMLCanvasElement) => {
     if (viewportRef.current) { return; }
@@ -513,6 +589,8 @@ export function MapPage() {
       onScatter: matrices => void handlersRef.current.scatter(matrices),
       onErase: indices => void handlersRef.current.erase(indices),
       onDragInfo: text => handlersRef.current.setDragInfo(text),
+      onMeasure: (units, points) => handlersRef.current.setMeasure(units !== null ? `Distance ${formatDistance(units)}` : points === 1 ? 'Measure: click the second point' : null),
+      onWalkEnd: () => handlersRef.current.setWalking(false),
     });
     vp.editable = false;
     vp.onStats = setViewportStats;
@@ -621,6 +699,7 @@ export function MapPage() {
       <PageHeader icon="globe" title="Map Builder" subtitle="Props, clutter and spawn points of SOCOM II maps" />
       <MenuBar {...menuBarProps} />
       {shortcutsOpen && <ShortcutReference onClose={() => setShortcutsOpen(false)} />}
+      {paletteOpen && <CommandPalette commands={commandsFromMenus(menus)} onClose={() => setPaletteOpen(false)} />}
 
       <div className="me-header">
         <div className="me-seg" title={`Shading (${SHORTCUTS.shading.label} cycles)`}>
@@ -802,6 +881,7 @@ export function MapPage() {
             checking={checking}
             onCheck={() => void runCheck()}
             onPickProblem={pickProblem}
+            history={<HistoryList load={() => client.history()} revision={status?.revision} busy={busy} onJump={(u, r) => void jump(u, r)} />}
           />
         </aside>
       </div>
@@ -809,6 +889,9 @@ export function MapPage() {
       <div className={`me-statusbar${messageIsError ? ' err' : ''}`}>
         <span>{message}</span>
         <span className="me-spacer" />
+        {walking && <span className="mb-walk-badge">Walking · Esc to stop</span>}
+        {hiddenCount > 0 && <button type="button" className="mb-hidden-badge" onClick={unhideAll} title="Show all hidden (Alt+H)">{hiddenCount} hidden</button>}
+        {measure && <span className="mb-measure">{measure}</span>}
         {dragInfo ? <span>{dragInfo}</span> : hover && <span className="lm-muted">{hover}</span>}
         <span>{selection.length} selected</span>
       </div>
