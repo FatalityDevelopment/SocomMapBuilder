@@ -1,6 +1,10 @@
 import type { MapInstanceWire, MapPointWire, MapProblem, MapValidation, ModelSummary, SessionStatus } from '../webview/model-editor/asset-client';
 import { fmt, movable, scaleOf, sortProblems, yawOf } from '../mapModel';
 import { NumField } from './NumField';
+import type { MapTool } from '../viewport/mapViewport';
+import type { AlignTo, Axis } from '../viewport/arrange';
+
+export interface BrushSettings { radius: number; spacing: number; density: number; slope: number; erase: boolean }
 
 export type PropTab = 'item' | 'place' | 'points' | 'map' | 'actions';
 
@@ -35,11 +39,17 @@ interface PropsPanelProps {
   onDelete: () => void;
   onDrop: () => void;
   onOpenModel: () => void;
-  library: ModelSummary[];
-  libQuery: string;
-  setLibQuery: (q: string) => void;
+  // Align a multi-selection's boxes on an axis, or space them evenly.
+  onArrange: (axis: Axis, how: AlignTo | 'distribute') => void;
+  // What the Place tool puts down (picked in the Assets panel), and as what.
   placeModel: ModelSummary | null;
-  setPlaceModel: (m: ModelSummary) => void;
+  placePrefab: string | null;
+  placeAs: 'clutter' | 'prop';
+  setPlaceAs: (v: 'clutter' | 'prop') => void;
+  tool: MapTool;
+  brush: BrushSettings;
+  setBrush: (b: BrushSettings) => void;
+  onPaintTool: () => void;
   placeYaw: number;
   setPlaceYaw: (v: number) => void;
   placeScale: number;
@@ -54,8 +64,6 @@ interface PropsPanelProps {
   setMaxPlaceScale: (value: number) => void;
   alignSurface: boolean;
   setAlignSurface: (on: boolean) => void;
-  // Import from package… (a model from another package into this one).
-  onImport: () => void;
   // The map check (ASSET_VALIDATE): its last report, whether it is running, and selecting what a problem is about.
   check: MapValidation | null;
   checking: boolean;
@@ -203,6 +211,7 @@ function ItemTab(p: PropsPanelProps) {
           <div className="me-card-title">{selection.length} instances</div>
           <div className="me-note">{p.selectionSummary}</div>
         </div>
+        {p.movableCount > 1 && <ArrangeCard {...p} />}
         {p.movableCount > 0 && (
           <div className="me-card">
             <div className="me-card-title">Transform all ({p.movableCount} movable)</div>
@@ -245,32 +254,64 @@ function Actions(p: PropsPanelProps) {
   );
 }
 
-function PlaceTab(p: PropsPanelProps) {
+function ArrangeCard(p: PropsPanelProps) {
+  const axes: Array<{ axis: Axis; label: string }> = [{ axis: 0, label: 'X' }, { axis: 1, label: 'Y' }, { axis: 2, label: 'Z' }];
   return (
-    <div className="me-card mp-place">
-      <div className="me-card-title">Place clutter</div>
-      <div className="me-actions">
-        <button className="lm-tool-btn" disabled={p.busy || !p.status || !!p.status.readOnly} onClick={p.onImport} title="Copy a prop, vehicle, weapon or character from another package into this one">Import from package…</button>
-      </div>
-      <input className="me-search" type="text" placeholder="Filter models…" value={p.libQuery} onChange={e => p.setLibQuery(e.target.value)} />
-      <div className="mp-lib">
-        {p.library.map(m => (
-          <button key={m.archive + ':' + m.name} type="button" className={`me-row${p.placeModel?.name === m.name && p.placeModel?.archive === m.archive ? ' active' : ''}`}
-            onClick={() => p.setPlaceModel(m)} title={m.archive}>
-            <span className="me-row-name">{m.name}</span><span className="me-row-meta">{m.kind}</span>
-          </button>
+    <div className="me-card">
+      <div className="me-card-title">Align and distribute</div>
+      <div className="mb-arrange">
+        {axes.map(({ axis, label }) => (
+          <div key={axis} className="mb-arrange-row">
+            <span>{label}</span>
+            <button className="lm-tool-btn" disabled={p.busy} onClick={() => p.onArrange(axis, 'min')} title={`Line up the lowest ${label} of every box`}>Min</button>
+            <button className="lm-tool-btn" disabled={p.busy} onClick={() => p.onArrange(axis, 'center')} title={`Line up the centres on ${label}`}>Centre</button>
+            <button className="lm-tool-btn" disabled={p.busy} onClick={() => p.onArrange(axis, 'max')} title={`Line up the highest ${label} of every box`}>Max</button>
+            <button className="lm-tool-btn" disabled={p.busy || p.movableCount < 3} onClick={() => p.onArrange(axis, 'distribute')} title={`Space the centres evenly along ${label} (the outer two stay)`}>Spread</button>
+          </div>
         ))}
       </div>
-      <label className="me-field me-field-wide">Yaw ° <NumField value={String(p.placeYaw)} step={15} onCommit={v => p.setPlaceYaw(+v || 0)} /></label>
-      <label className="me-field me-field-wide">Scale <NumField value={String(p.placeScale)} step={0.1} min={0.01} onCommit={v => p.setPlaceScale(+v || 1)} /></label>
-      <label className="me-toggle"><input type="checkbox" checked={p.randomYaw} onChange={e => p.setRandomYaw(e.target.checked)} /> Random yaw</label>
-      <label className="me-toggle"><input type="checkbox" checked={p.randomScale} onChange={e => p.setRandomScale(e.target.checked)} /> Random scale</label>
-      {p.randomScale && <>
-        <label className="me-field me-field-wide">Scale from <NumField value={String(p.minPlaceScale)} min={0.01} step={0.01} onCommit={v => p.setMinPlaceScale(Number(v))} /></label>
-        <label className="me-field me-field-wide">Scale to <NumField value={String(p.maxPlaceScale)} min={0.01} step={0.01} onCommit={v => p.setMaxPlaceScale(Number(v))} /></label>
-      </>}
-      <label className="me-toggle"><input type="checkbox" checked={p.alignSurface} onChange={e => p.setAlignSurface(e.target.checked)} /> Align to surface</label>
-      <div className="lm-muted me-note">P: preview the model, then click a surface to place it. The preview uses the next placement’s rotation and scale. Escape cancels. Unlock and show the Clutter layer to place.</div>
     </div>
+  );
+}
+
+function PlaceTab(p: PropsPanelProps) {
+  const b = p.brush;
+  const what = p.placePrefab ? `prefab ${p.placePrefab}` : p.placeModel ? p.placeModel.name : null;
+  return (
+    <>
+      <div className="me-card mp-place">
+        <div className="me-card-title">Place</div>
+        <div className="me-note">{what ? <>Placing <b className="lm-mono">{what}</b>. Click a surface with the Place tool (P), or drag a tile from Assets onto the map.</>
+          : 'Pick a model or prefab in the Assets panel on the left.'}</div>
+        {!p.placePrefab && (
+          <div className="me-seg" title="A clutter placement (CLUTTER.ZAR: light, many) or a GEO prop (a scene node, like the map's buildings)">
+            <button className={p.placeAs === 'clutter' ? 'on' : ''} onClick={() => p.setPlaceAs('clutter')}>As clutter</button>
+            <button className={p.placeAs === 'prop' ? 'on' : ''} onClick={() => p.setPlaceAs('prop')}>As prop</button>
+          </div>
+        )}
+        <label className="me-field me-field-wide">Yaw ° <NumField value={String(p.placeYaw)} step={15} onCommit={v => p.setPlaceYaw(+v || 0)} /></label>
+        <label className="me-field me-field-wide">Scale <NumField value={String(p.placeScale)} step={0.1} min={0.01} onCommit={v => p.setPlaceScale(+v || 1)} /></label>
+        <label className="me-toggle"><input type="checkbox" checked={p.randomYaw} onChange={e => p.setRandomYaw(e.target.checked)} /> Random yaw</label>
+        <label className="me-toggle"><input type="checkbox" checked={p.randomScale} onChange={e => p.setRandomScale(e.target.checked)} /> Random scale</label>
+        {p.randomScale && <>
+          <label className="me-field me-field-wide">Scale from <NumField value={String(p.minPlaceScale)} min={0.01} step={0.01} onCommit={v => p.setMinPlaceScale(Number(v))} /></label>
+          <label className="me-field me-field-wide">Scale to <NumField value={String(p.maxPlaceScale)} min={0.01} step={0.01} onCommit={v => p.setMaxPlaceScale(Number(v))} /></label>
+        </>}
+        <label className="me-toggle"><input type="checkbox" checked={p.alignSurface} onChange={e => p.setAlignSurface(e.target.checked)} /> Align to surface</label>
+        <div className="lm-muted me-note">The preview uses the next placement's rotation and scale. Escape cancels. Unlock and show the Clutter layer to place clutter.</div>
+      </div>
+      <div className="me-card mp-place">
+        <div className="me-card-title">Clutter brush</div>
+        {p.tool !== 'paint'
+          ? <button className="lm-tool-btn" onClick={p.onPaintTool}>Paint clutter (B)</button>
+          : <div className="me-note">Drag over the ground to paint {p.placeModel ? <b className="lm-mono">{p.placeModel.name}</b> : 'the model picked in Assets'}; hold Ctrl (or tick Erase) to remove {p.placeModel ? 'it' : 'clutter'}. One stroke is one undo.</div>}
+        <label className="me-field me-field-wide">Radius <NumField value={String(b.radius)} min={0.5} step={1} onCommit={v => p.setBrush({ ...b, radius: Math.max(0.5, +v || b.radius) })} /></label>
+        <label className="me-field me-field-wide" title="The gap kept between placements, and from clutter of the same model already there">Spacing <NumField value={String(b.spacing)} min={0} step={0.5} onCommit={v => p.setBrush({ ...b, spacing: Math.max(0, +v) })} /></label>
+        <label className="me-field me-field-wide" title="Placements tried per dab (spacing and slope then thin them)">Density <NumField value={String(b.density)} min={1} step={1} onCommit={v => p.setBrush({ ...b, density: Math.min(100, Math.max(1, Math.round(+v) || 1)) })} /></label>
+        <label className="me-field me-field-wide" title="Steepest ground the brush paints on (degrees)">Max slope ° <NumField value={String(b.slope)} min={0} step={5} onCommit={v => p.setBrush({ ...b, slope: Math.min(90, Math.max(0, +v)) })} /></label>
+        <label className="me-toggle"><input type="checkbox" checked={b.erase} onChange={e => p.setBrush({ ...b, erase: e.target.checked })} /> Erase</label>
+        <div className="lm-muted me-note">Rotation and scale come from the settings above (random yaw and scale make it look natural); Align to surface tilts each one with the ground.</div>
+      </div>
+    </>
   );
 }

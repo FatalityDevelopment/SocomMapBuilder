@@ -1,19 +1,24 @@
 // The Model Editor's 3D view: orbit / pan / zoom, grid and axes, shading
 // modes, selection at object / visual / chunk / vertex / face level (click and
 // box), a move / rotate / scale gizmo with live preview, a vertex-colour paint
-// brush, hide / show and view presets. It only previews: every committed
-// change is handed to the page (onTransformCommit / onPaintCommit), which sends
-// it to the bridge as an asset-session edit and reloads the mesh.
+// brush, a skin-weight view and brush, posing a character by a clip, hide /
+// show and view presets. It only previews: every committed change is handed to
+// the page (onTransformCommit / onPaintCommit / onWeightCommit), which sends it
+// to the bridge as an asset-session edit and reloads the mesh.
 
 import * as THREE from 'three';
 import type { ModelTexturePixels } from '../zipper-core/texture-pixels';
 import { SELECT_COLOR, ViewportCore, chunkGeometry, disposeObjectResources, isIdentity, type MaterialSpec } from '../zipper-core/viewport-core';
-import type { EditorChunk, EditorMesh } from './mesh-data';
+import type { BoneWire, EditorChunk, EditorMesh } from './mesh-data';
+import { paintWeight, skinChunk, weightColor, weightOf, type WeightMode } from '../zipper-core/skinning';
+import { stamp, texelsPerUnit, type TextureBrushMode } from '../zipper-core/texture-brush';
 
 export type { Shading, ViewPreset } from '../zipper-core/viewport-core';
 
 export type SelectMode = 'object' | 'visual' | 'chunk' | 'vertex' | 'face';
-export type Tool = 'select' | 'move' | 'rotate' | 'scale' | 'paint';
+export type Tool = 'select' | 'move' | 'rotate' | 'scale' | 'paint' | 'weights' | 'texture';
+/** Per chunk index, per vertex, the new influence weights (one per skin slot). */
+export type WeightStroke = Map<number, Map<number, number[]>>;
 
 // Vertex indices per chunk index.
 export type VertexSelection = Map<number, Set<number>>;
@@ -32,6 +37,12 @@ export interface ViewportCallbacks {
   onTransformCommit?: (delta: number[], vertices: VertexSelection, kind: 'move' | 'rotate' | 'scale') => void;
   // New RGBA colours per chunk.
   onPaintCommit?: (colors: Map<number, Map<number, [number, number, number, number]>>) => void;
+  // A soft or mirrored move ended: every moved vertex's new position (model space), per chunk index.
+  onPositionsCommit?: (positions: Map<number, Map<number, [number, number, number]>>, kind: 'move' | 'rotate' | 'scale') => void;
+  // A texture-paint stroke ended: the textures it painted (their pixels were changed in place).
+  onTextureCommit?: (textures: string[]) => void;
+  // A weight-paint stroke ended: the new weights of every vertex it touched.
+  onWeightCommit?: (weights: WeightStroke) => void;
   onCameraChange?: () => void;
 }
 
@@ -57,6 +68,18 @@ export class EditorViewport extends ViewportCore {
   brushColor: [number, number, number] = [255, 255, 255];
   brushIntensity = 1;
   brushStrength = 0.5;
+  // Weight paint: the mode and, for set, the weight it sets.
+  weightMode: WeightMode = 'add';
+  weightSetTo = 1;
+  // Texture paint: what the brush does, its colour, and how hard (the radius is brushRadius, in model units).
+  textureMode: TextureBrushMode = 'colour';
+  textureColour: [number, number, number] = [200, 60, 40];
+  textureStrength = 0.6;
+  private textureStroke: { keys: Set<string>; seed: number } | null = null;
+  // Soft selection: unselected vertices within this distance of a selected one follow it, fading out (0: off).
+  softRadius = 0;
+  // Mirror X: a move also moves the vertices at the selection's mirror image across X = 0, mirrored.
+  mirrorX = false;
 
   // State.
   private readonly hidden = new Set<number>();
@@ -66,8 +89,15 @@ export class EditorViewport extends ViewportCore {
   readonly selectedFaces: Map<number, Set<number>> = new Map();
   private dragStart: { x: number; y: number } | null = null;
   private boxEl: HTMLDivElement;
-  private gizmoDrag: { start: THREE.Matrix4; snapshot: Map<number, Float32Array> } | null = null;
+  private gizmoDrag: { start: THREE.Matrix4; snapshot: Map<number, Float32Array>; follow: Map<number, Map<number, { w: number; mirror: boolean }>> | null } | null = null;
   private painting: Map<number, Map<number, [number, number, number, number]>> | null = null;
+  private meshData: EditorMesh | null = null;
+  // The weight view's bone (skeleton index), or null for the model's own materials.
+  private weightBone: number | null = null;
+  private readonly weightMaterial = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.DoubleSide });
+  private weightStroke: WeightStroke | null = null;
+  // A pose (bone world matrices) the skinned chunks are drawn in, or null for the bind pose.
+  private poseWorld: THREE.Matrix4[] | null = null;
 
   constructor(canvas: HTMLCanvasElement, private readonly callbacks: ViewportCallbacks = {}) {
     super(canvas, () => callbacks.onCameraChange?.());
@@ -98,6 +128,7 @@ export class EditorViewport extends ViewportCore {
     this.boxEl.remove();
     this.clearModel();
     disposeObjectResources(this.brush);
+    this.weightMaterial.dispose();
     this.disposeCore();
   }
 
@@ -106,9 +137,11 @@ export class EditorViewport extends ViewportCore {
   setMesh(mesh: EditorMesh | null, textures: Record<string, ModelTexturePixels>, keepCamera = false): void {
     this.clearModel();
     this.setTexturePixels(textures);
+    this.meshData = mesh;
     if (!mesh) { this.gizmo.detach(); return; }
     for (const chunk of mesh.chunks) {
       const geometry = chunkGeometry(chunk);
+      (geometry.getAttribute('position') as THREE.BufferAttribute).setUsage(THREE.DynamicDrawUsage);
       const meshObj = new THREE.Mesh(geometry, this.materialFor(chunk));
       meshObj.userData['chunk'] = chunk.index;
       meshObj.visible = this.isVisible(chunk);
@@ -120,6 +153,10 @@ export class EditorViewport extends ViewportCore {
     for (const map of [this.selectedVertices, this.selectedFaces]) {
       for (const i of [...map.keys()]) { if (!this.views[i]) { map.delete(i); } }
     }
+    if (this.weightBone !== null && !mesh.skeleton?.[this.weightBone]) { this.weightBone = null; }
+    if (!mesh.skeleton) { this.poseWorld = null; }
+    this.applyPose();
+    this.applyWeightView();
     const box = this.boundsOf(this.views.filter(v => v.mesh.visible));
     if (!box.isEmpty()) {
       this.extent = Math.max(1, box.getSize(new THREE.Vector3()).length());
@@ -154,8 +191,136 @@ export class EditorViewport extends ViewportCore {
 
   // ------------------------------------------------------------------ materials
 
+  // The weight view draws its own material: the core's material refresh leaves it alone.
   protected materialTargets(): Array<{ mesh: THREE.Mesh; spec: MaterialSpec }> {
-    return this.views.map(v => ({ mesh: v.mesh, spec: v.chunk }));
+    return this.weightBone === null ? this.views.map(v => ({ mesh: v.mesh, spec: v.chunk })) : [];
+  }
+
+  // ------------------------------------------------------------------ skin: pose and weights
+
+  get skeleton(): BoneWire[] | null { return this.meshData?.skeleton ?? null; }
+
+  /** Draws the skinned chunks in this pose (bone world matrices), or in the bind pose (null). Move, rotate and scale
+   * wait for the bind pose: vertex edits are made there. */
+  setPose(world: THREE.Matrix4[] | null): void {
+    this.poseWorld = world && this.meshData?.skeleton ? world : null;
+    this.applyPose();
+    this.applyWeightView();
+    this.updateGizmo();
+    this.refreshOverlays();
+  }
+
+  get posed(): boolean { return this.poseWorld !== null; }
+
+  private applyPose(): void {
+    const inf = this.meshData?.skinInfluences ?? 0;
+    for (const v of this.views) {
+      const pos = v.geometry.getAttribute('position') as THREE.BufferAttribute;
+      const nrm = v.geometry.getAttribute('normal') as THREE.BufferAttribute | undefined;
+      if (this.poseWorld && v.chunk.skin && inf && nrm) {
+        skinChunk(v.chunk, inf, this.poseWorld, pos.array as Float32Array, nrm.array as Float32Array);
+      } else {
+        (pos.array as Float32Array).set(v.chunk.positions);
+        if (nrm) { (nrm.array as Float32Array).set(v.chunk.normals); }
+      }
+      pos.needsUpdate = true;
+      if (nrm) { nrm.needsUpdate = true; }
+      v.geometry.computeBoundingSphere();
+      v.geometry.computeBoundingBox();
+    }
+  }
+
+  /** Colours the model by how much `bone` (skeleton index) moves each vertex, blue 0 to red 1; null shows its materials. */
+  setWeightView(bone: number | null): void {
+    this.weightBone = bone !== null && this.meshData?.skeleton?.[bone] ? bone : null;
+    this.applyWeightView();
+  }
+
+  get weightViewBone(): number | null { return this.weightBone; }
+
+  private applyWeightView(): void {
+    const inf = this.meshData?.skinInfluences ?? 0;
+    for (const v of this.views) {
+      const g = v.geometry;
+      const base = g.userData['baseColor'] as THREE.BufferAttribute | null | undefined;
+      if (this.weightBone === null) {
+        if (base !== undefined) {
+          if (base) { g.setAttribute('color', base); } else { g.deleteAttribute('color'); }
+          delete g.userData['baseColor'];
+        }
+        continue;
+      }
+      if (base === undefined) { g.userData['baseColor'] = g.getAttribute('color') ?? null; }
+      const colors = new Float32Array(v.chunk.vertexCount * 3);
+      const skin = v.chunk.skin;
+      for (let i = 0; i < v.chunk.vertexCount; i++) {
+        const w = skin && inf ? weightOf(skin.bones.subarray(i * inf, i * inf + inf), this.pendingWeights(v.chunk.index, i) ?? skin.weights.subarray(i * inf, i * inf + inf), inf, 0, this.weightBone) : 0;
+        colors.set(weightColor(w), i * 3);
+      }
+      g.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+      v.mesh.material = this.weightMaterial;
+    }
+    if (this.weightBone === null) { this.refreshMaterials(); }
+  }
+
+  // One texture-paint dab under the cursor: the hit's uv is the brush's centre in the texture, and its radius in
+  // texels is brushRadius times the texture's density on the hit triangle.
+  private paintTextureAt(e: PointerEvent): void {
+    this.hover(e);
+    const hit = this.pick(e.clientX, e.clientY);
+    const stroke = this.textureStroke;
+    if (!hit || !stroke || !hit.uv || hit.faceIndex == null) { return; }
+    const view = this.views[hit.object.userData['chunk'] as number];
+    const name = view?.chunk.texture;
+    const pixels = name ? this.texturePixels[name.toLowerCase()] : undefined;
+    if (!view || !name || !pixels) { return; }
+    const idx = view.geometry.getIndex()!, pos = view.geometry.getAttribute('position'), uv = view.geometry.getAttribute('uv');
+    const corner = [0, 1, 2].map(k => idx.getX(hit.faceIndex! * 3 + k));
+    const tpu = texelsPerUnit(corner.map(i => [pos.getX(i), pos.getY(i), pos.getZ(i)]), corner.map(i => [uv.getX(i), uv.getY(i)]), pixels.width, pixels.height);
+    const radius = Math.max(1, Math.min(pixels.width / 2, this.brushRadius * (tpu || 1)));
+    const changed = stamp(pixels.rgba, pixels.width, pixels.height, {
+      x: hit.uv.x * pixels.width, y: hit.uv.y * pixels.height, radius, mode: this.textureMode, colour: this.textureColour, strength: this.textureStrength * 0.5, seed: stroke.seed,
+    });
+    if (changed) {
+      stroke.keys.add(name);
+      this.markTextureDirty(name);
+    }
+  }
+
+  private pendingWeights(chunk: number, vertex: number): number[] | undefined {
+    return this.weightStroke?.get(chunk)?.get(vertex);
+  }
+
+  private paintWeightsAt(e: PointerEvent): void {
+    this.hover(e);
+    const hit = this.pick(e.clientX, e.clientY);
+    const inf = this.meshData?.skinInfluences ?? 0;
+    if (!hit || !this.weightStroke || this.weightBone === null || !inf) { return; }
+    const r2 = this.brushRadius * this.brushRadius;
+    const p = new THREE.Vector3();
+    for (const v of this.views) {
+      const skin = v.chunk.skin;
+      if (!v.mesh.visible || !skin) { continue; }
+      const pos = v.geometry.getAttribute('position');
+      const col = v.geometry.getAttribute('color') as THREE.BufferAttribute;
+      let touched = false;
+      for (let i = 0; i < pos.count; i++) {
+        const d2 = p.fromBufferAttribute(pos, i).distanceToSquared(hit.point);
+        if (d2 > r2) { continue; }
+        const amount = this.brushStrength * (1 - Math.sqrt(d2) / this.brushRadius) * 0.35;
+        const map = this.weightStroke.get(v.chunk.index) ?? new Map<number, number[]>();
+        const bones = skin.bones.subarray(i * inf, i * inf + inf);
+        const cur = map.get(i) ?? Array.from(skin.weights.subarray(i * inf, i * inf + inf));
+        const next = paintWeight(bones, cur, this.weightBone, this.weightMode, amount, this.weightSetTo);
+        if (!next) { continue; }
+        map.set(i, next);
+        this.weightStroke.set(v.chunk.index, map);
+        const c = weightColor(weightOf(bones, next, inf, 0, this.weightBone));
+        col.setXYZ(i, c[0], c[1], c[2]);
+        touched = true;
+      }
+      if (touched) { col.needsUpdate = true; }
+    }
   }
 
   protected override onShadingChanged(): void { this.refreshOverlays(); }
@@ -206,6 +371,7 @@ export class EditorViewport extends ViewportCore {
 
   set tool(value: Tool) {
     this.toolValue = value;
+    if (value === 'weights' && this.weightBone === null && this.meshData?.skeleton?.length) { this.setWeightView(0); }
     this.brush.visible = false;
     this.updateGizmo();
   }
@@ -531,7 +697,7 @@ export class EditorViewport extends ViewportCore {
   private updateGizmo(): void {
     const t = this.toolValue;
     const center = this.selectionCenter();
-    if ((t === 'move' || t === 'rotate' || t === 'scale') && center && !this.gizmoDrag) {
+    if ((t === 'move' || t === 'rotate' || t === 'scale') && center && !this.gizmoDrag && !this.poseWorld) {
       this.pivot.position.copy(center);
       this.pivot.rotation.set(0, 0, 0);
       this.pivot.scale.set(1, 1, 1);
@@ -545,13 +711,14 @@ export class EditorViewport extends ViewportCore {
 
   protected override onGizmoDragging(dragging: boolean): void {
     if (dragging) {
+      const follow = this.softRadius > 0 || this.mirrorX ? followers(this.views.map(v => v.chunk), this.selectionVertexMap(), this.softRadius, this.mirrorX, this.extent) : null;
       const snapshot = new Map<number, Float32Array>();
-      for (const ci of this.selectionVertexMap().keys()) {
+      for (const ci of new Set([...this.selectionVertexMap().keys(), ...(follow?.keys() ?? [])])) {
         const pos = this.views[ci]?.geometry.getAttribute('position');
         if (pos) { snapshot.set(ci, (pos.array as Float32Array).slice()); }
       }
       this.pivot.updateMatrixWorld(true);
-      this.gizmoDrag = { start: this.pivot.matrixWorld.clone(), snapshot };
+      this.gizmoDrag = { start: this.pivot.matrixWorld.clone(), snapshot, follow };
       return;
     }
     const drag = this.gizmoDrag;
@@ -561,7 +728,19 @@ export class EditorViewport extends ViewportCore {
     const delta = this.pivot.matrixWorld.clone().multiply(drag.start.clone().invert());
     if (!isIdentity(delta)) {
       const kind = this.toolValue === 'rotate' ? 'rotate' : this.toolValue === 'scale' ? 'scale' : 'move';
-      this.callbacks.onTransformCommit?.(delta.toArray(), this.selectionVertexMap(), kind);
+      if (drag.follow) {
+        // Soft and mirrored moves differ per vertex: their positions as previewed.
+        const out = new Map<number, Map<number, [number, number, number]>>();
+        for (const [ci, map] of drag.follow) {
+          const arr = this.views[ci].geometry.getAttribute('position').array as Float32Array;
+          const m = new Map<number, [number, number, number]>();
+          for (const i of map.keys()) { m.set(i, [arr[i * 3], arr[i * 3 + 1], arr[i * 3 + 2]]); }
+          out.set(ci, m);
+        }
+        this.callbacks.onPositionsCommit?.(out, kind);
+      } else {
+        this.callbacks.onTransformCommit?.(delta.toArray(), this.selectionVertexMap(), kind);
+      }
     }
   }
 
@@ -571,6 +750,29 @@ export class EditorViewport extends ViewportCore {
     this.pivot.updateMatrixWorld(true);
     const delta = this.pivot.matrixWorld.clone().multiply(drag.start.clone().invert());
     const p = new THREE.Vector3();
+    if (drag.follow) {
+      // Each follower moves by its share of the drag; a mirror image by the drag mirrored across X = 0.
+      const flip = new THREE.Matrix4().makeScale(-1, 1, 1);
+      const mirrored = flip.clone().multiply(delta).multiply(flip);
+      const q = new THREE.Vector3();
+      for (const [ci, map] of drag.follow) {
+        const view = this.views[ci];
+        const start = drag.snapshot.get(ci);
+        if (!view || !start) { continue; }
+        const attr = view.geometry.getAttribute('position') as THREE.BufferAttribute;
+        const arr = attr.array as Float32Array;
+        for (const [i, f] of map) {
+          p.set(start[i * 3], start[i * 3 + 1], start[i * 3 + 2]);
+          q.copy(p).applyMatrix4(f.mirror ? mirrored : delta);
+          p.lerp(q, f.w);
+          arr[i * 3] = p.x; arr[i * 3 + 1] = p.y; arr[i * 3 + 2] = p.z;
+        }
+        attr.needsUpdate = true;
+        view.geometry.computeBoundingSphere();
+      }
+      this.refreshOverlays();
+      return;
+    }
     for (const [ci, verts] of this.selectionVertexMap()) {
       const view = this.views[ci];
       const start = drag.snapshot.get(ci);
@@ -621,11 +823,25 @@ export class EditorViewport extends ViewportCore {
       this.paintAt(e);
       return;
     }
+    if (this.toolValue === 'texture') {
+      this.textureStroke = { keys: new Set(), seed: Math.floor(Math.random() * 1e6) };
+      this.controls.enabled = false;
+      this.paintTextureAt(e);
+      return;
+    }
+    if (this.toolValue === 'weights') {
+      this.weightStroke = new Map();
+      this.controls.enabled = false;
+      this.paintWeightsAt(e);
+      return;
+    }
     this.dragStart = { x: e.clientX, y: e.clientY };
   };
 
   private readonly onPointerMove = (e: PointerEvent): void => {
     if (this.painting) { this.paintAt(e); return; }
+    if (this.weightStroke) { this.paintWeightsAt(e); return; }
+    if (this.textureStroke) { this.paintTextureAt(e); return; }
     if (this.dragStart && (e.buttons & 1)) {
       const dx = e.clientX - this.dragStart.x, dy = e.clientY - this.dragStart.y;
       if (Math.hypot(dx, dy) > 4) {
@@ -644,6 +860,20 @@ export class EditorViewport extends ViewportCore {
   };
 
   private readonly onPointerUp = (e: PointerEvent): void => {
+    if (this.textureStroke) {
+      const keys = [...this.textureStroke.keys];
+      this.textureStroke = null;
+      this.controls.enabled = true;
+      if (keys.length) { this.callbacks.onTextureCommit?.(keys); }
+      return;
+    }
+    if (this.weightStroke) {
+      const stroke = this.weightStroke;
+      this.weightStroke = null;
+      this.controls.enabled = true;
+      if (stroke.size) { this.callbacks.onWeightCommit?.(stroke); }
+      return;
+    }
     if (this.painting) {
       const painted = this.painting;
       this.painting = null;
@@ -662,7 +892,7 @@ export class EditorViewport extends ViewportCore {
 
   private hover(e: PointerEvent): void {
     const hit = this.pick(e.clientX, e.clientY);
-    if (this.toolValue === 'paint' && hit) {
+    if ((this.toolValue === 'paint' || this.toolValue === 'weights' || this.toolValue === 'texture') && hit) {
       const n = hit.face?.normal ?? new THREE.Vector3(0, 1, 0);
       this.brush.position.copy(hit.point).addScaledVector(n, this.extent * 0.002);
       this.brush.lookAt(hit.point.clone().add(n));
@@ -741,3 +971,62 @@ function range(n: number): number[] {
   return Array.from({ length: n }, (_, i) => i);
 }
 
+
+/**
+ * The vertices a soft or mirrored move takes, per chunk index: the selection (weight 1), the unselected vertices
+ * within `radius` of a selected one (weight fading smoothly to 0 at the radius), and with `mirror` the vertices at
+ * the selection's mirror image across X = 0 (and their soft ring), which move mirrored. Positions are model space.
+ */
+export function followers(chunks: readonly EditorChunk[], selected: VertexSelection, radius: number, mirror: boolean, extent: number):
+  Map<number, Map<number, { w: number; mirror: boolean }>> {
+  const out = new Map<number, Map<number, { w: number; mirror: boolean }>>();
+  const put = (ci: number, i: number, w: number, m: boolean) => {
+    const map = out.get(ci) ?? new Map<number, { w: number; mirror: boolean }>();
+    const cur = map.get(i);
+    if (!cur || w > cur.w) { map.set(i, { w, mirror: m }); }
+    out.set(ci, map);
+  };
+  const seeds: Array<{ p: [number, number, number]; mirror: boolean }> = [];
+  for (const [ci, verts] of selected) {
+    const pos = chunks[ci]?.positions;
+    if (!pos) { continue; }
+    for (const i of verts) {
+      put(ci, i, 1, false);
+      seeds.push({ p: [pos[i * 3], pos[i * 3 + 1], pos[i * 3 + 2]], mirror: false });
+    }
+  }
+  const tol = Math.max(1e-4, extent * 1e-4);
+  if (mirror) {
+    // A vertex at a seed's mirror image (not on the mirror plane itself, which would move twice).
+    for (const seed of seeds.slice()) {
+      if (Math.abs(seed.p[0]) <= tol) { continue; }
+      const target: [number, number, number] = [-seed.p[0], seed.p[1], seed.p[2]];
+      chunks.forEach((c, ci) => {
+        for (let i = 0; i < c.vertexCount; i++) {
+          if (Math.abs(c.positions[i * 3] - target[0]) <= tol && Math.abs(c.positions[i * 3 + 1] - target[1]) <= tol && Math.abs(c.positions[i * 3 + 2] - target[2]) <= tol
+            && !selected.get(ci)?.has(i)) {
+            put(ci, i, 1, true);
+          }
+        }
+      });
+      seeds.push({ p: target, mirror: true });
+    }
+  }
+  if (radius > 0) {
+    const r2 = radius * radius;
+    chunks.forEach((c, ci) => {
+      for (let i = 0; i < c.vertexCount; i++) {
+        const x = c.positions[i * 3], y = c.positions[i * 3 + 1], z = c.positions[i * 3 + 2];
+        let best = Infinity, m = false;
+        for (const seed of seeds) {
+          const d2 = (x - seed.p[0]) ** 2 + (y - seed.p[1]) ** 2 + (z - seed.p[2]) ** 2;
+          if (d2 < best) { best = d2; m = seed.mirror; }
+        }
+        if (best >= r2) { continue; }
+        const t = 1 - Math.sqrt(best) / radius;
+        put(ci, i, t * t * (3 - 2 * t), m);
+      }
+    });
+  }
+  return out;
+}

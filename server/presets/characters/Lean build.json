@@ -1,0 +1,44 @@
+{
+  "name": "Lean build",
+  "description": "A slimmer body: thinner torso, arms and legs (scaleBones thickness).",
+  "ops": [
+    {
+      "op": "scaleBones",
+      "bones": {
+        "spinehi": {
+          "thickness": 0.92
+        },
+        "spinelo": {
+          "thickness": 0.9
+        },
+        "hips": {
+          "thickness": 0.95
+        },
+        "rbicep": {
+          "thickness": 0.88
+        },
+        "lbicep": {
+          "thickness": 0.88
+        },
+        "rforearm": {
+          "thickness": 0.9
+        },
+        "lforearm": {
+          "thickness": 0.9
+        },
+        "rthigh": {
+          "thickness": 0.92
+        },
+        "lthigh": {
+          "thickness": 0.92
+        },
+        "rcalf": {
+          "thickness": 0.95
+        },
+        "lcalf": {
+          "thickness": 0.95
+        }
+      }
+    }
+  ]
+}

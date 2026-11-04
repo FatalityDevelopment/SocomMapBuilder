@@ -169,6 +169,10 @@ export interface WeaponFx {
   effect: FxNode | null;
 }
 
+export interface CharacterPresetSummary { name: string; description?: string | null; shipped: boolean; ops?: string[]; error?: string }
+export interface PrefabSummary { name: string; description?: string | null; items?: number; models?: string[]; error?: string }
+export interface PrefabDetail { name: string; description?: string | null; items: Array<{ kind: 'reference' | 'clutter'; model: string; matrix: number[] }> }
+
 export interface AnimationList { packageArchive: string | null; sharedPath: string | null; clips: AnimationSummary[] }
 
 export type ActionFields = Record<string, (string | number)[]>;
@@ -246,6 +250,19 @@ export class AssetClient {
   entryBytes(leaf: string): Promise<{ leaf: string; revision: number; data: string }> {
     return this.call('ASSET_ENTRY_BYTES', { AssetArchive: leaf });
   }
+
+  // Character presets: saved body shapes and gear sets, applied with the applyCharacterPreset op.
+  listCharacterPresets(): Promise<{ folder: string; presets: CharacterPresetSummary[] }> { return this.call('ASSET_LIST_CHARACTER_PRESETS'); }
+  // Prefabs: groups of placed props and clutter saved relative to an origin, placed again with the placePrefab op.
+  savePrefab(args: { name: string; geoIndices?: number[]; clutterIndices?: number[]; description?: string; replace?: boolean }): Promise<{ name: string; items: number; models: string[] }> {
+    return this.withJson('ASSET_SAVE_PREFAB', args);
+  }
+
+  listPrefabs(): Promise<{ folder: string; prefabs: PrefabSummary[] }> { return this.call('ASSET_LIST_PREFABS'); }
+
+  prefab(name: string): Promise<PrefabDetail> { return this.call('ASSET_LIST_PREFABS', { AssetName: name }); }
+
+  deletePrefab(name: string): Promise<{ deleted: string }> { return this.call('ASSET_DELETE_PREFAB', { AssetName: name }); }
 
   edit(op: Record<string, unknown>): Promise<EditResult> { return this.withJson('ASSET_EDIT', op); }
 

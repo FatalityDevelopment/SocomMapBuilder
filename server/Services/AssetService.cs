@@ -78,6 +78,7 @@ namespace MapBuilder.Server.Services
             reg.Add(c => WithSession(c.AssetSession, "ASSET_HISTORY", s => History(s)), "ASSET_HISTORY");
             RegisterPrefabs(reg);
             reg.Add(c => WithSession(c.AssetSession, "ASSET_MAP_ACTIONS", MapActions), "ASSET_MAP_ACTIONS");
+            RegisterCharacterPresets(reg);
             RegisterViewer(reg);
             RegisterMovies(reg);
             reg.Add(c => WithSession(c.AssetSession, "ASSET_VALIDATE", s => Validate(s, c.AssetJson)), "ASSET_VALIDATE");
@@ -110,6 +111,8 @@ namespace MapBuilder.Server.Services
                     return EditMapAction(s, a);
                 case "traversalFace":
                     return EditTraversalFace(s, a);
+                case "applyCharacterPreset":
+                    return ApplyCharacterPreset(s, a);
                 case "placePrefab":
                     return PlacePrefab(s, a);
                 case "moveClutter":
@@ -214,6 +217,19 @@ namespace MapBuilder.Server.Services
                     string label = Str(a, "label") ?? $"edit {count} vertex(es) of {model}";
                     return ApplyEdit(s, label, p => ZipperModelMesh.SetVertices(p, archive, model, byChunk));
                 }
+                case "bakeOcclusion":
+                {
+                    // {archive, model, rays?, distance?, strength?, chunks?}: ambient occlusion multiplied into the baked
+                    // vertex colours (creases and undersides darken; the game has no real lighting).
+                    string archive = Str(a, "archive") ?? throw new ArgumentException("\"archive\" is required");
+                    string model = Str(a, "model") ?? throw new ArgumentException("\"model\" is required");
+                    var (_, mesh) = MeshOf(s, model, archive);
+                    var chunks = a.TryGetProperty("chunks", out var bc) && bc.ValueKind == JsonValueKind.Array ? bc.EnumerateArray().Select(x => x.GetInt32()).ToHashSet() : null;
+                    float F(string n, float d) => a.TryGetProperty(n, out var v) ? Number(v, n) : d;
+                    var baked = MeshOcclusion.Bake(mesh, new MeshOcclusion.Options((int)F("rays", 32), F("distance", 0), F("strength", 0.6f), chunks));
+                    var result = ApplyEdit(s, Str(a, "label") ?? $"bake occlusion into {model}", p => ZipperModelMesh.SetVertices(p, archive, model, baked.Edits));
+                    return new { result, vertices = baked.Vertices, meanOcclusion = Math.Round(baked.MeanOcclusion, 3), distance = Math.Round(baked.Distance, 2) };
+                }
                 case "transformVertices":
                 {
                     string archive = Str(a, "archive") ?? throw new ArgumentException("\"archive\" is required");
@@ -233,6 +249,18 @@ namespace MapBuilder.Server.Services
                     var faces = FaceMap(a);
                     int n = faces.Values.Sum(f => f.Length);
                     return ApplyTopology(s, Str(a, "label") ?? $"delete {n} face(s) of {model}", p => MeshTopology.DeleteFaces(p, archive, model, faces));
+                }
+                case "extrudeFaces":
+                {
+                    // {archive, model, faces, distance?, matrix?}: faces pushed out along their normal (and / or moved by
+                    // a model-space matrix: an inset shrinks them about their centre), joined to where they were by walls.
+                    string archive = Str(a, "archive") ?? throw new ArgumentException("\"archive\" is required");
+                    string model = Str(a, "model") ?? throw new ArgumentException("\"model\" is required");
+                    var faces = FaceMap(a);
+                    float distance = a.TryGetProperty("distance", out var dv) ? Number(dv, "distance") : 0;
+                    float[]? m = Vec(a, "matrix", 16);
+                    if (distance == 0 && m == null) throw new ArgumentException("Give a distance (along the faces' normal) and / or a matrix");
+                    return ApplyTopology(s, Str(a, "label") ?? $"extrude {faces.Values.Sum(f => f.Length)} face(s) of {model}", p => MeshTopology.ExtrudeFaces(p, archive, model, faces, distance, m));
                 }
                 case "duplicateFaces":
                 {
@@ -261,8 +289,10 @@ namespace MapBuilder.Server.Services
                     string? bone = Str(a, "bone");
                     string texture = Str(a, "texture") ?? throw new ArgumentException("\"texture\" is required");
                     var input = InputMeshOf(a, out string what);
-                    // The character's lower-detail mesh (drawn at a distance) gets the same geometry unless lowDetail is false.
+                    // The character's lower-detail mesh (drawn at a distance) gets the geometry simplified to lowDetail of its
+                    // triangles (a ratio; default 0.5, 1 keeps it whole), or nothing when lowDetail is false.
                     bool lowDetail = !(a.TryGetProperty("lowDetail", out var ld) && ld.ValueKind == JsonValueKind.False);
+                    float lowRatio = ld.ValueKind == JsonValueKind.Number ? Math.Clamp(ld.GetSingle(), 0.05f, 1f) : 0.5f;
                     string lowName = CharacterEdits.LowDetailName(model);
                     bool hasLow = lowDetail && pkg.FindModel(archive, lowName) != null;
                     // conform: true | {offset?, reach?}: fit the gear onto the body's surface first.
@@ -277,22 +307,46 @@ namespace MapBuilder.Server.Services
                     }
                     CharacterEdits.Result? made = null, low = null;
                     CharacterEdits.Fitted? fitted = null;
+                    MeshTopology.InputMesh? lowMesh = null;
                     var result = ApplyEdit(s, Str(a, "label") ?? $"add {what} to {model}{(hasLow ? " and " + lowName : "")} on {bone ?? "the body's skin"}", p =>
                     {
                         var mesh = conform is { } c ? (fitted = CharacterEdits.Conform(p, archive, model, input, c.Offset, c.Reach)).Mesh : input;
                         made = CharacterEdits.AddMesh(p, archive, model, bone, texture, mesh);
                         if (!hasLow) return made.Changed;
-                        low = CharacterEdits.AddMesh(p, archive, lowName, bone, texture, mesh, made.Changed[p.Entry(archive)!.Leaf]);
+                        lowMesh = lowRatio < 1 ? MeshDecimate.Simplify(mesh, lowRatio) : mesh;
+                        low = CharacterEdits.AddMesh(p, archive, lowName, bone, texture, lowMesh, made.Changed[p.Entry(archive)!.Leaf]);
                         return low.Changed;
                     });
                     return new
                     {
                         result, bone = bone == null ? null : made!.Bone, matrixId = bone == null ? (int?)null : made!.MatrixId,
                         bones = made!.Bones.Distinct().ToList(), groups = made.Groups, vertices = made.Vertices, triangles = made.Triangles,
-                        lowDetail = low == null ? null : new { model = lowName, groups = low.Groups },
+                        lowDetail = low == null ? null : new { model = lowName, groups = low.Groups, triangles = lowMesh?.Triangles.Count },
                         conformed = fitted == null ? null : new { moved = fitted.Moved, maxPush = MathF.Round(fitted.MaxPush, 3) },
                         check = CheckReport(s, model),
                     };
+                }
+                case "setSkinWeights":
+                {
+                    // {archive, model, vertices: [{group, vertex, weights: {bone: weight}}]}: skin weights painted in the Model
+                    // Editor, moved between the bones each vertex's group already lists (in place; the bind pose stays).
+                    string archive = Str(a, "archive") ?? throw new ArgumentException("\"archive\" is required");
+                    string model = Str(a, "model") ?? throw new ArgumentException("\"model\" is required");
+                    if (!a.TryGetProperty("vertices", out var vs) || vs.ValueKind != JsonValueKind.Array || vs.GetArrayLength() == 0)
+                        throw new ArgumentException("\"vertices\" [{group, vertex, weights: {bone: weight}}] is required");
+                    var edits = new List<CharacterEdits.WeightEdit>();
+                    foreach (var v in vs.EnumerateArray())
+                    {
+                        if (!v.TryGetProperty("weights", out var ws) || ws.ValueKind != JsonValueKind.Object)
+                            throw new ArgumentException("vertices[].weights is {bone: weight}");
+                        var weights = new Dictionary<string, float>(StringComparer.OrdinalIgnoreCase);
+                        foreach (var w in ws.EnumerateObject()) weights[w.Name] = Number(w.Value, $"weights.{w.Name}");
+                        edits.Add(new CharacterEdits.WeightEdit(Int(v, "group"), Int(v, "vertex"), weights));
+                    }
+                    CharacterEdits.WeightResult? made = null;
+                    var result = ApplyEdit(s, Str(a, "label") ?? $"paint skin weights of {edits.Count} vertices of {model}",
+                        p => (made = CharacterEdits.SetWeights(p, archive, model, edits)).Changed);
+                    return new { result, vertices = made!.Vertices, dropped = made.Dropped, droppedBones = made.DroppedBones.OrderBy(x => x).ToList(), check = CheckReport(s, model) };
                 }
                 case "scaleBones":
                 {

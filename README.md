@@ -52,7 +52,14 @@ Use the activity bar to switch between tools. Editors load on their first visit,
 Inspect the assembled level with its world model, props, clutter, sky, textures, and baked lighting. Select and transform instances directly in the scene.
 
 - Move, rotate, scale, duplicate and delete props and clutter; drop them to the ground.
-- Place clutter on any surface with the Place tool. Preview the model before clicking, choose yaw and scale (or random yaw and a random scale range), and optionally align it to the surface. Escape cancels placement. The Clutter layer must be visible and unlocked.
+- **Assets panel** (left): the package's props and library models, and your saved prefabs, as thumbnail tiles drawn with their textures. Click a tile to place it with the Place tool, or drag it onto the map to drop it where it lands.
+- **Prefabs**: select props and clutter, then **Assets › Prefabs › Save selection as prefab…**. A prefab places again, in this map or any other that has its models, as one edit (one undo).
+- Place on any surface with the Place tool (P), as clutter or as a GEO prop (**As prop**). Preview the model or prefab before clicking, choose yaw and scale (or random yaw and a random scale range), and optionally align it to the surface. Escape cancels placement. The Clutter layer must be visible and unlocked.
+- **Clutter brush** (B): drag over the ground to scatter the picked model. Settings: radius, the spacing kept between placements (and from that model's clutter already there), density, and the steepest slope it paints on. Random yaw and scale make it look natural. Hold Ctrl, or tick Erase, to remove that model's clutter instead. One stroke is one undo.
+- **Rotate** turns about any axis, not only yaw. **Scale** stretches GEO props along one axis; clutter keeps one scale, which is all its format holds. **Pivot**: the selection's centre, each item's own origin, or the first selected item. The status bar shows the move, turn or scale while you drag.
+- **Snap to**: the increment (grid), the **surface** under each item (it slides over the ground and stays on it), or the nearest **vertex** under the cursor.
+- **Align and distribute** a multi-selection on X, Y or Z: line up their minimums, centres or maximums, or spread the centres evenly (Item tab).
+- **Map check** (Map tab) adds checks that need the drawn scene: clutter and props floating above the surface under them, a second copy stacked on the first, and the areas that draw far more triangles than the rest of the map. Click a problem to select what it is about.
 - Set render resolution to 100%, 75%, or 50%, choose smooth or pixel texture filtering, and enable FPS, draw-call, triangle, and resource statistics. These rendering preferences are remembered in your browser. Render pixel density is capped at 2×; 50% resolution uses one quarter of the pixels of 100%.
 - Move the AIMAPS spawn and waypoint points.
 - Edit a multi-selection at once (move by, turn by, set scale); lock layers so clicks and box drags skip them; move a single prop along its own axes (Local).
@@ -71,8 +78,12 @@ Inspect the assembled level with its world model, props, clutter, sky, textures,
 Edit props, vehicles, weapons, and skinned characters using object-level and geometry-level tools.
 
 - Select by object, visual, chunk, vertex or face; move / rotate / scale; mirror, flip normals, snap to grid.
+- **Modeling** (Item tab, props / weapons / vehicles): **Extrude** the selected faces along their normal with walls round them, or **Inset** them (I) into a smaller copy with a ring of faces. **Soft radius** makes nearby vertices follow a move, fading out; **Mirror X** moves the selection's mirror image across X = 0 with it.
 - Add planes, cubes or an OBJ; duplicate and delete faces; edit UVs.
-- Paint baked vertex colours.
+- Paint baked vertex colours, and **bake ambient occlusion** into them (Paint tab): creases, undersides and insides darken so a prop looks seated in game.
+- **Texture paint** (T): paint the texture under the cursor in Colour (keeps the texture's shading), Dirt, Scuff or Blur. One stroke is one undo.
+- **Character presets** (Model tab): apply a body shape (Heavy build, Lean build) or a gear set (Plate carrier, Rucksack) to any skinned character as one edit. The AI saves new ones with `characters_save_preset`.
+- **Characters** (Paint tab): a **skin weight view** colours the body by how much a bone moves each vertex (blue none, red fully), and the **weight brush** (B) adds, subtracts or sets that bone's weight (one stroke is one undo). **Pose** the character with any clip and scrub its time to see gear and joints bend while you paint; move, rotate and scale wait for the bind pose.
 - **Textures**: retexture sections, replace a texture from any image (PNG, JPG, BMP, WebP), create a **new texture from an image** (with its own palette, or reusing one), **import a texture from another package**, create a **palette from an image**, export PNG.
 - **Import from package…** (Assets panel or File menu): copy a model from another package.
 - Export OBJ; convert models to SOCOM 3 / Combined Assault, and CA or GTA: San Andreas models to SOCOM II.
@@ -200,7 +211,7 @@ The same tab offers experimental climb and ladder surfaces and links to the map'
 | Fly | W A S D, Q / E down / up, Shift faster (viewport focused) |
 | Orbit / pan / zoom | Middle drag or Alt + left drag / right drag / wheel |
 | Keyboard orbit | Arrow keys while held (Left / Right turn, Up / Down tilt, Shift faster) · Numpad 4 / 6 / 8 / 2 in 15° steps · Numpad 9 opposite side · Numpad + / − zoom (every 3D view) |
-| Tools | V select · G move · R rotate · T scale · P place |
+| Tools | V select · G move · R rotate · T scale · P place · B paint clutter (Ctrl erases) |
 | Duplicate / delete / drop | Shift+D / X or Delete / End |
 | Copy / paste clutter | Ctrl+C / Ctrl+V (also into another package that has the model) |
 | Frame selected / frame map | F / Home |

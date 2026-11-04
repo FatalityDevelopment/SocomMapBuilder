@@ -11,3 +11,6 @@ web/dist/
 # OS / editors
 .DS_Store
 Thumbs.db
+
+# Game-derived packs and model exports kept beside the repo (never committed: no game files in the repository).
+/models/
