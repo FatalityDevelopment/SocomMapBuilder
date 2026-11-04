@@ -103,6 +103,9 @@ MCP (`server/Services/McpServer.cs`):
 
 ## Backlog
 
+**Editor parity** (Model Editor)
+- [x] Wave 2 (2026-11-03, branch `claude/model-wave2`, on top of `claude/mcp-character-gear`): skin weight view and brush (`setSkinWeights`, `CharacterEdits.SetWeights`; `zipper-core/skinning.ts`); pose a character with any clip while editing; `extrudeFaces` (extrude, inset, taper; `MeshTopology.ExtrudeFaces`); soft selection and Mirror X moves (`followers` in editor-viewport.ts, committed with setVertices). Tests: `Painted_weights_move_between_a_vertexs_bones_and_leave_the_bind_pose_where_it_was`, `ExtrudeTests`, `skinning.test.ts`, `followers.test.ts`. Tried live on M51: SEAL A's rbicep weights shown, posed in guard_crouch_point, a stroke painting 90 vertices; crate_small's top triangle extruded. *Left over:* a bone a vertex's group does not list cannot be added (needs rebuilding the group); loop cut, bevel and knife; `duplicateFaces` adds its copy to one section only when other sections draw the same chunk block (extrude adds to all); editable gear stacks (Wave 2 item 9).
+
 **Editor parity** (Map Builder)
 - Place GEO props from the UI (placeInstance in the Place tab; today only clutter is placed from the UI).
 - Full rotation gizmo (pitch/roll) and non-uniform scale.

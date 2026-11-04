@@ -261,6 +261,114 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             return Finish(ctx, archive, created);
         }
 
+        /// <summary>
+        /// Extrudes triangles (per chunk geometry offset): a cap, the faces moved by <paramref name="distance"/> along
+        /// their (area-weighted) normal and then by <paramref name="matrix"/> (model space, about the faces' centre's
+        /// world position as given), joined to where they were by walls along the selection's open edges; the original
+        /// faces go. With distance 0 and a matrix that shrinks the faces about their centre it is an inset. The walls
+        /// take their edge's uvs and colours and face out of the selection.
+        /// </summary>
+        public static Result ExtrudeFaces(ZipperPackage pkg, string archive, string modelName, IReadOnlyDictionary<int, int[]> faces, float distance, float[]? matrix)
+        {
+            var ctx = Open(pkg, archive, modelName);
+            var mesh = ctx.Mesh;
+            var byOffset = BlocksByOffset(ctx);
+            var created = new HashSet<ModelLayout.Block>(ReferenceEqualityComparer.Instance);
+            var replaced = new Dictionary<ModelLayout.Block, ModelLayout.LayoutChunk?>(ReferenceEqualityComparer.Instance);
+            foreach (var (offset, tris) in faces)
+            {
+                if (!byOffset.TryGetValue(offset, out var lc)) throw new ArgumentException($"No chunk at geometry offset {offset}");
+                var mc = mesh.Chunks.First(c => c.GeometryOffset == offset);
+                var picked = tris.Distinct().Where(t => t >= 0 && t * 3 + 2 < mc.Triangles.Length).ToList();
+                if (picked.Count == 0) continue;
+                float[] P(int i) => new[] { mc.Positions[i * 3], mc.Positions[i * 3 + 1], mc.Positions[i * 3 + 2] };
+
+                // The direction: the picked faces' area-weighted normal.
+                var dir = new float[3];
+                foreach (int t in picked)
+                {
+                    float[] a = P((int)mc.Triangles[t * 3]), b = P((int)mc.Triangles[t * 3 + 1]), c = P((int)mc.Triangles[t * 3 + 2]);
+                    float[] e1 = { b[0] - a[0], b[1] - a[1], b[2] - a[2] }, e2 = { c[0] - a[0], c[1] - a[1], c[2] - a[2] };
+                    dir[0] += e1[1] * e2[2] - e1[2] * e2[1]; dir[1] += e1[2] * e2[0] - e1[0] * e2[2]; dir[2] += e1[0] * e2[1] - e1[1] * e2[0];
+                }
+                float dl = MathF.Sqrt(dir[0] * dir[0] + dir[1] * dir[1] + dir[2] * dir[2]);
+                if (dl < 1e-12f) throw new ArgumentException("The picked faces have no area to extrude along");
+                for (int k = 0; k < 3; k++) dir[k] /= dl;
+                float[] move = Matrix4.Multiply(matrix ?? Matrix4.Identity(), Matrix4.Compose(dir[0] * distance, dir[1] * distance, dir[2] * distance));
+
+                var input = new InputMesh();
+                var colours = mc.Colors;
+                int Add(float[] p, float[] n, int from)
+                {
+                    input.Positions.Add(p);
+                    input.Normals.Add(n);
+                    input.Uvs.Add(new[] { mc.Uvs[from * 2], mc.Uvs[from * 2 + 1] });
+                    input.Colors.Add(colours != null ? colours[(from * 4)..(from * 4 + 4)] : new byte[] { 128, 128, 128, 128 });
+                    return input.Positions.Count - 1;
+                }
+                // The cap: each picked vertex once, moved.
+                var cap = new Dictionary<int, int>();
+                int Cap(int i)
+                {
+                    if (cap.TryGetValue(i, out int n)) return n;
+                    var (x, y, z) = Matrix4.Apply(move, mc.Positions[i * 3], mc.Positions[i * 3 + 1], mc.Positions[i * 3 + 2]);
+                    var (mx, my, mz) = ApplyLinear(mc.Matrix, mc.Normals[i * 3], mc.Normals[i * 3 + 1], mc.Normals[i * 3 + 2]);
+                    var (nx, ny, nz) = ApplyLinear(move, mx, my, mz);
+                    return cap[i] = Add(new[] { x, y, z }, new[] { nx, ny, nz }, i);
+                }
+                foreach (int t in picked) input.Triangles.Add((Cap((int)mc.Triangles[t * 3]), Cap((int)mc.Triangles[t * 3 + 1]), Cap((int)mc.Triangles[t * 3 + 2])));
+
+                // Open edges: welded by position, an edge used once by the picked faces (in its triangle's direction).
+                var weld = new Dictionary<(int, int, int), int>();
+                int W(int i) { var p = P(i); var key = ((int)MathF.Round(p[0] * 1e4f), (int)MathF.Round(p[1] * 1e4f), (int)MathF.Round(p[2] * 1e4f)); return weld.TryGetValue(key, out int w) ? w : weld[key] = weld.Count; }
+                var edges = new List<(int A, int B)>();
+                var use = new Dictionary<(int, int), int>();
+                foreach (int t in picked)
+                    for (int e = 0; e < 3; e++)
+                    {
+                        int a = (int)mc.Triangles[t * 3 + e], b = (int)mc.Triangles[t * 3 + (e + 1) % 3];
+                        edges.Add((a, b));
+                        var key = (Math.Min(W(a), W(b)), Math.Max(W(a), W(b)));
+                        use[key] = use.GetValueOrDefault(key) + 1;
+                    }
+                // Walls face away from the selection: for edge a→b of a face whose normal is n, out is (b - a) × n. A cap
+                // moved against n turns them round.
+                var centre = new float[3];
+                foreach (var i in cap.Keys) for (int k = 0; k < 3; k++) centre[k] += mc.Positions[i * 3 + k] / cap.Count;
+                var (cx, cy, cz) = Matrix4.Apply(move, centre[0], centre[1], centre[2]);
+                bool flip = (cx - centre[0]) * dir[0] + (cy - centre[1]) * dir[1] + (cz - centre[2]) * dir[2] < 0;
+                foreach (var (a, b) in edges)
+                {
+                    if (use[(Math.Min(W(a), W(b)), Math.Max(W(a), W(b)))] != 1) continue;
+                    float[] pa = P(a), pb = P(b), ab = { pb[0] - pa[0], pb[1] - pa[1], pb[2] - pa[2] };
+                    float[] outward = { ab[1] * dir[2] - ab[2] * dir[1], ab[2] * dir[0] - ab[0] * dir[2], ab[0] * dir[1] - ab[1] * dir[0] };
+                    int a0 = Add(pa, outward, a), b0 = Add(pb, outward, b);
+                    int a1 = Add(input.Positions[cap[a]], outward, a), b1 = Add(input.Positions[cap[b]], outward, b);
+                    if (flip) { input.Triangles.Add((a0, b1, b0)); input.Triangles.Add((a0, a1, b1)); }
+                    else { input.Triangles.Add((a0, b0, b1)); input.Triangles.Add((a0, b1, a1)); }
+                }
+
+                var head = ModelLayout.ReadChunk(lc.Geometry.Data);
+                // A chunk block can be drawn by several sections (one prop placed many times in a model): the cap and
+                // walls go wherever it is, as the faces they replace leave it everywhere.
+                var sections = ctx.Layout.Visuals.SelectMany(v => v.Sections).Where(s => s.Chunks.Any(c => ReferenceEquals(c.Geometry, lc.Geometry))).ToList();
+                foreach (var chunk in Encode(input, mc, head, lc).ToList())
+                {
+                    foreach (var section in sections) section.Chunks.Add(chunk);
+                    created.Add(chunk.Geometry);
+                }
+                var src = ModelLayout.ReadChunk(lc.Geometry.Data);
+                var drop = picked.ToHashSet();
+                var keep = Enumerable.Range(0, src.Triangles.Count).Where(i => !drop.Contains(i)).ToList();
+                replaced[lc.Geometry] = keep.Count == 0 ? null : Subset(src, lc, keep);
+            }
+            if (created.Count == 0) throw new ArgumentException("No faces to extrude");
+            foreach (var s in ctx.Layout.Visuals.SelectMany(v => v.Sections))
+                for (int i = s.Chunks.Count - 1; i >= 0; i--)
+                    if (replaced.TryGetValue(s.Chunks[i].Geometry, out var next)) { if (next == null) s.Chunks.RemoveAt(i); else s.Chunks[i] = next; }
+            return Finish(ctx, archive, created);
+        }
+
         private static (float, float, float) ApplyLinear(float[] m, float x, float y, float z) =>
             (x * m[0] + y * m[4] + z * m[8], x * m[1] + y * m[5] + z * m[9], x * m[2] + y * m[6] + z * m[10]);
 

@@ -424,6 +424,125 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             return result;
         }
 
+        /// <summary>One vertex's new skin weights: the draw group (its draw block's offset, the editors' geometryOffset),
+        /// the slot in it, and a weight per bone name (any scale: they are normalised).</summary>
+        public sealed record WeightEdit(int Group, int Slot, IReadOnlyDictionary<string, float> Weights);
+
+        public sealed class WeightResult
+        {
+            public Dictionary<string, byte[]> Changed { get; } = new(StringComparer.OrdinalIgnoreCase);
+            public int Vertices { get; set; }
+            /// <summary>Vertices that asked for a bone their group does not list (that share went to the bones it does).</summary>
+            public int Dropped { get; set; }
+            public HashSet<string> DroppedBones { get; } = new(StringComparer.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Sets skin weights in place. A vertex's parts sit in its group's vertex batches, one per bone, so it can take
+        /// weight from the bones it already has a part for (the group's first batch lists every slot, weight 0 where it
+        /// has none); a bone it has no part for cannot be added without rebuilding the group, so its share goes to the
+        /// others (counted in <see cref="WeightResult.Dropped"/>). Each part's bone-local position and normal are
+        /// recomputed from the vertex's bind pose, so the bind pose does not move; in other poses the vertex follows the
+        /// new blend. Weights are written in Q15, summing to 32767 (the heaviest takes the rounding).
+        /// </summary>
+        public static WeightResult SetWeights(ZipperPackage pkg, string archive, string modelName, IReadOnlyList<WeightEdit> edits, byte[]? archiveBytes = null)
+        {
+            var (entry, model, payload, start, skeleton) = Open(pkg, archive, modelName, archiveBytes);
+            payload = (byte[])payload.Clone();
+            var groups = GroupParts(payload, start, skeleton);
+            var result = new WeightResult();
+            var inverses = new Dictionary<string, float[]>();
+            foreach (var edit in edits)
+            {
+                if (!groups.TryGetValue(edit.Group, out var slots) || !slots.TryGetValue(edit.Slot, out var parts))
+                    throw new ArgumentException($"{modelName} has no vertex {edit.Slot} in the group drawn at {edit.Group}");
+                // The bind pose as it stands, to keep.
+                var p = new float[3];
+                var n = new float[3];
+                foreach (var part in parts)
+                {
+                    var w = part.Bone.World;
+                    float x = BitConverter.ToInt16(payload, part.Offset) / 4096f, y = BitConverter.ToInt16(payload, part.Offset + 2) / 4096f, z = BitConverter.ToInt16(payload, part.Offset + 4) / 4096f;
+                    float nx = BitConverter.ToInt16(payload, part.Offset + 8) / 32767f, ny = BitConverter.ToInt16(payload, part.Offset + 10) / 32767f, nz = BitConverter.ToInt16(payload, part.Offset + 12) / 32767f;
+                    var (wx, wy, wz) = Matrix4.Apply(w, x, y, z);
+                    p[0] += part.Weight * wx; p[1] += part.Weight * wy; p[2] += part.Weight * wz;
+                    n[0] += part.Weight * (w[0] * nx + w[4] * ny + w[8] * nz);
+                    n[1] += part.Weight * (w[1] * nx + w[5] * ny + w[9] * nz);
+                    n[2] += part.Weight * (w[2] * nx + w[6] * ny + w[10] * nz);
+                }
+                n = Normalize(n);
+
+                var have = parts.Select(x => x.Bone.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+                var lost = edit.Weights.Where(kv => kv.Value > 0 && !have.Contains(kv.Key)).Select(kv => kv.Key).ToList();
+                if (lost.Count > 0) { result.Dropped++; foreach (var b in lost) result.DroppedBones.Add(b); }
+                var want = parts.Select(x => Math.Max(0f, edit.Weights.TryGetValue(x.Bone.Name, out var v) && float.IsFinite(v) ? v : 0)).ToArray();
+                float total = want.Sum();
+                if (total <= 0)
+                    throw new ArgumentException($"Vertex {edit.Slot} of the group at {edit.Group} would have no weight; its group gives it {string.Join(", ", have)}");
+                var q = want.Select(v => (int)MathF.Round(v / total * 32767)).ToArray();
+                int heaviest = Array.IndexOf(want, want.Max());
+                q[heaviest] += 32767 - q.Sum();
+
+                for (int k = 0; k < parts.Count; k++)
+                {
+                    var part = parts[k];
+                    if (!inverses.TryGetValue(part.Bone.Name, out var inv)) inverses[part.Bone.Name] = inv = Matrix4.InverseAffine(part.Bone.World);
+                    var (lx, ly, lz) = Matrix4.Apply(inv, p[0], p[1], p[2]);
+                    var ln = Normalize(new[] { inv[0] * n[0] + inv[4] * n[1] + inv[8] * n[2], inv[1] * n[0] + inv[5] * n[1] + inv[9] * n[2], inv[2] * n[0] + inv[6] * n[1] + inv[10] * n[2] });
+                    float reach = MathF.Max(MathF.Abs(lx), MathF.Max(MathF.Abs(ly), MathF.Abs(lz)));
+                    if (q[k] > 0 && reach * 4096 > 32767)
+                        throw new ArgumentException($"Vertex {edit.Slot} of the group at {edit.Group} is {reach:0.##} units from {part.Bone.Name}; a bone can only carry vertices within 7.99 of it");
+                    float[] local = { lx, ly, lz };
+                    for (int c = 0; c < 3; c++)
+                    {
+                        BitConverter.GetBytes(Q(Math.Clamp(local[c], -7.99f, 7.99f) * 4096)).CopyTo(payload, part.Offset + c * 2);
+                        BitConverter.GetBytes(Q(ln[c] * 32767)).CopyTo(payload, part.Offset + 8 + c * 2);
+                    }
+                    BitConverter.GetBytes((short)q[k]).CopyTo(payload, part.Offset + 14);
+                }
+                result.Vertices++;
+            }
+            result.Changed[entry.Leaf] = ZedSplice.Replace(archiveBytes ?? entry.Data, model.NodeIndex, payload);
+            return result;
+        }
+
+        // Every draw group's slots and their parts, keyed by the group's draw block offset.
+        private static Dictionary<int, Dictionary<int, List<Part>>> GroupParts(byte[] payload, int start, CharacterSkeleton skeleton)
+        {
+            var groups = new Dictionary<int, Dictionary<int, List<Part>>>();
+            int count = (int)(BitConverter.ToUInt32(payload, start) & 0xFFFF);
+            bool matrixPending = false;
+            var slots = new Dictionary<int, List<Part>>();
+            for (int t = 1; t <= count; t++)
+            {
+                int o = start + t * 16;
+                uint lo = BitConverter.ToUInt32(payload, o);
+                int addr = BitConverter.ToInt32(payload, o + 4), qwc = (int)(lo & 0xFFFF);
+                if ((lo >> 28 & 7) == 1) continue;
+                if (BitConverter.ToUInt32(payload, o + 8) == Stcycl101 && BitConverter.ToUInt32(payload, o + 12) == UnpackMatrix) { matrixPending = true; continue; }
+                if (addr < 0 || addr + qwc * 16 > payload.Length) continue;
+                if (matrixPending)
+                {
+                    matrixPending = false;
+                    int h = addr + 8;
+                    var bone = skeleton.ByMatrixId(BitConverter.ToInt16(payload, h + 4));
+                    int n = BitConverter.ToInt16(payload, h + 6);
+                    if (bone == null) continue;
+                    for (int i = 0; i < n && h + 8 + i * 16 + 16 <= addr + qwc * 16; i++)
+                    {
+                        int v = h + 8 + i * 16;
+                        int slot = BitConverter.ToInt16(payload, v + 6) / 2;
+                        if (!slots.TryGetValue(slot, out var parts)) slots[slot] = parts = new List<Part>();
+                        parts.Add(new Part(v, bone, BitConverter.ToInt16(payload, v + 14) / 32767f));
+                    }
+                    continue;
+                }
+                groups[addr] = slots;
+                slots = new Dictionary<int, List<Part>>();
+            }
+            return groups;
+        }
+
         /// <summary>How <see cref="ScaleBones"/> scales one bone's parts, in its own frame about its joint: along its
         /// length axis (<see cref="Length"/>), across it (<see cref="Thickness"/>), and all over (<see cref="Scale"/>).</summary>
         public sealed record BoneScale(float Scale = 1, float Thickness = 1, float Length = 1);
