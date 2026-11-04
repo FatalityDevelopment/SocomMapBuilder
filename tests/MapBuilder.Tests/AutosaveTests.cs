@@ -23,20 +23,38 @@ namespace MapBuilder.Tests
         }
 
         [Fact]
+        public void Same_named_packages_in_different_folders_get_their_own_recovery_copy()
+        {
+            string a = ZipperAssetService.AutosavePath(Path.Combine(_folder, "one", "M51.ZDB"), isZdb: true);
+            string b = ZipperAssetService.AutosavePath(Path.Combine(_folder, "two", "M51.ZDB"), isZdb: true);
+            Assert.NotEqual(a, b);
+            Assert.Equal(a, ZipperAssetService.AutosavePath(Path.Combine(_folder, "one", "M51.ZDB"), isZdb: true));
+            Assert.Matches(@"M51-[0-9a-f]{8}\.autosave\.ZDB$", a);
+            Assert.EndsWith(".autosave.CDB", ZipperAssetService.AutosavePath(Path.Combine(_folder, "MEDIT.CDB"), isZdb: true));
+            // A loose folder's copy is a folder of files, so it is not named like an archive.
+            Assert.Matches(@"TST-[0-9a-f]{8}\.autosave$", ZipperAssetService.AutosavePath(Path.Combine(_folder, "TST"), isZdb: false));
+        }
+
+        [Fact]
         public void A_changed_session_gets_one_recovery_copy_per_revision_and_stays_unsaved()
         {
             using var pkg = new SyntheticPackage();
             string zdb = pkg.WriteZdb();
             string s = _b.Open(zdb);
             _sessions.Add(s);
-            Assert.DoesNotContain(ZipperAssetService.AutosaveNow(), p => p.StartsWith(_folder));   // nothing changed yet
+            // AutosaveNow covers every open session, and tests in other classes run alongside with their own
+            // packages (also named TST), so look only for this package's copy.
+            string mine = ZipperAssetService.AutosavePath(zdb, isZdb: true);
+            Assert.DoesNotContain(mine, ZipperAssetService.AutosaveNow());   // nothing changed yet
 
             _b.Edit(s, new { op = "addClutter", model = "tree", position = new[] { 1f, 2f, 3f } });
-            var written = ZipperAssetService.AutosaveNow().Where(p => p.StartsWith(_folder)).ToList();
-            string copy = Assert.Single(written);
+            Assert.Contains(mine, ZipperAssetService.AutosaveNow());
+            string copy = mine;
+            Assert.StartsWith(_folder, copy);
             Assert.EndsWith(".autosave.ZDB", copy);
+            Assert.True(File.Exists(copy), "the recovery copy is a file");
             Assert.True(new FileInfo(copy).Length > 0);
-            Assert.DoesNotContain(ZipperAssetService.AutosaveNow(), p => p.StartsWith(_folder));   // same revision: not again
+            Assert.DoesNotContain(mine, ZipperAssetService.AutosaveNow());   // same revision: not again
 
             var status = _b.Ok(new MapBuilder.Server.CommandMessage { Command = "ASSET_STATUS", AssetSession = s });
             Assert.NotEmpty(status.GetProperty("dirty").EnumerateArray());                            // still unsaved

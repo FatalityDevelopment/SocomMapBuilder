@@ -40,11 +40,8 @@ namespace MapBuilder.Server.Services
                     if (s.Dirty.Count == 0) continue;
                     if (LastAutosave.TryGetValue(s.Id, out var last) && last.Revision == s.Revision) continue;
                     string source = s.OpenPath.Length > 0 ? s.OpenPath : s.Package.SourcePath;
-                    string ext = Path.GetExtension(source);
-                    // Loose package folders save in place only; their recovery copy is a ZDB.
-                    if (!ext.Equals(".ZDB", StringComparison.OrdinalIgnoreCase) && !ext.Equals(".CDB", StringComparison.OrdinalIgnoreCase)) ext = ".ZDB";
                     Directory.CreateDirectory(AutosaveFolder);
-                    string path = Path.Combine(AutosaveFolder, Path.GetFileNameWithoutExtension(source.TrimEnd('\\', '/')) + ".autosave" + ext.ToUpperInvariant());
+                    string path = AutosavePath(source, s.Package.IsZdb);
                     // A package that cannot be written (SOCOM 3 / CA, read-only) waits; the others still save.
                     try { PackageSave.Write(s.Package, s.Dirty.ToList(), path); }
                     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or NotSupportedException) { continue; }
@@ -53,6 +50,23 @@ namespace MapBuilder.Server.Services
                 }
             }
             return written;
+        }
+
+        /// <summary>
+        /// Where a package's recovery copy goes: <c>&lt;package&gt;-&lt;8 hex of its full path&gt;.autosave.ZDB</c> (or .CDB),
+        /// so two packages with the same name in different folders (every map's M51.ZDB copies) never replace each
+        /// other's. A loose package folder has no archive to rewrite: its copy is a folder of its changed files,
+        /// <c>&lt;package&gt;-&lt;hash&gt;.autosave</c>.
+        /// </summary>
+        internal static string AutosavePath(string source, bool isZdb)
+        {
+            string full = Path.GetFullPath(source.TrimEnd('\\', '/'));
+            string name = Path.GetFileNameWithoutExtension(full);
+            byte[] digest = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(full.ToUpperInvariant()));
+            string tag = Convert.ToHexString(digest, 0, 4).ToLowerInvariant();
+            string ext = isZdb ? Path.GetExtension(full).ToUpperInvariant() : "";
+            if (isZdb && ext != ".ZDB" && ext != ".CDB") ext = ".ZDB";
+            return Path.Combine(AutosaveFolder, $"{name}-{tag}.autosave{ext}");
         }
 
         private static object? AutosaveOf(AssetSession s) =>
