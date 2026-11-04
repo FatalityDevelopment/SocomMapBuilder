@@ -73,7 +73,9 @@ Edit props, vehicles, weapons, and skinned characters using object-level and geo
 - Select by object, visual, chunk, vertex or face; move / rotate / scale; mirror, flip normals, snap to grid.
 - **Modeling** (Item tab, props / weapons / vehicles): **Extrude** the selected faces along their normal with walls round them, or **Inset** them (I) into a smaller copy with a ring of faces. **Soft radius** makes nearby vertices follow a move, fading out; **Mirror X** moves the selection's mirror image across X = 0 with it.
 - Add planes, cubes or an OBJ; duplicate and delete faces; edit UVs.
-- Paint baked vertex colours.
+- Paint baked vertex colours, and **bake ambient occlusion** into them (Paint tab): creases, undersides and insides darken so a prop looks seated in game.
+- **Texture paint** (T): paint the texture under the cursor in Colour (keeps the texture's shading), Dirt, Scuff or Blur. One stroke is one undo.
+- **Character presets** (Model tab): apply a body shape (Heavy build, Lean build) or a gear set (Plate carrier, Rucksack) to any skinned character as one edit. The AI saves new ones with `characters_save_preset`.
 - **Characters** (Paint tab): a **skin weight view** colours the body by how much a bone moves each vertex (blue none, red fully), and the **weight brush** (B) adds, subtracts or sets that bone's weight (one stroke is one undo). **Pose** the character with any clip and scrub its time to see gear and joints bend while you paint; move, rotate and scale wait for the bind pose.
 - **Textures**: retexture sections, replace a texture from any image (PNG, JPG, BMP, WebP), create a **new texture from an image** (with its own palette, or reusing one), **import a texture from another package**, create a **palette from an image**, export PNG.
 - **Import from package…** (Assets panel or File menu): copy a model from another package.

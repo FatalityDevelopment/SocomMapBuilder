@@ -693,6 +693,36 @@ namespace MapBuilder.Server.Services
                 false, Schema(new[] { "name" }, P("name", "string", "The prefab.")),
                 a => FromCommand(new CommandMessage { Command = "ASSET_DELETE_PREFAB", AssetName = Str(a, "name") }, _ => "deleted"));
 
+            AddSync("characters_presets", "List character presets",
+                "Character presets: saved body shapes, skins and gear sets (any list of character edits), shipped with the app or saved " +
+                "by the user or an AI: name, description, the ops they run, or one preset in full with name. Apply one to any skinned " +
+                "character with assets_edit {op: applyCharacterPreset, preset, archive, model} (one undo step). Risk: read-only.",
+                true, Schema(Array.Empty<string>(), P("name", "string", "Optional preset to read in full.")),
+                a => FromCommand(new CommandMessage { Command = "ASSET_LIST_CHARACTER_PRESETS", AssetName = Str(a, "name") },
+                    d => d.TryGetProperty("presets", out var l) ? $"{l.GetArrayLength()} preset(s)" : $"{d.GetProperty("ops").GetArrayLength()} op(s)"));
+
+            AddSync("characters_save_preset", "Save character preset",
+                "Save a list of character edits as a preset to apply to other characters later: ops as assets_edit takes them, without " +
+                "archive and model (applying fills them in). It may hold addTexture, replaceTexture, paintTexture, retexture, scaleBones, " +
+                "transformCharacter, addCharacterMesh, removeCharacterSection and setSkinWeights. Gear positions are in the bind pose " +
+                "of the character it was made on; addCharacterMesh with conform fits it to another body. replace overwrites. " +
+                "Risk: writes a preset file (not the package).",
+                false, Schema(new[] { "name", "ops" }, P("name", "string", "Preset name: letters, digits, spaces, _ . -"),
+                    A("ops", "object", "The character edits, in order."), P("description", "string", "What it does."), P("replace", "boolean", "Overwrite a saved preset.")),
+                a =>
+                {
+                    var fields = new Dictionary<string, object?>();
+                    foreach (string k in new[] { "name", "ops", "description", "replace" })
+                        if (a.TryGetProperty(k, out var v)) fields[k] = v;
+                    return FromCommand(new CommandMessage { Command = "ASSET_SAVE_CHARACTER_PRESET", AssetJson = JsonSerializer.Serialize(fields, Json) },
+                        d => $"saved {d.GetProperty("name").GetString()} ({d.GetProperty("ops").GetInt32()} ops)");
+                });
+
+            AddSync("characters_delete_preset", "Delete character preset",
+                "Delete a saved character preset (not a shipped one). Only when the user asks. Risk: deletes a preset file.",
+                false, Schema(new[] { "name" }, P("name", "string", "The preset.")),
+                a => FromCommand(new CommandMessage { Command = "ASSET_DELETE_CHARACTER_PRESET", AssetName = Str(a, "name") }, _ => "deleted"));
+
             AddSync("assets_history", "Edit history",
                 "A session's undo and redo steps (most recent first, with the archives each touched), its revision and unsaved archives: " +
                 "what assets_undo / assets_redo would take back. Risk: read-only.",

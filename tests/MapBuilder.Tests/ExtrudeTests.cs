@@ -103,6 +103,56 @@ namespace MapBuilder.Tests
         }
     }
 
+    [Collection(MapPackageCollection.Name)]
+    public sealed class OcclusionTests : IDisposable
+    {
+        private readonly Backend _b = new();
+        private readonly List<string> _sessions = new();
+
+        public void Dispose()
+        {
+            foreach (string s in _sessions) _b.Close(s);
+        }
+
+        [Fact]
+        public void Baked_occlusion_darkens_some_vertex_colours_and_never_lightens_or_moves_any()
+        {
+            string? path = Environment.GetEnvironmentVariable("MB_MAP_ZDB");
+            if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
+            string s = _b.Open(path);
+            _sessions.Add(s);
+            JsonElement Mesh() => _b.Ok(new CommandMessage { Command = "ASSET_MODEL_MESH", AssetSession = s, AssetArchive = "M51_MDL.ZED", AssetName = "clawfoottub",
+                AssetJson = JsonSerializer.Serialize(new { arrays = true }) });
+            (byte[] Colours, float[] Positions) Read(JsonElement m)
+            {
+                var cs = new List<byte>(); var ps = new List<float>();
+                foreach (var c in m.GetProperty("chunks").EnumerateArray())
+                {
+                    if (c.GetProperty("colors").ValueKind == JsonValueKind.String) cs.AddRange(Convert.FromBase64String(c.GetProperty("colors").GetString()!));
+                    byte[] b = Convert.FromBase64String(c.GetProperty("positions").GetString()!);
+                    var f = new float[b.Length / 4]; Buffer.BlockCopy(b, 0, f, 0, b.Length); ps.AddRange(f);
+                }
+                return (cs.ToArray(), ps.ToArray());
+            }
+            var before = Read(Mesh());
+            Assert.NotEmpty(before.Colours);
+            var r = _b.Edit(s, new { op = "bakeOcclusion", archive = "M51_MDL.ZED", model = "clawfoottub", rays = 24, strength = 0.8f });
+            Assert.True(r.GetProperty("vertices").GetInt32() > 0);
+            Assert.InRange(r.GetProperty("meanOcclusion").GetDouble(), 0.01, 0.99);
+            var after = Read(Mesh());
+            Assert.Equal(before.Positions, after.Positions);
+            int darker = 0;
+            for (int i = 0; i < before.Colours.Length; i++)
+            {
+                if (i % 4 == 3) { Assert.Equal(before.Colours[i], after.Colours[i]); continue; }   // alpha kept
+                Assert.True(after.Colours[i] <= before.Colours[i], $"colour byte {i} got lighter");
+                if (after.Colours[i] < before.Colours[i]) darker++;
+            }
+            Assert.True(darker > 0);
+            Assert.Contains("colour", _b.EditFails(s, new { op = "bakeOcclusion", archive = "CLIB_MDL.ZED", model = "MESH_seal_A_woodland_LO" }));
+        }
+    }
+
     /// <summary>Tests that open the real map package: opening the same path joins one session, so they take turns
     /// (one class closing it would pull it from under another).</summary>
     [CollectionDefinition(Name)]

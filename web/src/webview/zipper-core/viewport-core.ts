@@ -260,6 +260,12 @@ export abstract class ViewportCore {
     this.textures.clear();
   }
 
+  /** A texture's pixels changed in place (texture paint): upload them again. */
+  protected markTextureDirty(name: string): void {
+    const tex = this.textures.get(name.toLowerCase());
+    if (tex) { tex.needsUpdate = true; }
+  }
+
   private textureFor(name: string): { tex: THREE.DataTexture; pixels: ModelTexturePixels } | null {
     const key = name.toLowerCase();
     const pixels = this.texturePixels[key];

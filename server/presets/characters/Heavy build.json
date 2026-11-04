@@ -1,0 +1,47 @@
+{
+  "name": "Heavy build",
+  "description": "A broader, heavier body: thicker torso, neck, arms and legs (scaleBones thickness, so joints blend).",
+  "ops": [
+    {
+      "op": "scaleBones",
+      "bones": {
+        "spinehi": {
+          "thickness": 1.15
+        },
+        "spinelo": {
+          "thickness": 1.12
+        },
+        "hips": {
+          "thickness": 1.08
+        },
+        "neck": {
+          "thickness": 1.12
+        },
+        "rbicep": {
+          "thickness": 1.2
+        },
+        "lbicep": {
+          "thickness": 1.2
+        },
+        "rforearm": {
+          "thickness": 1.12
+        },
+        "lforearm": {
+          "thickness": 1.12
+        },
+        "rthigh": {
+          "thickness": 1.12
+        },
+        "lthigh": {
+          "thickness": 1.12
+        },
+        "rcalf": {
+          "thickness": 1.06
+        },
+        "lcalf": {
+          "thickness": 1.06
+        }
+      }
+    }
+  ]
+}

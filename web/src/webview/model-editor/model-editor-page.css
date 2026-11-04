@@ -164,3 +164,4 @@ app-model-editor-page { display: block; height: 100vh; }
 
 /* Pages with the shared page header (icon tile, title) above the menu bar. */
 .me-app.has-header { grid-template-rows: auto 28px 34px 1fr 22px; }
+.me-preset-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 2px 0; }

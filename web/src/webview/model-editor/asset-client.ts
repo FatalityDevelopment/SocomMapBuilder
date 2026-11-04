@@ -167,6 +167,8 @@ export interface WeaponFx {
   effect: FxNode | null;
 }
 
+export interface CharacterPresetSummary { name: string; description?: string | null; shipped: boolean; ops?: string[]; error?: string }
+
 export interface AnimationList { packageArchive: string | null; sharedPath: string | null; clips: AnimationSummary[] }
 
 export class AssetClient {
@@ -231,6 +233,9 @@ export class AssetClient {
   entryBytes(leaf: string): Promise<{ leaf: string; revision: number; data: string }> {
     return this.call('ASSET_ENTRY_BYTES', { AssetArchive: leaf });
   }
+
+  // Character presets: saved body shapes and gear sets, applied with the applyCharacterPreset op.
+  listCharacterPresets(): Promise<{ folder: string; presets: CharacterPresetSummary[] }> { return this.call('ASSET_LIST_CHARACTER_PRESETS'); }
 
   edit(op: Record<string, unknown>): Promise<EditResult> { return this.withJson('ASSET_EDIT', op); }
 
