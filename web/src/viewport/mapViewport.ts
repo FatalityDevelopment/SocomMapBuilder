@@ -12,6 +12,8 @@ import { SELECT_COLOR, ViewportCore, billboardYaw, chunkGeometry, isIdentity, la
 import type { EditorMesh } from '../webview/model-editor/mesh-data';
 import { propDrawChunks } from './propFaces';
 import { groupInstancesByLayer, isSkyChunk, layerOf, movable as isMovable, pointColor } from '../mapModel';
+import { actionIconCanvas, objectiveIconCanvas, type ActionKind } from '../shared/actionIcons';
+import { markerAnchor, type ActionMarker } from './actionMarkers';
 
 export type MapTool = 'select' | 'move' | 'rotate' | 'scale' | 'place' | 'paint' | 'measure';
 /** A saved camera: where it stands and what it looks at. */
@@ -58,7 +60,17 @@ export interface MapCallbacks {
   onMeasure?: (units: number | null, points: number) => void;
   // Walk mode turned itself off (Escape).
   onWalkEnd?: () => void;
+  // A marker above the map was clicked: an action icon (its prop is selected first) or a HUD objective.
+  onMarkerPick?: (pick: MarkerPick) => void;
 }
+
+/** What a click on a 3D marker picked. */
+export type MarkerPick = { kind: 'action'; geoIndex: number; instance: number } | { kind: 'objective'; row: number };
+/** A HUD objective's map location (hudobjectives.rdr LOCATION is x, z). */
+export interface ObjectiveMarker { row: number; x: number; z: number; label: string; secondary: boolean }
+
+// Screen height of a marker icon in CSS pixels, whatever the distance.
+const MARKER_PX = 26;
 
 // Model space is Y up like the display, so placements are used as they are (column-major).
 function toDisplay(m: ArrayLike<number>): THREE.Matrix4 {
@@ -159,6 +171,14 @@ export class MapViewport extends ViewportCore {
   // Walk mode: the eye stays this high over the ground under it; the fly speed it replaced comes back after.
   private walking: { eye: number; flySpeed: number } | null = null;
   private worldBox = new THREE.Box3();
+  // Icons floating over props with map object actions, and over HUD objective locations (view only).
+  private readonly markerGroup = new THREE.Group();
+  private actionMarkerList: ActionMarker[] = [];
+  private objectiveMarkerList: ObjectiveMarker[] = [];
+  private showActionMarkersValue = true;
+  private showObjectiveMarkersValue = true;
+  private selectedObjective: number | null = null;
+  private readonly markerTextures = new Map<string, THREE.CanvasTexture>();
 
   constructor(canvas: HTMLCanvasElement, private readonly callbacks: MapCallbacks = {}) {
     super(canvas, () => callbacks.onCameraChange?.());
@@ -173,6 +193,8 @@ export class MapViewport extends ViewportCore {
     this.measureLine.renderOrder = 32;
     this.measureDots.renderOrder = 33;
     this.scene.add(this.measureLine, this.measureDots);
+    this.markerGroup.renderOrder = 40;
+    this.scene.add(this.markerGroup);
     canvas.addEventListener('keydown', e => { if (e.key === 'Escape' && this.walking) { this.setWalk(false); this.callbacks.onWalkEnd?.(); } }, { signal: this.listenerAbort.signal });
     this.placementGhost.visible = false;
     this.placementGhost.matrixAutoUpdate = false;
@@ -204,6 +226,8 @@ export class MapViewport extends ViewportCore {
     this.strokeMarks.geometry.dispose();
     (this.strokeMarks.material as THREE.Material).dispose();
     for (const o of [this.measureLine, this.measureDots]) { o.geometry.dispose(); (o.material as THREE.Material).dispose(); }
+    this.clearMarkers();
+    this.markerTextures.forEach(t => t.dispose());
     this.disposeCore();
   }
 
@@ -213,6 +237,7 @@ export class MapViewport extends ViewportCore {
   // The base constructor renders a first frame before this class's fields exist, hence the guard.
   protected override onFrame(): void {
     if (this.billboards) { this.updateBillboards(); }
+    if (this.markerGroup) { this.updateMarkers(); }
     if (this.walking) { this.keepEyeHeight(); }
     if (this.placementGhost && this.placementPointer && this.toolValue === 'place') {
       const cameraChanged = !this.placementCameraPosition.equals(this.camera.position)
@@ -395,6 +420,7 @@ export class MapViewport extends ViewportCore {
     this.flySpeed = this.worldBox.isEmpty() ? 100 : this.extent / 12;
     this.applyVisibility();
     this.buildPoints(points);
+    this.buildMarkers();
     this.clearHelpers();
     this.buildGridAxes(this.worldBox);
     if (!keepCamera) { this.frameAll(); }
@@ -551,6 +577,142 @@ export class MapViewport extends ViewportCore {
   }
 
   pointList(): ReadonlyArray<MapPointInfo & { y: number }> { return this.points; }
+
+  // ------------------------------------------------------------------ markers (action icons, HUD objectives)
+
+  /** Props with map object actions: one icon above each bound node's drawn placements. */
+  setActionMarkers(markers: ActionMarker[]): void { this.actionMarkerList = markers; this.buildMarkers(); }
+  /** HUD objective locations, drawn as flags standing on the ground. */
+  setObjectiveMarkers(markers: ObjectiveMarker[]): void { this.objectiveMarkerList = markers; this.buildMarkers(); }
+  get showActionMarkers(): boolean { return this.showActionMarkersValue; }
+  set showActionMarkers(on: boolean) { this.showActionMarkersValue = on; this.buildMarkers(); }
+  get showObjectiveMarkers(): boolean { return this.showObjectiveMarkersValue; }
+  set showObjectiveMarkers(on: boolean) { this.showObjectiveMarkersValue = on; this.buildMarkers(); }
+  /** The HUD objective shown as selected (its flag is outlined). */
+  setSelectedObjective(row: number | null): void { this.selectedObjective = row; this.buildMarkers(); }
+  /** Frames the camera on a HUD objective's flag. */
+  frameObjective(row: number): void {
+    const flag = this.markerGroup.children.find(c => (c.userData['marker'] as MarkerPick).kind === 'objective' && (c.userData['marker'] as { row: number }).row === row);
+    const o = this.objectiveMarkerList.find(m => m.row === row);
+    if (!o) { return; }
+    const at = flag ? flag.position.clone() : new THREE.Vector3(o.x, this.groundBelow(o.x, o.z) ?? 0, o.z);
+    this.frameBox(new THREE.Box3().setFromCenterAndSize(at, new THREE.Vector3().setScalar(Math.max(40, this.extent * 0.03))));
+  }
+  /** Markers drawn now (for checks and the AI). */
+  markerCount(): { actions: number; objectives: number } {
+    let actions = 0, objectives = 0;
+    for (const c of this.markerGroup.children) {
+      if (!c.visible) { continue; }
+      if ((c.userData['marker'] as MarkerPick).kind === 'action') { actions++; } else { objectives++; }
+    }
+    return { actions, objectives };
+  }
+
+  private markerTexture(key: string, make: () => HTMLCanvasElement): THREE.CanvasTexture {
+    let t = this.markerTextures.get(key);
+    if (!t) { t = new THREE.CanvasTexture(make()); t.colorSpace = THREE.SRGBColorSpace; this.markerTextures.set(key, t); }
+    return t;
+  }
+
+  private markerSprite(map: THREE.Texture, pick: MarkerPick): THREE.Sprite {
+    const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map, depthTest: false, depthWrite: false, transparent: true }));
+    // Anchored at the bottom middle: the icon stands on the point it marks.
+    sprite.center.set(0.5, 0);
+    sprite.renderOrder = 40;
+    sprite.userData['marker'] = pick;
+    return sprite;
+  }
+
+  private clearMarkers(): void {
+    for (const c of this.markerGroup.children) { ((c as THREE.Sprite).material as THREE.Material).dispose(); }
+    this.markerGroup.clear();
+  }
+
+  private buildMarkers(): void {
+    if (!this.markerGroup) { return; }
+    this.clearMarkers();
+    if (this.showActionMarkersValue) {
+      for (const m of this.actionMarkerList) {
+        const live = m.instances.filter(i => i < this.instances.length);
+        if (!live.length && !m.anchor) { continue; }
+        const selected = live.some(i => this.selected.has(i));
+        const kind: ActionKind = m.kind;
+        const sprite = this.markerSprite(this.markerTexture(kind + (selected ? ':sel' : ''), () => actionIconCanvas(kind, 64, selected)),
+          { kind: 'action', geoIndex: m.geoIndex, instance: live[0] ?? -1 });
+        sprite.userData['instances'] = live;
+        if (!live.length && m.anchor) { sprite.userData['anchor'] = m.anchor; sprite.position.set(...m.anchor); }
+        sprite.name = m.node;
+        this.markerGroup.add(sprite);
+      }
+    }
+    if (this.showObjectiveMarkersValue) {
+      for (const o of this.objectiveMarkerList) {
+        const selected = o.row === this.selectedObjective;
+        const sprite = this.markerSprite(this.markerTexture(`objective:${o.secondary ? 2 : 1}:${selected ? 1 : 0}`, () => objectiveIconCanvas(o.secondary, selected)),
+          { kind: 'objective', row: o.row });
+        const ground = this.instances.length ? this.groundBelow(o.x, o.z) : null;
+        sprite.position.set(o.x, ground ?? (this.worldBox.isEmpty() ? 0 : this.worldBox.min.y), o.z);
+        sprite.name = o.label;
+        this.markerGroup.add(sprite);
+      }
+    }
+    this.updateMarkers();
+  }
+
+  // Each frame: action icons follow their props (drags included) and hide with them; every icon keeps its screen size.
+  private updateMarkers(): void {
+    if (!this.markerGroup.children.length) { return; }
+    const host = this.canvas.parentElement ?? this.canvas;
+    const h = Math.max(1, host.clientHeight);
+    const view = new THREE.Vector3();
+    this.camera.getWorldDirection(view);
+    const toMarker = new THREE.Vector3();
+    for (const c of this.markerGroup.children) {
+      const sprite = c as THREE.Sprite;
+      const pick = sprite.userData['marker'] as MarkerPick;
+      if (pick.kind === 'action' && sprite.userData['anchor']) {
+        // A bare node: it stands where the node is and shows with the world.
+        const a = sprite.userData['anchor'] as [number, number, number];
+        sprite.position.set(a[0], a[1], a[2]);
+        sprite.visible = !this.hiddenLayers.has('world');
+        if (!sprite.visible) { continue; }
+      } else if (pick.kind === 'action') {
+        const boxes: Array<{ min: number[]; max: number[] }> = [];
+        for (const i of sprite.userData['instances'] as number[]) {
+          if (!this.instanceVisible(i)) { continue; }
+          const inst = this.instances[i];
+          const local = inst.source ? this.localBounds.get(inst.source) : null;
+          const box = local && !local.isEmpty() ? local.clone().applyMatrix4(this.currentMatrix(i))
+            : new THREE.Box3().setFromPoints([new THREE.Vector3().setFromMatrixPosition(this.currentMatrix(i))]);
+          boxes.push({ min: box.min.toArray(), max: box.max.toArray() });
+        }
+        const at = markerAnchor(boxes, 0);
+        sprite.visible = !!at;
+        if (!at) { continue; }
+        sprite.position.set(at[0], at[1], at[2]);
+      }
+      // World units per pixel at the marker's depth.
+      let perPixel: number;
+      if (this.isOrtho) {
+        const o = this.camera as THREE.OrthographicCamera;
+        perPixel = (o.top - o.bottom) / o.zoom / h;
+      } else {
+        const depth = Math.max(0.01, view.dot(toMarker.subVectors(sprite.position, this.camera.position)));
+        perPixel = 2 * depth * Math.tan(THREE.MathUtils.degToRad(this.persp.fov / 2)) / h;
+      }
+      const size = MARKER_PX * perPixel;
+      sprite.scale.set(size, size, 1);
+      // A small gap between the prop's top and its icon.
+      if (pick.kind === 'action') { sprite.position.y += 6 * perPixel; }
+    }
+  }
+
+  private markerAt(clientX: number, clientY: number): THREE.Sprite | null {
+    const visible = this.markerGroup.children.filter(c => c.visible);
+    if (!visible.length) { return null; }
+    const hit = this.rayFrom(clientX, clientY).intersectObjects(visible, false)[0];
+    return hit ? hit.object as THREE.Sprite : null;
+  }
 
   // ------------------------------------------------------------------ visibility
 
@@ -775,6 +937,7 @@ export class MapViewport extends ViewportCore {
   }
 
   private selectionChanged(): void {
+    this.buildMarkers();
     this.refreshOverlay();
     this.updateGizmo();
     this.callbacks.onSelectionChange?.();
@@ -1256,6 +1419,23 @@ export class MapViewport extends ViewportCore {
     this.callbacks.onHover?.(point ? `point ${point}` : i !== null ? `${this.instances[i].kind} ${this.instances[i].model} · ${p}` : p);
   };
 
+  // A click on a marker: an action icon selects its prop, an objective flag tells the page. True when one was hit.
+  private markerPick(e: PointerEvent): boolean {
+    const sprite = this.markerAt(e.clientX, e.clientY);
+    if (!sprite) { return false; }
+    const pick = sprite.userData['marker'] as MarkerPick;
+    if (pick.kind === 'action') {
+      const shown = (sprite.userData['instances'] as number[]).find(i => this.instanceVisible(i) && this.selectable(i)) ?? pick.instance;
+      this.selected.clear(); this.selectedPoint = null;
+      if (shown >= 0) { this.selected.add(shown); }
+      this.selectionChanged();
+      this.callbacks.onMarkerPick?.({ ...pick, instance: shown });
+    } else {
+      this.callbacks.onMarkerPick?.(pick);
+    }
+    return true;
+  }
+
   // Double-click a prop: open its model in the Model Editor.
   private readonly onDoubleClick = (e: MouseEvent): void => {
     if (this.toolValue === 'place' || this.toolValue === 'paint' || this.toolValue === 'measure') { return; }
@@ -1282,6 +1462,8 @@ export class MapViewport extends ViewportCore {
         const r = this.screenRect(i, rect);
         if (r && r.maxX >= minX && r.minX <= maxX && r.maxY >= minY && r.minY <= maxY) { if (subtract) { this.selected.delete(i); } else { this.selected.add(i); } }
       });
+    } else if (this.markerPick(e)) {
+      return;
     } else {
       const h = this.hit(e.clientX, e.clientY);
       const point = h ? this.pointOf(h) : null;

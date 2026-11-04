@@ -15,6 +15,7 @@ All values are little-endian. Offsets are in hex. "Confirmed in game" means a fi
 | [Clutter](clutter.md) | `CLUTTER.ZAR` placements | `Geo/ClutterFile.cs` |
 | [AI maps and points](aimaps.md) | `AIMAPS.MPS` grids, spawns and waypoints | `MPS/MpsFile.cs`, `MPS/MapPoints.cs` |
 | [RDR tables](rdr.md) | `.rdr` typed tables (READERM.ZAR, ZWEAPON …) | `RDR/RdrFile.cs` |
+| [Map mission tables](map-tables.md) | What READERM.ZAR's tables mean: objectives, actors, mission settings, world settings, valves | `Services/AssetService.MapTables.cs`, `RDR/RdrDocument.cs` |
 | [Animations](animations.md) | Motion clips (MOTION_S / MOTION_P) and ZANIM effect scripts | `Anim/MotionClip.cs`, `Anim/ZanimFile.cs` |
 
 ## Conventions used throughout

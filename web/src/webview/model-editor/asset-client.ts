@@ -181,12 +181,46 @@ export type ActionFields = Record<string, (string | number)[]>;
 export interface MapActions {
   revision: number;
   hasReader: boolean;
-  targets: { index: number; name: string; path: string; model: string; faces: number[] }[];
+  targets: { index: number; name: string; path: string; model: string; faces: number[]; anchor?: number[] | null }[];
   rows: ActionFields[];
   tables: string[];
   valves: string[];
   animations: string[];
   icons: string[];
+}
+
+/** A path into a mission table (field names and item numbers), as ASSET_MAP_TABLES answers it, for mapTable edits. */
+export type TablePath = Array<string | number>;
+export interface MapObjective {
+  row: number; path: TablePath; name: string | null; descriptions: string[];
+  valve: string | null; displayValve: string | null; invalidValve: string | null;
+  location: [number, number] | null; animation: string | null; navPoints: string[]; secondary: boolean; subObjective: boolean;
+}
+export interface MapActor {
+  row: number; path: TablePath; name: string | null; display: string | null; character: string | null;
+  starts: Array<{ point: string; value: number | string | null }>; teams: number[];
+  flags: Array<{ name: string; values: Array<number | string | null> }>;
+  ai: Array<{ name: string; value: number | string | null }> | null;
+}
+export interface MapTables {
+  revision: number;
+  hasReader: boolean;
+  objectives: MapObjective[];
+  actors: MapActor[];
+  mission: {
+    description: string | null; satchelTimer: number | null; elevation: { min: number | null; max: number | null } | null;
+    ai: Array<{ name: string; value: number | string | null }>; valves: Array<{ index: number; name: string | null; value: number | string | null }>;
+  } | null;
+  world: {
+    record: string; metersPerUnit: number | null; defaultMaterial: string | null; nightMission: number | null; nightVision: number[] | null;
+    shadow: number[] | null; ambient: number[] | null; lights: Array<{ name: string; rgb: number[] | null; dir: number[] | null; active: boolean }>;
+    clip: number[] | null; fog: { enabled: boolean; range: number[] | null; rgb: number[] | null } | null;
+  } | null;
+  extents: { min: number[] | null; max: number[] | null; floors: number | null } | null;
+  cams: Array<{ id: string | null; description: string | null; animation: string | null }>;
+  valves: Array<{ name: string | null; id: number | null; value: number | null }>;
+  /** In-game text of the message keys used above. */
+  texts: Record<string, string>;
 }
 
 export class AssetClient {
@@ -237,6 +271,7 @@ export class AssetClient {
 
   mapPoints(): Promise<{ points: MapPointWire[] }> { return this.call('ASSET_MAP_POINTS'); }
   mapActions(): Promise<MapActions> { return this.call('ASSET_MAP_ACTIONS'); }
+  mapTables(): Promise<MapTables> { return this.call('ASSET_MAP_TABLES'); }
 
   validate(vramBudget?: number): Promise<MapValidation> { return this.withJson('ASSET_VALIDATE', { vramBudget }); }
 

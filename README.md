@@ -199,7 +199,11 @@ Opening the app starts the local server when needed. If MapBuilder is already ru
 
 ### Editing map actions
 
-Open a SOCOM II map, select a placed object, and choose **Actions** in the Map Builder inspector. You can also choose a named GEO node directly, including the parent of a visible door. Choose **New binding** to add an action, or select a row under **Map actions** to edit its prompt icon, valve, animation, range, and other fields. **Placement actions…** in the Model Editor opens the map inspector filtered by model. Use **File → Save copy…** to write the edited map.
+Props with actions show an icon above them in the 3D view (one icon per kind: door, switch, pick up, plant charge, bomb, defuse, breach), including doors and breach points whose geometry is part of the world model. Click an icon, or select a prop, and the **Actions** tab opens on it. The tab says in plain words what an action is, shows the prop's actions as chips, and edits one in groups: *what the player does* (pick the kind by its icon), *prompt* (icon with preview, reach distance), *what happens* (mission valve, map animations, works only once) and *advanced*. A new action starts from what the map's other actions of that kind use; fields are checked as you type (whole numbers, a valve or animation the map lacks, a name several placements share). All the map's actions are listed by kind below. View › **Action icons** turns the icons off (remembered). **Placement actions…** in the Model Editor opens the map inspector filtered by model. Use **File → Save copy…** to write the edited map.
+
+### Mission tables
+
+The **Mission** tab reads the map's READERM.ZAR tables ([format](docs/formats/map-tables.md)): HUD objectives with their in-game text (titles and briefing lines editable), their map location (editable, and drawn as flags in 3D: View › **Objective flags**), valves and nav points; the actors who start on the map (display name, character, start points, teams) with their AI accuracy, courage and surrender; mission settings (AI respawn and recycle values, satchel timer) and the **weapons available** in the mission (its `Enable_*` valves) as checkboxes; and, read-only, the world's lighting, fog, draw distance and the map extents. Every change is one undo step. The MCP reads the same with `assets_map_tables` and changes it with `assets_edit mapTable` / `mapText`.
 
 The same tab offers experimental climb and ladder surfaces and links to the map's mission tables. The disc inventory and limits of the traversal presets are recorded in [Map interactions](docs/map-interactions.md).
 
@@ -282,7 +286,7 @@ The AI works on the same asset sessions as the pages, so you watch it work: the 
 | Tools | Do |
 |---|---|
 | `assets_open`, `assets_sessions`, `assets_status` | Open or join a package session |
-| `assets_list_models`, `assets_describe_model`, `assets_model_mesh`, `assets_list_textures`, `assets_list_palettes`, `assets_texture` (as an image), `assets_map_scene`, `assets_map_points`, `assets_list_animations`, `assets_animation`, `assets_weapons` | Read |
+| `assets_list_models`, `assets_describe_model`, `assets_model_mesh`, `assets_list_textures`, `assets_list_palettes`, `assets_texture` (as an image), `assets_map_scene`, `assets_map_points`, `assets_map_tables`, `assets_list_animations`, `assets_animation`, `assets_weapons` | Read |
 | `assets_effects`, `assets_weapon_fx` | Read ZANIM effects and what firing a weapon plays |
 | `viewer_list`, `viewer_preview`, `viewer_edit`, `viewer_extract` | Browse any folder, file or archive record as the Asset Viewer does, read its typed preview (RDR subtrees, AI maps, GEO scene nodes, clutter pages, ZANIM effects decoded, palettes), change it in place (RDR values and list items, AI map headers, text, bytes, pictures, icon.sys, GEO nparams / model references, ZANIM fields and words) and copy a record out; edits are undone and saved with `assets_undo` / `assets_save` on the session `viewer_edit` answers. Palettes and clutter change with `assets_edit` (`setPalette`, `moveClutter` …) |
 | `assets_edit` (every `ASSET_EDIT` op; `dryRun: true` previews one without changing anything), `assets_undo`, `assets_redo`, `assets_save`, `assets_close` | Change, save and close |
