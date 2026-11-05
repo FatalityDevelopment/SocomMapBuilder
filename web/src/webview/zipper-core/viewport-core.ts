@@ -39,6 +39,7 @@ export interface MaterialSpec {
   texture: string | null;
   materialBlend: boolean | null;
   colors: Uint8Array | null;
+  waterMotion?: Float32Array;
   // A see-through map effect drawn after the terrain, e.g. a sheet of fog.
   translucentEffect?: boolean;
   // Its reverse side already has an authored face with its own lighting and UVs.
@@ -295,7 +296,7 @@ export abstract class ViewportCore {
     // Scene-lit: characters always (the game lights them), everything in studio, and baked chunks that carry no colours.
     const lit = shading === 'textured' && (!!spec.lit || this.lighting === 'studio' || (this.lighting === 'baked' && !spec.colors));
     const side = this.backfaces && !spec.frontOnly ? THREE.DoubleSide : THREE.FrontSide;
-    const key = `${shading}|${this.lighting}|${side}|${spec.texture ?? ''}|${blended}|${lit}|${!!spec.translucentEffect}`;
+    const key = `${shading}|${this.lighting}|${side}|${spec.texture ?? ''}|${blended}|${lit}|${!!spec.translucentEffect}|${!!spec.waterMotion}`;
     const hit = this.materials.get(key);
     if (hit) { return hit; }
     let mat: THREE.Material;
@@ -330,6 +331,7 @@ export abstract class ViewportCore {
         alphaTest,
       });
     }
+    if (shading === 'textured' && t && spec.waterMotion) { animateWater(mat); }
     this.materials.set(key, mat);
     return mat;
   }
@@ -586,6 +588,7 @@ export abstract class ViewportCore {
 // clamped to 1), normals and triangles.
 export function chunkGeometry(chunk: ChunkSource): THREE.BufferGeometry {
   const geometry = new THREE.BufferGeometry();
+  if (chunk.waterMotion) { geometry.setAttribute('waterMotion', new THREE.BufferAttribute(chunk.waterMotion, 4)); }
   geometry.setAttribute('position', new THREE.BufferAttribute(chunk.positions.slice(), 3));
   const uv = new Float32Array(chunk.uvs.length);
   for (let i = 0; i < chunk.vertexCount; i++) { uv[i * 2] = chunk.uvs[i * 2]; uv[i * 2 + 1] = 1 - chunk.uvs[i * 2 + 1]; }
@@ -597,6 +600,29 @@ export function chunkGeometry(chunk: ChunkSource): THREE.BufferGeometry {
   if (!chunk.normals.some(v => v !== 0)) { geometry.computeVertexNormals(); }
   geometry.computeBoundingSphere();
   return geometry;
+}
+
+// Preview the WATER.DAT flow vector and both wave strengths at each fragment. The game stores only
+// corner values, so subdivision on the CPU would add vertices across kilometres of ocean.
+function animateWater(material: THREE.Material): void {
+  material.onBeforeCompile = shader => {
+    shader.uniforms.waterTime = { get value() { return performance.now() / 1000; } };
+    shader.vertexShader = 'attribute vec4 waterMotion;\nvarying vec4 vWaterMotion;\n' +
+      shader.vertexShader.replace('#include <begin_vertex>', '#include <begin_vertex>\nvWaterMotion = waterMotion;');
+    shader.fragmentShader = 'varying vec4 vWaterMotion;\nuniform float waterTime;\n' +
+      shader.fragmentShader.replace('#include <map_fragment>', `
+        vec2 uv = vMapUv;
+        // Large swells and fine ripples have independent strengths; calm pools retain their static UVs.
+        uv += 0.045 * vWaterMotion.z * vec2(sin(uv.y * 2.0 + waterTime), cos(uv.x * 2.0 - waterTime));
+        uv += 0.012 * vWaterMotion.w * vec2(cos(uv.y * 8.0 - waterTime * 1.7), sin(uv.x * 8.0 + waterTime * 1.7));
+        // Crossfade two short flow cycles to keep velocity gradients from stretching the texture over time.
+        vec2 flow = vec2(-vWaterMotion.x, vWaterMotion.y) * 0.25;
+        float phase = fract(waterTime / 8.0);
+        vec4 a = texture2D(map, uv + flow * phase);
+        vec4 b = texture2D(map, uv + flow * fract(phase + 0.5));
+        diffuseColor *= mix(a, b, abs(2.0 * phase - 1.0));
+      `);
+  };
 }
 
 export function colorArray(chunk: { vertexCount: number; colors: Uint8Array | null }): Float32Array {

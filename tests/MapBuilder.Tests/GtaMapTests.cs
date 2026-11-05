@@ -60,6 +60,22 @@ public sealed class GtaMapTests
     }
 
     [Fact]
+    public void Area_clipping_interpolates_water_flow_and_wave_strengths()
+    {
+        GtaPackage.WaterVertex[] poly =
+        {
+            new(new(0, 0, 2), new(0, 0), new(1, 0)),
+            new(new(10, 0, 4), new(2, -4), new(0, 0.5f)),
+            new(new(0, 10, 2), new(0, 0), new(1, 0)),
+        };
+        var clipped = GtaPackage.ClipWater(poly, -1, -1, 5, 11);
+        var shore = Assert.Single(clipped, p => p.Position.X == 5 && p.Position.Y == 0);
+        Assert.Equal(3f, shore.Position.Z);
+        Assert.Equal(new System.Numerics.Vector2(1, -2), shore.Flow);
+        Assert.Equal(new System.Numerics.Vector2(0.5f, 0.25f), shore.Wave);
+    }
+
+    [Fact]
     public void Retail_placements_resolve_to_models_and_group_into_areas()
     {
         string? root = Environment.GetEnvironmentVariable("MAPBUILDER_GTA_DISC");
@@ -119,11 +135,22 @@ public sealed class GtaMapTests
             Assert.Contains(instances, i => i.GetProperty("model").GetString() == "carlshou1_lae2");
             // Every drawn source names a model the session's ASSET_MODEL_MESH can build.
             var sample = instances.Select(i => i.GetProperty("source").GetString()!).Distinct().Take(25).ToList();
+            int batchSize = scene.GetProperty("meshBatchSize").GetInt32();
+            string[] grouped = sample.Take(batchSize - 1).Append("GTA3.IMG:__missing_model__").ToArray();
+            CommandMessage Batch(string[] sources) => new() { Command = "ASSET_MODEL_MESH_BATCH", AssetSession = session,
+                AssetJson = System.Text.Json.JsonSerializer.Serialize(new { sources }) };
+            var batch = b.Ok(Batch(grouped));
+            Assert.Equal(grouped.Length, batch.GetArrayLength());
+            Assert.Equal(grouped, batch.EnumerateArray().Select(x => x.GetProperty("source").GetString()));
+            Assert.False(string.IsNullOrEmpty(batch[grouped.Length - 1].GetProperty("error").GetString()));
+            b.Fails(Batch(Enumerable.Repeat(sample[0], batchSize + 1).ToArray()));
             foreach (string source in sample)
             {
                 int cut = source.IndexOf(':');
                 var mesh = b.Ok(new CommandMessage { Command = "ASSET_MODEL_MESH", AssetSession = session, AssetArchive = source[..cut], AssetName = source[(cut + 1)..] });
                 Assert.True(mesh.GetProperty("chunks").GetArrayLength() > 0, source);
+                int index = Array.IndexOf(grouped, source);
+                if (index >= 0) Assert.Equal(mesh.GetRawText(), batch[index].GetProperty("mesh").GetRawText());
             }
             int detail = scene.GetProperty("counts").GetProperty("placement").GetInt32(), distant = scene.GetProperty("counts").GetProperty("distant LOD").GetInt32();
             _out.WriteLine($"LAE2: {detail} placements, {distant} distant LOD blocks, {sample.Count} meshes checked");
@@ -132,6 +159,20 @@ public sealed class GtaMapTests
             var water = Assert.Single(instances, i => i.GetProperty("model").GetString() == "water").GetProperty("source").GetString()!;
             var waterMesh = b.Ok(new CommandMessage { Command = "ASSET_MODEL_MESH", AssetSession = session, AssetArchive = water[..water.IndexOf(':')], AssetName = water[(water.IndexOf(':') + 1)..] });
             Assert.True(waterMesh.GetProperty("chunks")[0].GetProperty("triangles").GetString()!.Length > 0);
+            var waterChunk = waterMesh.GetProperty("chunks")[0];
+            Assert.Equal("MODELS|particle/waterclear256", waterChunk.GetProperty("texture").GetString());
+            Assert.Equal(waterChunk.GetProperty("vertexCount").GetInt32() * 4 * sizeof(float),
+                waterChunk.GetProperty("waterMotion").GetBytesFromBase64().Length);
+            var tex = b.Ok(new CommandMessage { Command = "ASSET_TEXTURE", AssetSession = session, AssetName = waterChunk.GetProperty("texture").GetString() });
+            Assert.NotEmpty(tex.GetProperty("png").GetString()!);
+
+            Assert.Equal(12, scene.GetProperty("hour").GetInt32());
+            var night = b.Ok(new CommandMessage { Command = "ASSET_MAP_SCENE", AssetSession = session, AssetJson = "{\"hour\":0}" });
+            static bool NightLights(System.Text.Json.JsonElement i) =>
+                i.GetProperty("model").GetString()!.StartsWith("nitelites", StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain(instances, NightLights);
+            Assert.Contains(night.GetProperty("instances").EnumerateArray(), NightLights);
+            b.Fails(new CommandMessage { Command = "ASSET_MAP_SCENE", AssetSession = session, AssetJson = "{\"hour\":24}" });
 
             b.Ok(new CommandMessage { Command = "ASSET_MAP_POINTS", AssetSession = session, AssetJson = "{\"mission\":\"vegase\"}" });
             Assert.Equal("vegase", b.Status(session).GetProperty("mission").GetString());
@@ -150,6 +191,49 @@ public sealed class GtaMapTests
             Assert.True(la.Count(i => i.GetProperty("position")[0].GetSingle() > 0 && i.GetProperty("position")[2].GetSingle() > 0) > la.Count * 0.95);
         }
         finally { b.Close(session); }
+    }
+
+    [Fact]
+    public void Retail_distant_model_follows_only_its_sole_owner_and_undo_restores_it()
+    {
+        string? root = Environment.GetEnvironmentVariable("MAPBUILDER_GTA_DISC");
+        if (string.IsNullOrEmpty(root)) return;
+        var pkg = GtaPackage.Open(root);
+        var links = pkg.Placements.Where(p => p.Zone == "lae2" && p.LodRow >= 0).GroupBy(p => p.LodRow).ToList();
+        var b = new Backend();
+        string session = b.Open(root);
+        try
+        {
+            foreach (bool shared in new[] { false, true })
+            {
+                var group = links.First(g => (g.Count() > 1) == shared
+                    && g.All(p => !p.IsLod && !p.IsInterior && p.Model != null)
+                    && pkg.LodOf(g.First()) is { IsInterior: false, Model: not null });
+                var owner = group.First();
+                var lod = pkg.LodOf(owner)!;
+                static string Id(GtaPackage.Placement p) => $"{p.Zone}:{Path.GetFileNameWithoutExtension(p.File)}:{p.Row}";
+                var delta = CodeDesigner.Ps2.FileFormats.Assets.Matrix4.Compose(5, 3, -7, 90);
+                var moved = CodeDesigner.Ps2.FileFormats.Assets.Matrix4.Multiply(delta, owner.Matrix);
+                Switch("lae2");
+                var result = b.Edit(session, new { op = "moveInstance", instance = Id(owner), matrix = moved });
+                Assert.Equal(shared, result.GetProperty("warnings").GetArrayLength() > 0);
+                Switch("lod-la");
+                var expected = shared ? lod.Matrix : CodeDesigner.Ps2.FileFormats.Assets.Matrix4.Multiply(delta, lod.Matrix);
+                var actual = ReadLod();
+                for (int i = 0; i < 16; ++i) Assert.InRange(Math.Abs(expected[i] - actual[i]), 0f, 0.003f);
+                b.Undo(session);
+                Assert.Equal(lod.Matrix, ReadLod());
+                Assert.Empty(b.Status(session).GetProperty("dirty").EnumerateArray());
+
+                float[] ReadLod() => FullScene(b, session).GetProperty("instances").EnumerateArray()
+                    .Single(i => i.GetProperty("instance").GetString() == Id(lod))
+                    .GetProperty("matrix").EnumerateArray().Select(n => n.GetSingle()).ToArray();
+            }
+        }
+        finally { b.Close(session); }
+
+        void Switch(string mission) => b.Ok(new CommandMessage { Command = "ASSET_MAP_POINTS", AssetSession = session,
+            AssetJson = System.Text.Json.JsonSerializer.Serialize(new { mission }) });
     }
 
     [Fact]
@@ -177,8 +261,8 @@ public sealed class GtaMapTests
             float[] turned = { 0, 0, -1, 0, 0, 1, 0, 0, 1, 0, 0, 0, houseBefore[12] + 5, houseBefore[13], houseBefore[14], 1 };
             var textPos = new[] { Matrix(text)[12], Matrix(text)[13] + 3, Matrix(text)[14] };
             var edit = b.Edit(session, new { op = "batch", ops = new object[] {
-                new { op = "moveInstance", instance = houseId, matrix = turned },
-                new { op = "moveInstance", instance = textId, position = textPos } } });
+                new { op = "moveInstance", instance = houseId, matrix = turned, followLod = false },
+                new { op = "moveInstance", instance = textId, position = textPos, followLod = false } } });
             Assert.Equal(2, edit.GetProperty("changed").GetArrayLength());
             var dirty = b.Status(session).GetProperty("dirty").EnumerateArray().Select(d => d.GetString()!).ToList();
             Assert.Contains("GTA3.IMG/lae2_stream5.ipl", dirty);

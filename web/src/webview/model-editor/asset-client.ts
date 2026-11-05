@@ -3,6 +3,7 @@
 // (CodeDesigner's copy of this file posts the same commands to the VS Code extension instead.)
 
 import { command as postCommand } from '../../api/client';
+import type { MeshWire } from './mesh-data';
 
 export interface SessionStatus {
   session: string;
@@ -32,6 +33,7 @@ export interface SessionStatus {
 export interface MissionSummary { id: string; kind: string; mode: string; label?: string }
 
 export interface ModelSummary {
+  canPlace?: boolean;
   archive: string;
   name: string;
   kind: string;
@@ -151,6 +153,7 @@ export interface MapValidation {
 }
 
 export interface MapSceneResult {
+  meshBatchSize?: number;
   sceneNamespace: string;
   counts: Record<string, number>;
   returned: number;
@@ -327,8 +330,12 @@ export class AssetClient {
     return this.call('ASSET_MODEL_MESH', { AssetArchive: archive, AssetName: name, AssetJson: JSON.stringify({ arrays: true }) });
   }
 
+  meshBatch(sources: string[]): Promise<Array<{ source: string; mesh: MeshWire | null; error: string | null }>> {
+    return this.withJson('ASSET_MODEL_MESH_BATCH', { sources });
+  }
+
   // The composed map: worldmodel, GEO references, sky and clutter placements (model space).
-  mapScene(filter: { kind?: string; query?: string; limit?: number; includeUnresolved?: boolean } = {}): Promise<MapSceneResult> {
+  mapScene(filter: { kind?: string; query?: string; limit?: number; includeUnresolved?: boolean; hour?: number } = {}): Promise<MapSceneResult> {
     return this.withJson('ASSET_MAP_SCENE', { limit: 100000, ...filter });
   }
 

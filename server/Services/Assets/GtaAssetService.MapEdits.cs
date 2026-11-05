@@ -11,10 +11,10 @@ namespace MapBuilder.Server.Services.Assets
     /// </summary>
     internal static partial class GtaAssetService
     {
-        internal sealed record Move(string File, int Row, float[] Before, float[] After);
+        internal sealed record Move(string File, int Row, GtaPackage.Placement? Before, GtaPackage.Placement? After);
 
         private static bool IsMapOp(JsonElement op) =>
-            op.TryGetProperty("op", out var o) && o.GetString() is "moveInstance" or "batch";
+            op.TryGetProperty("op", out var o) && o.GetString() is "moveInstance" or "placeInstance" or "deleteInstance" or "batch";
 
         private static string Str(JsonElement e, string key) => e.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString()! : "";
 
@@ -35,60 +35,111 @@ namespace MapBuilder.Server.Services.Assets
                 ?? throw new KeyNotFoundException($"No placement {id}");
         }
 
+        private static string InstanceId(GtaPackage.Placement p) => $"{p.Zone}:{Path.GetFileNameWithoutExtension(p.File)}:{p.Row}";
+
+        private static float[] ReadPlacementMatrix(JsonElement op, float[]? from = null)
+        {
+            if (op.TryGetProperty("scale", out var sc) && (!sc.TryGetSingle(out var scale) || !float.IsFinite(scale) || Math.Abs(scale - 1) > .001f))
+                throw new NotSupportedException("GTA placements cannot be scaled (IPLs store a position and a rotation).");
+            if (Vec(op, "matrix", 16) is { } matrix) return matrix;
+            var position = Vec(op, "position", 3) ?? throw new ArgumentException("Supply a placement matrix or position.");
+            var m = from == null ? CodeDesigner.Ps2.FileFormats.Assets.Matrix4.Identity() : (float[])from.Clone();
+            if (op.TryGetProperty("yaw", out var heading))
+            {
+                var rad = heading.GetSingle() * (MathF.PI / 180);
+                m = CodeDesigner.Ps2.FileFormats.Assets.Matrix4.Identity();
+                m[0] = m[10] = MathF.Cos(rad); m[8] = MathF.Sin(rad); m[2] = -m[8];
+            }
+            m[12] = position[0]; m[13] = position[1]; m[14] = position[2];
+            return m;
+        }
+
         private static object MapEdit(Session s, JsonElement a)
         {
             if (!HasMap(s)) throw new InvalidOperationException("Open the GTA: San Andreas disc (or its mounted folder) to edit the map.");
             if (a.TryGetProperty("revision", out var rev) && rev.ValueKind == JsonValueKind.Number && rev.GetInt32() != s.Revision)
                 throw new InvalidOperationException("The map changed. Refresh before applying this edit.");
             var ops = Str(a, "op") == "batch"
-                ? (a.TryGetProperty("ops", out var list) && list.ValueKind == JsonValueKind.Array ? list.EnumerateArray().ToList() : throw new ArgumentException("\"ops\" (an array) is required"))
+                ? (a.TryGetProperty("ops", out var list) && list.ValueKind == JsonValueKind.Array ? list.EnumerateArray().ToList() : throw new ArgumentException("Supply an ops array."))
                 : new List<JsonElement> { a };
             var moves = new List<Move>();
             var warnings = new List<string>();
+            var results = new List<object>();
+            var explicitMoves = ops.Where(op => Str(op, "op") == "moveInstance").Select(op => Str(op, "instance")).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var explicitDeletes = ops.Where(op => Str(op, "op") == "deleteInstance").Select(op => Str(op, "instance")).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            string? newInstance = null;
             try
             {
                 foreach (var op in ops)
                 {
-                    if (Str(op, "op") != "moveInstance")
-                        throw new NotSupportedException($"GTA maps support moveInstance (and batches of it). '{Str(op, "op")}' is unavailable: placements cannot be added or deleted yet.");
-                    var p = FindPlacement(s, Str(op, "instance") is { Length: > 0 } id ? id : throw new ArgumentException("\"instance\" (an id from the map scene) is required"));
-                    float[] after;
-                    if (Vec(op, "matrix", 16) is { } m) after = m;
-                    else if (Vec(op, "position", 3) is { } pos) { after = (float[])p.Matrix.Clone(); after[12] = pos[0]; after[13] = pos[1]; after[14] = pos[2]; }
-                    else throw new ArgumentException("moveInstance needs \"matrix\" or \"position\"");
-                    if (op.TryGetProperty("scale", out var sc) && sc.ValueKind == JsonValueKind.Number && Math.Abs(sc.GetSingle() - 1) > 1e-3)
-                        throw new NotSupportedException("GTA placements cannot be scaled (IPLs store a position and a rotation).");
-                    var moved = s.Package.MovePlacement(p.File, p.Row, after);
-                    if (s.Package.LodOf(p) is { Model: { } lod })
-                        warnings.Add($"{p.Name}'s low-detail model {lod.Name} stays where it was; the game shows it from a distance.");
-                    moves.Add(new Move(p.File, p.Row, p.Matrix, moved.Matrix));
+                    switch (Str(op, "op"))
+                    {
+                        case "placeInstance":
+                            var model = Find(s, Str(op, "model"), op.TryGetProperty("archive", out var ar) ? ar.GetString() : null);
+                            var template = Str(op, "templateInstance") is { Length: > 0 } id ? FindPlacement(s, id) : null;
+                            var added = s.Package.AddPlacement(CurrentArea(s)!, model, ReadPlacementMatrix(op), template);
+                            moves.Add(new Move(added.File, added.Row, null, added));
+                            newInstance = InstanceId(added);
+                            results.Add(new { newInstance });
+                            break;
+                        case "moveInstance":
+                            var p = FindPlacement(s, Str(op, "instance"));
+                            var moved = s.Package.MovePlacement(p.File, p.Row, ReadPlacementMatrix(op, p.Matrix));
+                            moves.Add(new Move(p.File, p.Row, p, moved));
+                            if (!op.TryGetProperty("followLod", out var follow) || follow.ValueKind != JsonValueKind.False)
+                                MaybeMoveLod(s, p, moved, moves, warnings, explicitMoves);
+                            results.Add(new { instance = InstanceId(moved) });
+                            break;
+                        case "deleteInstance":
+                            var removed = FindPlacement(s, Str(op, "instance"));
+                            var lod = s.Package.LodOf(removed);
+                            Remove(removed);
+                            // Remove the now-orphaned stand-in as well. Shared LODs still serve other buildings.
+                            if (lod != null && !lod.IsLod && !explicitDeletes.Contains(InstanceId(lod))) Remove(lod);
+                            results.Add(new { instance = InstanceId(removed) });
+                            break;
+                        default: throw new NotSupportedException($"Unsupported GTA map edit: {Str(op, "op")}");
+                    }
                 }
             }
             catch
             {
-                for (int i = moves.Count - 1; i >= 0; i--) s.Package.MovePlacement(moves[i].File, moves[i].Row, moves[i].Before);
+                Replay(s, moves, true);
                 throw;
             }
-            string description = Str(a, "label") is { Length: > 0 } l ? l : moves.Count == 1 ? $"move {Path.GetFileNameWithoutExtension(moves[0].File)}#{moves[0].Row}" : $"move {moves.Count} placements";
-            var changed = moves.Select(m => s.Package.PlacementFileLabel(m.File)).Distinct().ToArray();
+            string description = Str(a, "label") is { Length: > 0 } l ? l : ops.Count == 1 ? Str(ops[0], "op") : $"edit {ops.Count} placements";
+            string[] changed = moves.Select(m => s.Package.PlacementFileLabel(m.File)).Distinct().ToArray();
             if (a.TryGetProperty("dryRun", out var dry) && dry.ValueKind == JsonValueKind.True)
             {
-                for (int i = moves.Count - 1; i >= 0; i--) s.Package.MovePlacement(moves[i].File, moves[i].Row, moves[i].Before);
+                Replay(s, moves, true);
                 return new { dryRun = true, wouldDo = new { description, changed, warnings } };
             }
             if (moves.Count > 0)
             {
                 s.Undo.Push(new Step(null, description, null, null, moves));
                 s.Redo.Clear();
+                s.Overviews = null;
                 s.Revision++;
             }
-            return new { revision = s.Revision, description, changed, warnings = warnings.Distinct().ToArray() };
+            return new { revision = s.Revision, description, changed, warnings = warnings.Distinct().ToArray(), newInstance, results };
+
+            void Remove(GtaPackage.Placement row)
+            {
+                s.Package.SetPlacement(row.File, row.Row, null);
+                moves.Add(new Move(row.File, row.Row, row, null));
+            }
+        }
+
+        private static void Replay(Session s, IReadOnlyList<Move> moves, bool undo)
+        {
+            foreach (var m in undo ? moves.Reverse() : moves)
+                s.Package.SetPlacement(m.File, m.Row, undo ? m.Before : m.After);
+            s.Overviews = null;
         }
 
         private static void ApplyMoves(Session s, IReadOnlyList<Move> moves, bool undo)
         {
-            var order = undo ? moves.Reverse() : moves;
-            foreach (var m in order) s.Package.MovePlacement(m.File, m.Row, undo ? m.Before : m.After);
+            Replay(s, moves, undo);
             s.Revision++;
         }
 

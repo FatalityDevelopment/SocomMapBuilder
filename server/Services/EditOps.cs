@@ -97,14 +97,17 @@ namespace MapBuilder.Server.Services
             new("moveClutter", "Move a clutter placement.", new[] { "clutterIndex" }, With(Placement, Int("clutterIndex", "From assets_map_scene.", 0))),
             new("addClutter", "Add a clutter placement (answers newClutterIndex).", new[] { "model" }, With(Placement, F("model", "string", "A package model."))),
             new("deleteClutter", "Remove a clutter placement.", new[] { "clutterIndex" }, new[] { Int("clutterIndex", "From assets_map_scene.", 0) }),
-            new("moveInstance", "Move a placed scene node in world space. Supply its geoIndex, or its instance id for Combined Assault.", Array.Empty<string>(),
-                With(Placement, Int("geoIndex", "From assets_map_scene.", 0), F("instance", "string", "CA instance id from assets_map_scene."), Scene, CaRevision)),
+            new("moveInstance", "Move a scene node by geoIndex or a CA/GTA placement by instance id.", Array.Empty<string>(),
+                With(Placement, Int("geoIndex", "From assets_map_scene.", 0), F("instance", "string", "CA or GTA instance id from assets_map_scene."), Scene, CaRevision,
+                    F("followLod", "boolean", "GTA: move a dedicated low-detail placement too (default true)."))),
             new("duplicateInstance", "Copy a scene node as a sibling (answers newGeoIndex).", new[] { "geoIndex" },
                 With(Placement, Int("geoIndex", "From assets_map_scene.", 0), Scene, F("name", "string", "Name of the copy."))),
             new("placeInstance", "Place any package model as a new reference, copied from the nearest placed one (answers newGeoIndex).", new[] { "model" },
                 With(Placement, F("model", "string", "A package model."), F("name", "string", "Name of the new node."),
-                    Int("templateGeoIndex", "The placed reference to copy (default: the nearest).", 0), Scene)),
-            new("deleteInstance", "Remove a scene node (never the worldmodel).", new[] { "geoIndex" }, new[] { Int("geoIndex", "From assets_map_scene.", 0), Scene }),
+                    Int("templateGeoIndex", "The placed reference to copy (default: the nearest).", 0), Scene, CaRevision,
+                    F("archive", "string", "GTA IMG containing the prop."), F("templateInstance", "string", "GTA placement whose IPL and interior to use."))),
+            new("deleteInstance", "Remove a scene node by geoIndex or a GTA placement by instance id.", Array.Empty<string>(),
+                new[] { Int("geoIndex", "From assets_map_scene.", 0), F("instance", "string", "GTA id from assets_map_scene."), Scene, CaRevision }),
             new("mapAction", "Set a named map action, or remove a row when fields is omitted.", new[] { "row", "revision" },
                 new[] { Int("row", "Row ordinal, or -1 to add."), Int("revision", "Revision from ASSET_MAP_ACTIONS."), Int("renamePlacement", "Rename this GEO reference to the new action's unique node name."), F("fields", "object", "Action keys with arrays of typed values.") }),
             new("traversalFace", "Apply a sampled traversal profile to a placed GEO face.", new[] { "geoIndex", "profile", "revision" },
@@ -260,7 +263,7 @@ namespace MapBuilder.Server.Services
                     ["properties"] = Properties(spec), ["required"] = spec.Required.Prepend("op").ToArray(),
                     ["additionalProperties"] = false,
                 };
-                if (spec.Op == "moveInstance") branch["oneOf"] = new[] { new { required = new[] { "geoIndex" } }, new { required = new[] { "instance" } } };
+                if (spec.Op is "moveInstance" or "deleteInstance") branch["oneOf"] = new[] { new { required = new[] { "geoIndex" } }, new { required = new[] { "instance" } } };
                 return branch;
             }).ToList(),
         };
@@ -278,8 +281,8 @@ namespace MapBuilder.Server.Services
                     return $"{where} {name}: unknown field \"{f.Name}\" (takes {string.Join(", ", props.Keys.Where(k => k != "op").OrderBy(k => k))})";
             foreach (string r in spec.Required)
                 if (!op.TryGetProperty(r, out var v) || v.ValueKind == JsonValueKind.Null) return $"{where} {name}: \"{r}\" is required";
-            if (name == "moveInstance" && op.TryGetProperty("geoIndex", out _) == op.TryGetProperty("instance", out _))
-                return $"{where} {name}: choose one geoIndex or CA instance id";
+            if ((name is "moveInstance" or "deleteInstance") && op.TryGetProperty("geoIndex", out _) == op.TryGetProperty("instance", out _))
+                return $"{where} {name}: choose one geoIndex or instance id";
             foreach (var f in op.EnumerateObject())
             {
                 if (f.Name == "op" || f.Value.ValueKind == JsonValueKind.Null) continue;
