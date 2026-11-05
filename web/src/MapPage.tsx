@@ -22,7 +22,7 @@ import { PropsPanel, type PropTab } from './components/PropsPanel';
 import { MapActionsPanel } from './components/MapActionsPanel';
 import { MissionPanel } from './components/MissionPanel';
 import { actionMarkers } from './viewport/actionMarkers';
-import { planFigures, weaponForValve } from './viewport/actorFigures';
+import { planFigures, weaponForValve, weaponLabel, type FigurePlan } from './viewport/actorFigures';
 import { Minimap } from './components/Minimap';
 import { actionBlipsFrom, minimapBlips, squareAround, type ImagePlacement } from './viewport/minimap';
 import type { PoseClip } from './webview/zipper-core/skinning';
@@ -137,20 +137,23 @@ export function MapPage() {
   const [actionMarkersOn, setActionMarkersOn] = useState(initialPreferences.actionMarkers);
   const [objectiveMarkersOn, setObjectiveMarkersOn] = useState(initialPreferences.objectiveMarkers);
   const [figuresOn, setFiguresOn] = useState(initialPreferences.actorFigures);
+  // How each actor is drawn (by actor name), for the Mission tab.
+  const [figurePlans, setFigurePlans] = useState<FigurePlan[]>([]);
   // The HUD minimap: the game's radar art and tactical map (ASSET_MAP_HUD), and a top-down render for maps without one.
   const [minimapOn, setMinimapOn] = useState(initialPreferences.minimap);
   const [minimapRange, setMinimapRange] = useState(initialPreferences.minimapRange);
   const [hud, setHud] = useState<MapHud | null>(null);
   const [topDown, setTopDown] = useState<{ url: string; placement: ImagePlacement } | null>(null);
-  // Stand-in weapons for non-SEAL character types (view only; this viewer's browser): chartype -> "archive:name".
+  // Weapons the user picked for character types instead of their loadout's (view only; this viewer's browser):
+  // chartype -> "archive:name", or "none". The key is new: picks stored under the old key were stand-ins for missing loadouts.
   const [actorWeapons, setActorWeapons] = useState<Record<string, string>>(() => {
-    try { return JSON.parse(localStorage.getItem('mapbuilder.actorWeapons') ?? '{}') as Record<string, string>; } catch { return {}; }
+    try { return JSON.parse(localStorage.getItem('mapbuilder.actorWeaponPicks') ?? '{}') as Record<string, string>; } catch { return {}; }
   });
   const chooseActorWeapon = (chartype: string, source: string) => {
     const next = { ...actorWeapons, [chartype]: source };
     if (!source) { delete next[chartype]; }
     setActorWeapons(next);
-    try { localStorage.setItem('mapbuilder.actorWeapons', JSON.stringify(next)); } catch { /* storage unavailable */ }
+    try { localStorage.setItem('mapbuilder.actorWeaponPicks', JSON.stringify(next)); } catch { /* storage unavailable */ }
   };
   const clipListRef = useRef<{ session: string; clips: Map<string, string> } | null>(null);
   const poseCacheRef = useRef(new Map<string, PoseClip | null>());
@@ -325,12 +328,12 @@ export function MapPage() {
   }, [tables, instances]);
   useEffect(() => { viewportRef.current?.setSelectedObjective(selectedObjective); }, [selectedObjective]);
   const weaponModels = useMemo(() => models.filter(m => m.kind === 'weapon').map(m => `${m.archive}:${m.name}`), [models]);
-  // Actors as characters at their start points, posed by a standing clip, holding a stand-in weapon.
+  // Actors as characters at their start points, posed by a standing clip, holding their chartype's weapon.
   useEffect(() => {
     let live = true;
     const vp = viewportRef.current;
     const session = status?.session;
-    if (!vp || !session || !tables || !figuresOn) { vp?.setActorFigures([]); return; }
+    if (!vp || !session || !tables || !figuresOn) { vp?.setActorFigures([]); setFigurePlans([]); return; }
     void (async () => {
       try {
         if (clipListRef.current?.session !== session) {
@@ -341,7 +344,9 @@ export function MapPage() {
         const clips = clipListRef.current.clips;
         const armory = (tables.mission?.valves ?? []).filter(v => v.name?.startsWith('Enable') && v.value === 1)
           .map(v => weaponForValve(v.name!, weaponModels)).filter((m): m is string => !!m);
-        const plans = planFigures(tables.actors, points.map(p => p.name), { clips: [...clips.keys()], armory, chosen: actorWeapons });
+        const plans = planFigures(tables.actors, points, { clips: [...clips.keys()], armory, chosen: actorWeapons,
+          multiplayer: /^mp\d/i.test(status?.mapNamespace ?? '') });
+        if (live) { setFigurePlans(plans); }
         const figures = await Promise.all(plans.map(async plan => {
           const [character, weapon] = await Promise.all([loadModel(plan.model), plan.weapon ? loadModel(plan.weapon) : Promise.resolve(null)]);
           let clip: PoseClip | null = null;
@@ -351,7 +356,9 @@ export function MapPage() {
             }
             clip = poseCacheRef.current.get(plan.clip) ?? null;
           }
-          return character ? { point: plan.point, character, clip, weapon } : null;
+          const actor = tables.actors.find(a => (a.name ?? a.character) === plan.actor);
+          return character ? { point: plan.point, actor: plan.actor, character, clip, weapon, weaponName: weapon ? weaponLabel(plan.weapon, actor) : null,
+            heading: plan.heading, offset: plan.offset, clipName: plan.clip } : null;
         }));
         if (live && client.session === session) { vp.setActorFigures(figures.filter((f): f is NonNullable<typeof f> => !!f)); }
       } catch (err) { if (live) { say(`Could not draw the actors: ${errText(err)}`, true); } }
@@ -1008,7 +1015,8 @@ export function MapPage() {
               <div className="me-note">Open an editable SOCOM II map to manage its actions.</div>}
             mission={status && !status.readOnly ? <MissionPanel tables={tables} error={tablesError} revision={status.revision} busy={busy || loading} edit={edit}
               path={status.path} selectedObjective={selectedObjective} onSelectObjective={row => { setSelectedObjective(row); if (row !== null) { viewportRef.current?.frameObjective(row); } }}
-              onShowObjective={showObjective} weaponModels={weaponModels} actorWeapons={actorWeapons} onChooseWeapon={chooseActorWeapon} /> :
+              onShowObjective={showObjective} weaponModels={weaponModels} actorWeapons={actorWeapons} onChooseWeapon={chooseActorWeapon} figures={figurePlans}
+              multiplayer={/^mp\d/i.test(status.mapNamespace ?? '')} /> :
               <div className="me-note">Open an editable SOCOM II map to see its mission tables.</div>}
             tab={propTab}
             setTab={setPropTab}

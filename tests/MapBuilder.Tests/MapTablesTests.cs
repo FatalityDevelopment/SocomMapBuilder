@@ -244,4 +244,89 @@ public sealed class MapTablesTests
         // The shipped list is copied next to the server.
         Assert.True(File.Exists(Path.Combine(AppContext.BaseDirectory, "data", "chartypes.tsv")));
     }
+
+    // character.rdr's layout: "characters" holds name, {fields} or name, ":", parent, {fields}; weapons are wep_name records.
+    private static byte[] Characters() => Build(L(Obj(
+        ("AngleUnits", L("DEG")),
+        ("characters", L(
+            "basic_seal", Obj(("anim_set", L("Seal anim set")), ("default_weapons", L(Obj(("wep_name", L("M4A1-M203")), ("ammo_count", L(30))), Obj(("wep_name", L("M67")))))),
+            "jungle_A51", ":", "basic_seal", Obj(("strength", L(4))),
+            "albanian_terrorist01", Obj(("anim_set", L("Guard anim set")), ("default_weapons", L(Obj(("wep_name", L("AK-47")))))),
+            "m51_terror01", ":", "albanian_terrorist01", Obj(("default_weapons", L(Obj(("wep_name", L("M67"))), Obj(("wep_name", L("9mm Sub"))), Obj(("wep_name", L("Model 18")))))),
+            "civ", ":", "albanian_terrorist01", Obj(("anim_set", L("No_weapon anim set")), ("default_weapons", L())))))));
+
+    // animset.rdr's layout: sets with includes; an anim is {type_name, anim_name} or {type_name, modes: [["default", clip], ...]}.
+    private static byte[] AnimSetTable() => Build(L(
+        Obj(("anim_set_name", L("GLOBAL")), ("anim_set_anims", L(Obj(("type_name", L("Crouch")), ("anim_name", L("seal_crouch")))))),
+        Obj(("anim_set_name", L("Seal anim set")), ("include", L("GLOBAL")),
+            ("anim_set_anims", L(Obj(("type_name", L("Stand")), ("modes", L(L("default", "seal_stand"), Obj(("ready", L("seal_stand_alert01", 0.5f))))))))),
+        Obj(("anim_set_name", L("Guard anim set")), ("include", L("GLOBAL")),
+            ("anim_set_anims", L(Obj(("type_name", L("Stand")), ("modes", L(L("default", "seal_stand"), L("suspicious", "guard_susp_search02"))))))),
+        Obj(("anim_set_name", L("No_weapon anim set")), ("include", L("GLOBAL")),
+            ("anim_set_anims", L(Obj(("type_name", L("Stand")), ("anim_name", L("civ_stand"))))))));
+
+    [Fact]
+    public void Animation_sets_give_each_chartype_its_stand_clip()
+    {
+        var sets = AnimSets.Parse(AnimSetTable());
+        var types = CharacterLoadouts.Parse(Characters());
+        Assert.Equal("Seal anim set", types.AnimSetOf("jungle_A51"));
+        Assert.Equal("seal_stand", sets.Clip(types.AnimSetOf("jungle_A51"), "Stand"));
+        // Guards idle in seal_stand too (their suspicious mode is another clip).
+        Assert.Equal("seal_stand", sets.Clip(types.AnimSetOf("m51_terror01"), "Stand"));
+        Assert.Equal("civ_stand", sets.Clip(types.AnimSetOf("civ"), "Stand"));
+        // An anim type the set lacks comes from what it includes.
+        Assert.Equal("seal_crouch", sets.Clip("Guard anim set", "Crouch"));
+        Assert.Null(sets.Clip("nobody", "Stand"));
+        Assert.Null(types.AnimSetOf("nobody"));
+    }
+
+    [Fact]
+    public void Chartype_loadouts_inherit_from_their_parent_and_hold_the_first_gun_the_package_has()
+    {
+        var loadouts = CharacterLoadouts.Parse(Characters());
+        Assert.Equal(new[] { "M4A1-M203", "M67" }, loadouts.WeaponsOf("JUNGLE_A51"));
+        Assert.Equal(new[] { "M67", "9mm Sub", "Model 18" }, loadouts.WeaponsOf("m51_terror01"));
+        Assert.Empty(loadouts.WeaponsOf("civ")!);
+        Assert.Null(loadouts.WeaponsOf("nobody"));
+
+        var models = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["grenade"] = "WEAP_MDL.ZED:grenade", ["uzi"] = "WEAP_MDL.ZED:uzi", ["glock18"] = "WEAP_MDL.ZED:glock18", ["iw80a2"] = "WEAP_MDL.ZED:iw80a2",
+        };
+        var zweapon = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["M67"] = "grenade", ["9mm Sub"] = "uzi", ["Model 18"] = "glock18", ["M4A1-M203"] = "m4Acarbine_203" };
+        var (weapons, held) = MapBuilder.Server.Services.ZipperAssetService.Loadout(loadouts.WeaponsOf("m51_terror01")!, models, n => zweapon.GetValueOrDefault(n));
+        Assert.Equal("WEAP_MDL.ZED:uzi", held); // the grenade is listed first but is not held
+        Assert.Equal(new string?[] { "WEAP_MDL.ZED:grenade", "WEAP_MDL.ZED:uzi", "WEAP_MDL.ZED:glock18" }, weapons.Select(w => w.Model));
+        // A model the package lacks: listed without a model, nothing held.
+        var (seal, sealHeld) = MapBuilder.Server.Services.ZipperAssetService.Loadout(loadouts.WeaponsOf("jungle_A51")!, models, n => zweapon.GetValueOrDefault(n));
+        Assert.Null(seal[0].Model);
+        Assert.Null(sealHeld);
+        // A name zweapon.rdr lacks goes through the alias list.
+        Assert.Equal("WEAP_MDL.ZED:iw80a2", MapBuilder.Server.Services.ZipperAssetService.Loadout(new[] { "SA-80 A2" }, models, _ => null).Held);
+    }
+
+    [Fact]
+    public void Actors_list_their_chartype_loadout_from_a_packaged_READERC()
+    {
+        var fixture = new SyntheticPackage();
+        using var _ = fixture;
+        File.WriteAllBytes(Path.Combine(fixture.Folder, "READERM.ZAR"), Zar(("vehicles.rdr", Vehicles())));
+        File.WriteAllBytes(Path.Combine(fixture.Folder, "READERC.ZAR"), Zar(("character.rdr", Characters()), ("animset.rdr", AnimSetTable())));
+        var b = new Backend();
+        string session = b.Open(fixture.WriteZdb());
+        try
+        {
+            var t = Tables(b, session);
+            Assert.Equal("READERC.ZAR", t.GetProperty("loadoutSource").GetString());
+            var actors = t.GetProperty("actors");
+            Assert.Equal(new[] { "M4A1-M203", "M67" }, actors[0].GetProperty("weapons").EnumerateArray().Select(w => w.GetProperty("name").GetString()));
+            Assert.Equal(new[] { "M67", "9mm Sub", "Model 18" }, actors[1].GetProperty("weapons").EnumerateArray().Select(w => w.GetProperty("name").GetString()));
+            Assert.Equal("Guard anim set", actors[1].GetProperty("animSet").GetString());
+            Assert.Equal("seal_stand", actors[1].GetProperty("stand").GetString());
+            // m51_terror02 is not in the table.
+            Assert.Equal(JsonValueKind.Null, actors[2].GetProperty("weapons").ValueKind);
+        }
+        finally { b.Close(session); }
+    }
 }

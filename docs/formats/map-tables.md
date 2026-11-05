@@ -63,8 +63,8 @@ A wrapper list of actor rows, each in pair form:
 |---|---|
 | `name` | Actor id (`player`, `able2`, `Road1` …); `mission.rdr`'s `UiVehicles` names the player's team by it |
 | `display` | Name shown in game (`SPECTER`, `Sesseri Smuggler`) |
-| `character` | Character type (`jungle_A51`, `m51_terror01`). Which model it draws as is not in the map package; `server/data/chartypes.tsv` (copied from the bots tooling) maps 430 types, e.g. `m51_terror01` → `MESH_alban_ter01`, `jungle_A51` → `MESH_seal_A_woodland_LO`. `assets_map_tables` answers the resolved `model`. Which **weapon** an actor carries is not in any table this editor reads either (most likely the shared chartype tables in `RUN\READERC.ZAR`, not decoded); the Map Builder's figures hold stand-ins |
-| `setup` | List of `[point, number]` pairs: the AIMAPS point(s) the actor starts at. The number is observed 0–7 (a start mode or behaviour, not decoded); several pairs give alternative starts |
+| `character` | Character type (`jungle_A51`, `m51_terror01`). Which model it draws as is not in the map package; `server/data/chartypes.tsv` (copied from the bots tooling) maps 430 types, e.g. `m51_terror01` → `MESH_alban_ter01`, `jungle_A51` → `MESH_seal_A_woodland_LO`. `assets_map_tables` answers the resolved `model`. Which **weapons** an actor carries come from its chartype in the game's shared chartype table (below), not from the map; `assets_map_tables` answers them as `weapons` and the held one as `weapon` |
+| `setup` | List of `[point, heading]` pairs: the AIMAPS point(s) the actor starts at and the way it faces there. The **heading** is 0–7, eighths of a turn clockwise from north (−Z; +X is east, as on the tactical maps): 0 N, 2 E, 4 S, 6 W. Read from the retail maps: every campaign team faces into its map (M51's SEALs 4, south, toward the road; M82's 7 and M83's 6 face their enemies), and the character models face −Z unturned. Not checked in game. Several pairs give alternative starts |
 | `team` | Integer list: team / group memberships (1–2 for SEALs, 30–31 sides, others squads) |
 | `nofade`, `noshoot`, `nosnooze` | Flags with value 1 |
 | `ai_params` | `{accuracy (0–1), courage (observed 8.5), surrender (0 or 1)}`, often shared between actors |
@@ -97,4 +97,23 @@ The map's own `.ZED` (`M51.ZED`) holds compiled copies of several of these as bi
 
 - `mapTable {table, path, values, revision}` sets one field's values: the same number of values, each keeping its type (an int field refuses 1.5; a float field takes 3). It refuses `actions.rdr` (use `mapAction`) and a stale `revision`. One undo step; the other tables and records in READERM.ZAR are byte-for-byte unchanged.
 - `mapText {key, text, revision}` changes a message (printable ASCII).
-- Not done: adding or removing objectives or actors (the Asset Viewer duplicates and removes list items), editing world settings, the meaning of `setup` numbers, `LINE_IDS` and `team` values, and any check in game.
+- Not done: adding or removing objectives or actors (the Asset Viewer duplicates and removes list items), editing world settings, a check of the `setup` headings in game, `LINE_IDS` and `team` values, and any check in game.
+
+## Chartype loadouts (`RUN\READERC.ZAR › character.rdr`)
+
+Shared by every map (not in a map package). The root object holds `AngleUnits`, `ai_settings`, `body_items` (bone names, then `gear_nodes`), `gear` (hats, teeth, holster mounts: `name`, `model`, `ofs` {bone = [x y z], [rx ry rz] degrees}) and **`characters`**: a flat list of `name, {fields}` or `name, ":", parent, {fields}` (430-odd types). A type's fields override its parent's: `anim_set`, `strength`, `health` / `armor` per body part, `ai_params` (accuracy, courage, stealth, `sensors`), `sounds` (`CHRSND_*` → sound ids) and **`default_weapons`**: a list of `{wep_name, ammo_count?, mag_count?}` in the game's order, primary first (an empty list means none). `wep_name` is a `zweapon.rdr` `InternalName` (`9mm Sub` → model `uzi`, `M4A1 SD` → `m4Acarbine_sd`); a few names have no zweapon record on the retail disc (`SR-25`, `SA-80 A2`, `SR-1 Gyurza`, `M16A2`, `Dragunov`, `Satchel`, `RED SMOKE GRENADE`) and the server maps them to models by an alias list.
+
+M51: SEALs (`jungle_A51` … `jungle_D51`, parents `jungle_*_woodland_LO`) carry M4A1 SD, Mark 23SD, Satchel and a Mark141 or M67; `m51_terror01/02` (parents `albanian_terrorist01/02`) a 9mm Sub and a Model 18; `m51_foreman` an 870; `m51_sniper` an M82A1A; `albanian_informant` nothing.
+
+Code: `RDR/CharacterLoadouts.cs`; the server (`LoadoutsOf` in `AssetService.MapTables.cs`) takes the map's own `character.rdr` (READERM.ZAR, or a READERC.ZAR in the package) first, else READERC.ZAR beside the package, the folder above it, or the disc's RUN folder; ZWEAPON.ZAR the same way. A figure holds the first weapon with a model in the package that is not a grenade, mine, explosive or other gear.
+
+## Animation sets (`RUN\READERC.ZAR › animset.rdr`) and where characters stand
+
+A list of sets `{anim_set_name, include?, anim_set_anims}`; each anim is `{type_name, anim_name}` or `{type_name, modes: [["default", clip], {mode = [clip weight] …} …]}`, and a set takes anim types it lacks from its `include`s (`GLOBAL`, `SOLDIER`). A chartype's `anim_set` (character.rdr, inherited) picks its set, and the set's **Stand** clip is how it idles: `seal_stand` for both the Seal and the **Guard** set (guards play `guard_susp_search02` only when suspicious), `civ_stand` for No_weapon (hostages, informants). Other sets (POW_sitting01/02, Restrained, Torturer, Guard_bored02/03 = `guard_stand02/03`, Guard_smoking, Guard_warmhands, computer, Surrender, turret, launcher) are named by no map table on the disc (no `anim_set` in any vehicles.rdr), so the game's mission code must assign them; the editor cannot tell which actor uses one. Code: `RDR/AnimSets.cs`; ASSET_MAP_TABLES answers `animSet` and `stand` per actor.
+
+Other things the retail maps show about starts:
+
+- **The SEAL team starts together.** On most campaign maps one or two squad mates have a `setup` point far from `sealstart` (M51's JESTER at `Able2`, 4,900 units away; M53, M72, M73, M81, M82 and M83 the same). The Map Builder draws a squad mate (team 1, a SEAL) whose start is over 150 units from the player's beside the player, facing the player's way, and says so in the Mission tab. Not checked in game.
+- **Multiplayer maps** (`MP*`): the `player` actor is the template for human players (it starts at `startPlayer`, next to the hostages on MP71 Fish Hook); human players spawn at the game's team spawn points, which are not in the AIMAPS point table (the spawn manager at `0x00669B30` in RAM, see the bots tooling's `socom_bots.py`). The Map Builder does not draw it.
+- `disabled` (61 actors on the disc) and `respawn_setup` are not decoded; disabled actors are probably spawned later by the mission.
+

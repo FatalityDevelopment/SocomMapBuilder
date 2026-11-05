@@ -200,6 +200,14 @@ export interface MapActor {
   row: number; path: TablePath; name: string | null; display: string | null; character: string | null;
   /** "archive:name" of the character model its chartype draws as, when the package has it. */
   model: string | null;
+  /** The chartype's default weapons (READERC.ZAR > character.rdr) with the package model each draws as; null when no
+   * chartype table was found or the type is not in it. */
+  weapons: Array<{ name: string; model: string | null }> | null;
+  /** "archive:name" of the weapon the chartype holds (its first gun the package has), or null. */
+  weapon: string | null;
+  /** Its chartype's animation set (character.rdr) and that set's Stand clip (animset.rdr), when known. */
+  animSet: string | null;
+  stand: string | null;
   starts: Array<{ point: string; value: number | string | null }>; teams: number[];
   flags: Array<{ name: string; values: Array<number | string | null> }>;
   ai: Array<{ name: string; value: number | string | null }> | null;
@@ -209,6 +217,8 @@ export interface MapTables {
   hasReader: boolean;
   objectives: MapObjective[];
   actors: MapActor[];
+  /** Where the chartype loadouts came from (a READERC.ZAR path, or the package's own table), or null. */
+  loadoutSource: string | null;
   mission: {
     description: string | null; satchelTimer: number | null; elevation: { min: number | null; max: number | null } | null;
     ai: Array<{ name: string; value: number | string | null }>; valves: Array<{ index: number; name: string | null; value: number | string | null }>;

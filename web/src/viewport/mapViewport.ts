@@ -15,6 +15,7 @@ import { groupInstancesByLayer, isSkyChunk, layerOf, movable as isMovable, point
 import { actionIconCanvas, objectiveIconCanvas, type ActionKind } from '../shared/actionIcons';
 import { markerAnchor, type ActionMarker } from './actionMarkers';
 import { poseBones, skinChunk, type PoseClip } from '../webview/zipper-core/skinning';
+import { yawOf } from './actorFigures';
 
 export type MapTool = 'select' | 'move' | 'rotate' | 'scale' | 'place' | 'paint' | 'measure';
 /** A saved camera: where it stands and what it looks at. */
@@ -66,7 +67,14 @@ export interface MapCallbacks {
 }
 
 /** An actor drawn as its character at an AIMAPS start point, posed by a clip, holding a weapon in its right hand. */
-export interface ActorFigure { point: string; character: MapModel; clip: PoseClip | null; weapon: MapModel | null }
+export interface ActorFigure {
+  point: string; character: MapModel; clip: PoseClip | null; weapon: MapModel | null; weaponName?: string | null;
+  actor?: string; clipName?: string | null;
+  /** 0-7 eighths of a turn clockwise from north (-Z); the models face north unturned. */
+  heading?: number | null;
+  /** [x, z] from the point (a squad mate standing beside the player), else at the point itself. */
+  offset?: [number, number] | null;
+}
 
 /** What a click on a 3D marker picked. */
 export type MarkerPick = { kind: 'action'; geoIndex: number; instance: number } | { kind: 'objective'; row: number };
@@ -196,7 +204,7 @@ export class MapViewport extends ViewportCore {
   private selectedObjective: number | null = null;
   private readonly markerTextures = new Map<string, THREE.CanvasTexture>();
   // Actors drawn as characters at their start points (by point name, lower case), and the meshes drawn for them.
-  private figures = new Map<string, ActorFigure>();
+  private figures = new Map<string, ActorFigure[]>();
   private figureTargets: Array<{ mesh: THREE.Mesh; spec: MaterialSpec }> = [];
   private lastPoints: MapPointInfo[] = [];
 
@@ -529,22 +537,27 @@ export class MapViewport extends ViewportCore {
 
   /** Actors to draw as characters at their start points (their points' pillars give way to them). */
   setActorFigures(figures: ActorFigure[]): void {
-    this.figures = new Map(figures.map(f => [f.point.toLowerCase(), f]));
+    this.figures = new Map();
+    for (const f of figures) { const key = f.point.toLowerCase(); this.figures.set(key, [...(this.figures.get(key) ?? []), f]); }
     this.buildPoints(this.lastPoints);
     this.refreshOverlay();
   }
 
-  get figureCount(): number { return this.points.filter(p => this.figures.has(p.name.toLowerCase())).length; }
+  get figureCount(): number { return this.points.reduce((n, p) => n + (this.figures.get(p.name.toLowerCase())?.length ?? 0), 0); }
 
   /** Where each figure is drawn: its point and world bounds (for ui_state). */
-  figureBounds(): Array<{ point: string; min: number[]; max: number[] }> {
-    const out: Array<{ point: string; min: number[]; max: number[] }> = [];
+  figureBounds(): Array<{ point: string; actor: string | null; heading: number | null; clip: string | null; weapon: string | null; min: number[]; max: number[] }> {
+    const out: Array<{ point: string; actor: string | null; heading: number | null; clip: string | null; weapon: string | null; min: number[]; max: number[] }> = [];
+    const r = (v: number) => Math.round(v * 10) / 10;
     for (const p of this.points) {
-      const body = p.figure;
-      if (!body) { continue; }
-      body.updateMatrixWorld(true);
-      const box = new THREE.Box3().setFromObject(body);
-      out.push({ point: p.name, min: box.min.toArray().map(v => Math.round(v * 10) / 10), max: box.max.toArray().map(v => Math.round(v * 10) / 10) });
+      if (!p.figure) { continue; }
+      p.figure.updateMatrixWorld(true);
+      for (const body of p.figure.children) {
+        const f = body.userData['actorFigure'] as ActorFigure | undefined;
+        const box = new THREE.Box3().setFromObject(body);
+        out.push({ point: p.name, actor: f?.actor ?? null, heading: f?.heading ?? null, clip: f?.clipName ?? null, weapon: f?.weaponName ?? null,
+          min: box.min.toArray().map(r), max: box.max.toArray().map(r) });
+      }
     }
     return out;
   }
@@ -640,7 +653,7 @@ export class MapViewport extends ViewportCore {
       pillar.position.set(p.x, y + height / 2, p.z);
       pillar.renderOrder = 10;
       pillar.userData['point'] = p.name;
-      const figure = this.figures.get(p.name.toLowerCase());
+      const figures = this.figures.get(p.name.toLowerCase()) ?? [];
       const label = labelSprite(p.name, '#ffffff', 32);
       // These labels live on the map, unlike selection/gizmo overlays. A sky dome
       // or building in front of a point must occlude both its pillar and its label.
@@ -652,13 +665,18 @@ export class MapViewport extends ViewportCore {
       const group = new THREE.Group();
       group.add(pillar, label);
       let holder: THREE.Group | undefined;
-      if (figure) {
-        // The character stands on the point; a thin ring keeps the point's colour (and the selection) readable. It
-        // lives in its own group (a holder that follows the point's drags), so hiding the Points layer leaves it.
-        const body = this.buildFigure(figure);
-        body.position.set(p.x, y, p.z);
+      if (figures.length) {
+        // The characters stand on the point (squad mates beside it), turned to their start's heading; a thin ring keeps
+        // the point's colour (and the selection) readable. They live in their own group (a holder that follows the
+        // point's drags), so hiding the Points layer leaves them.
         holder = new THREE.Group();
-        holder.add(body);
+        for (const figure of figures) {
+          const body = this.buildFigure(figure);
+          body.position.set(p.x + (figure.offset?.[0] ?? 0), y, p.z + (figure.offset?.[1] ?? 0));
+          body.rotation.y = yawOf(figure.heading);
+          body.userData['actorFigure'] = figure;
+          holder.add(body);
+        }
         holder.userData['point'] = p.name;
         this.figureGroup.add(holder);
         pillar.geometry.dispose();

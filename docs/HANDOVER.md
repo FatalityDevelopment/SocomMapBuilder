@@ -18,6 +18,15 @@ The aim is to add to SOCOM II's Map Builder and Model Editor the tools Unity and
 | Disc survey | every map file on the disc mapped ([disc-survey](formats/disc-survey.md)); readers for character types with weapons, scrolling textures and DBUFFER; `ASSET_MAP_TABLES` adds actor weapons, `textureScroll`, `mapImages`; RdrFile shared-block fix | **#22** | open |
 | Minimap | the game's HUD radar (HUD2 art) over the tactical map (`MM<nn>`) or a top-down render; View › Minimap (N); `ASSET_MAP_HUD`; [hud format doc](formats/hud.md) | `claude/minimap` | local, not committed |
 | Map actions and mission tables | action icons in 3D, friendlier Actions panel, Mission tab (objectives, actors, mission settings, weapons) from READERM.ZAR, [map-tables format doc](formats/map-tables.md) | `claude/actions-rdr` | local, not committed |
+| Real weapons for characters | figures face their start heading, idle in their animation set's Stand clip and hold their chartype's own weapon: READERC.ZAR › character.rdr `default_weapons` → zweapon.rdr → WEAP_MDL; Mission tab shows each actor's weapons and a view-only *Holds in 3D* pick | `claude/real-weapons` | local, not committed (see below) |
+
+## Real weapons (`claude/real-weapons`)
+
+- Where loadouts live: not in the map. `RUN\READERC.ZAR › character.rdr` (shared by every map) lists each chartype's `default_weapons` by zweapon.rdr `InternalName`; layout in [map-tables.md](formats/map-tables.md#chartype-loadouts-runreaderczar--characterrdr). The server finds READERC.ZAR / ZWEAPON.ZAR beside the package, one folder up, or on the disc (`Socom2Templates.FindRunDir`), cached by path and time.
+- The figure holds the first weapon whose model the package has, skipping grenades, mines, explosives and gear (`NotHeld` in `AssetService.MapTables.cs`). The mount is unchanged: the standing clip's `rifle` track under `rhand`.
+- The loadout cannot be changed from a map (editing the shared READERC.ZAR is a disc-level mod, not done). The Mission tab's *Holds in 3D* is view only, per chartype, stored in `localStorage['mapbuilder.actorWeaponPicks']` (a new key, so old stand-in picks are dropped).
+- Facing and stance (same branch): `setup` = [point, heading 0-7 clockwise from north, -Z]; Stand clip from the chartype's animation set (animset.rdr); squad mates far from the player stand with the team; MP `player` templates are not drawn. All read from the retail data, none checked in game; reasons in [map-tables.md](formats/map-tables.md#animation-sets-runreaderczar--animsetrdr-and-where-characters-stand).
+- To look at it: a branch server on a free port (8790 was taken by another worktree's server this time, so 8792), `assets_open` M51, `ui_show map`, `ui_focus {point: "Road1"}`.
 
 ## Wave 4: where it stands (`claude/wave4`, built on `claude/wave3`)
 
