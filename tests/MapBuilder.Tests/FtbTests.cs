@@ -283,6 +283,29 @@ public sealed class FtbTests
     }
 
     [Fact]
+    public void Retail_characters_are_skinned_to_their_bones_and_placed_objects_are_props()
+    {
+        if (Disc is not string run) return;
+        var pkg = CaPackage.Open(Path.Combine(run, "VILLAGE_SP2"));
+        var character = pkg.Models().First(m => m.Kind == "character");
+        var skinned = pkg.BuildMesh(character);
+        Assert.NotNull(skinned.Skeleton);
+        Assert.Contains(skinned.Skeleton!.Bones, b => b.Name == "leftElbow");
+        // Posed in bind, the skinned mesh is where the unskinned batches put it.
+        var lib = pkg.Libraries[character.LibraryIndex].Lib;
+        var obj = lib.Nodes(character.Offset).SelectMany(n => n.Objects).First();
+        var flat = PspGe.Chunks(lib, obj, CodeDesigner.Ps2.FileFormats.Assets.Matrix4.Identity(), "x", 0)[0];
+        var first = skinned.Chunks[0];
+        for (int i = 0; i < 9; i++) Assert.Equal(flat.Positions[i], first.Positions[i], 2);
+        Assert.Contains(first.SkinBones!, b => b > 3);
+
+        // The truck is a placed object, listed and built as a prop.
+        var truck = pkg.Models().Single(m => m.Name == "island_village_SP2_obj_ff2c0");
+        Assert.Equal("prop", truck.Kind);
+        Assert.InRange(pkg.BuildMesh(truck).Chunks.Sum(c => c.Triangles.Length / 3), 700, 750);
+    }
+
+    [Fact]
     public void Retail_instance_and_point_moves_write_only_their_bytes()
     {
         if (Disc is not string run) return;

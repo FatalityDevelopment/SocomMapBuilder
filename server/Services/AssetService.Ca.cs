@@ -475,17 +475,11 @@ namespace MapBuilder.Server.Services
         /// optionally with CA clips retargeted into its MOTION_S.ZAR. Templates come from SOCOM II's RUN folder
         /// (socom2Run, else the first drive with RUN/MP52.ZDB).
         /// </summary>
-        /// <summary>Fireteam Bravo 2 models do not convert yet.</summary>
-        private static void RefusePsp(CaSession s, string what)
-        {
-            if (s.Package.IsPsp) throw new NotSupportedException($"{what} is not available for {FtbGame} yet: its packages open read-only.");
-        }
-
         private static object CaExport(CaSession s, string? archive, string? name, string? json)
         {
-            RefusePsp(s, "Conversion");
             var m = CaFind(s, archive, name);
             var a = Parse<ExportArgs>(json) ?? new ExportArgs(null, null, null, null, null, null);
+            if (s.Package.IsPsp) return FtbExport(s, m, a);
             string run = Socom2Templates.FindRunDir(a.Socom2Run)
                 ?? throw new InvalidOperationException("SOCOM II's RUN folder was not found (pass socom2Run, e.g. G:/RUN)");
             var templates = TemplateCache.GetOrAdd(run, r => new Socom2Templates(r));

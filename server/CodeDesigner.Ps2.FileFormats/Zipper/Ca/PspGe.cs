@@ -216,7 +216,10 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         /// One batch: its display list sets VTYPE, then draws PRIMs over consecutive vertices (VADDR is 0 in the file
         /// and offsets from the batch's vertices). Triangles, strips and fans are read; other primitives are skipped.
         /// </summary>
-        public static ModelMesh.MeshChunk? DecodeBatch(byte[] d, Batch batch, int index, string? visual, float[] world)
+        /// <remarks><paramref name="read"/>, when given, receives where each vertex of the chunk was read and its format
+        /// (how skinned batches find their weights).</remarks>
+        public static ModelMesh.MeshChunk? DecodeBatch(byte[] d, Batch batch, int index, string? visual, float[] world,
+            List<(int Offset, VertexFormat Format)>? read = null)
         {
             if (batch.Vertices <= 0 || batch.DisplayList <= 0 || batch.DisplayList + 4 > d.Length) return null;
             uint vtype = 0;
@@ -256,6 +259,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
                             int o = vaddr + id * fmt.Stride;
                             if (o < 0 || o + fmt.Stride > d.Length) return -1;
                             fmt.Read(d, o, world, pos, uv, nrm, col);
+                            read?.Add((o, fmt));
                             return map[id] = pos.Count / 3 - 1;
                         }
                         var vs = ids.Select(Vertex).ToArray();
@@ -287,6 +291,69 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
                 Positions = pos.ToArray(), Uvs = uvs, Normals = nrm.ToArray(), Colors = hasColour ? col.ToArray() : null,
                 Triangles = tris.ToArray(),
             };
+        }
+
+        // ------------------------------------------------------------------ skinned meshes
+
+        /// <summary>Skeleton nodes before the first bone a batch's bone list can name (the model root, a second root
+        /// and skel_root): list index i is node i + 3 (hips = 0). Checked on the disc's characters: a vertex fully
+        /// weighted to a listed bone is nearest that bone's joint.</summary>
+        public const int BoneBase = 3;
+
+        /// <summary>
+        /// A skinned object (characters) as skinned groups in bind pose. Each batch's vertices carry 1-8 u8 weights
+        /// (0x80 = 1.0; GE VTYPE bits 9-10 and 14-16) for the bones its list names: +0xF0 the list (bytes, from the
+        /// batch), +0xF4 low byte their count. Positions are in the model's bind pose, so each influence is that
+        /// position in its bone's bind space.
+        /// </summary>
+        public static List<SkinnedMesh.Group> Skinned(CaLibrary lib, int obj, IReadOnlyList<float[]> boneWorlds)
+        {
+            var d = lib.Data;
+            var inverse = boneWorlds.Select(Matrix4.InverseAffine).ToArray();
+            var groups = new List<SkinnedMesh.Group>();
+            int section = 0;
+            foreach (var batch in Batches(lib, obj))
+            {
+                var read = new List<(int Offset, VertexFormat Format)>();
+                var chunk = DecodeBatch(d, batch, 0, null, Matrix4.Identity(), read);
+                if (chunk == null) continue;
+                int slots = (int)(lib.U32(batch.Offset + 0xF4) & 0xFF), list = batch.Offset + (int)lib.U32(batch.Offset + 0xF0);
+                var vertices = new List<SkinnedMesh.Part>[chunk.VertexCount];
+                for (int v = 0; v < chunk.VertexCount; v++)
+                {
+                    var (o, fmt) = read[v];
+                    var parts = new List<SkinnedMesh.Part>();
+                    float total = 0;
+                    for (int k = 0; k < Math.Min(slots, fmt.Weights); k++)
+                    {
+                        float w = fmt.Weight switch { 1 => d[o + k] / 128f, 2 => BitConverter.ToUInt16(d, o + 2 * k) / 32768f, _ => BitConverter.ToSingle(d, o + 4 * k) };
+                        int bone = list + k < d.Length ? d[list + k] + BoneBase : -1;
+                        if (w <= 0 || bone < 0 || bone >= boneWorlds.Count) continue;
+                        var m = inverse[bone];
+                        float x = chunk.Positions[3 * v], y = chunk.Positions[3 * v + 1], z = chunk.Positions[3 * v + 2];
+                        float nx = chunk.Normals[3 * v], ny = chunk.Normals[3 * v + 1], nz = chunk.Normals[3 * v + 2];
+                        var (lx, ly, lz) = Matrix4.Apply(m, x, y, z);
+                        parts.Add(new SkinnedMesh.Part(bone, lx, ly, lz,
+                            m[0] * nx + m[4] * ny + m[8] * nz, m[1] * nx + m[5] * ny + m[9] * nz, m[2] * nx + m[6] * ny + m[10] * nz, w));
+                        total += w;
+                    }
+                    // Weights that do not sum to 1 (u8 rounding) are normalised; a vertex without any stays on the hips.
+                    if (parts.Count == 0)
+                    {
+                        var (lx, ly, lz) = Matrix4.Apply(inverse[Math.Min(BoneBase, boneWorlds.Count - 1)], chunk.Positions[3 * v], chunk.Positions[3 * v + 1], chunk.Positions[3 * v + 2]);
+                        parts.Add(new SkinnedMesh.Part(Math.Min(BoneBase, boneWorlds.Count - 1), lx, ly, lz, 0, 1, 0, 1));
+                    }
+                    else if (MathF.Abs(total - 1) > 1e-3f)
+                        for (int i = 0; i < parts.Count; i++) parts[i] = parts[i] with { Weight = parts[i].Weight / total };
+                    vertices[v] = parts;
+                }
+                groups.Add(new SkinnedMesh.Group
+                {
+                    Texture = chunk.Texture ?? "", Colors = chunk.Colors, Section = section++, DrawOffset = batch.Offset,
+                    Vertices = vertices, Uvs = chunk.Uvs, Triangles = chunk.Triangles,
+                });
+            }
+            return groups;
         }
 
         /// <summary>Whether a batch's material leaves back-face culling on (GE command 0x1D in its first 0x74 bytes).</summary>

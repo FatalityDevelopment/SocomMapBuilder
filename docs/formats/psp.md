@@ -91,6 +91,23 @@ Edits are same-size patches, as for Combined Assault:
 
 **Save copy** writes each ZDB with an edit into the chosen folder at its place under `RUN` (`<folder>\FORT_MP\ISLAND_F.ZDB`). Only the edited entries and their checksums change; the checksum is CA's, and it matches every entry checked on the disc. Saving to a `.ISO` patches the files into a copy of the UMD image by those paths; this has not been tried, as only the mounted UMD was available. Nothing has been tested in game.
 
+## Skinned characters
+
+A character's mesh objects are skinned (type `0x0090C640`). Each batch's vertices carry 1–8 weights (GE VTYPE weights; on the disc, u8 with `0x80` = 1.0, three or five per vertex), and the batch lists the bones they mean: `+0xF0` the list (one byte per slot, from the batch), `+0xF4` low byte the slot count. A list entry *i* is skeleton node *i* + 3 (the model root, a second root and `skel_root` come first, so 0 is `hips`). Checked on the disc's characters: a vertex weighted fully to a listed bone is nearest that bone's joint, and every vertex's weights sum to `0x7F` or `0x80`. Positions are in the bind pose. The skeleton's node hashes are CA's bone names (`hips`, `leftElbow` …, [CaBones](../../server/CodeDesigner.Ps2.FileFormats/Zipper/Ca/CaBones.cs)).
+
+## Conversion to SOCOM II
+
+**Export to SOCOM II** goes through the shared converter (`ModelToSocom2`):
+
+- **Frame:** FTB2 is already in SOCOM II's frame (characters face −Z, weapons point along +X), so nothing is turned.
+- **Scale:** one scale for every model, SOCOM II's character height (head to foot) over FTB2's. It comes out at 1.001.
+- **Characters:** retargeted onto alg_UN01 through CA's bone map.
+- **Weapons:** keep their `firepoint`, `firepoint_shell`, `aimpoint` and `Gun_box` nodes (35 of GLOBAL's 71 weapons have them).
+- **Placed objects** (trees, rocks, vehicles) are listed as props (`island_village_SP2_obj_ff2c0`). One whose vertices are in world space is moved so its base centre is at the origin.
+- **Not converted:** animations, which are not read yet, and the world-space terrain and buildings.
+
+Checked: the Village squad's character, the AK-47 and the Village truck convert and reopen as SOCOM II packs. Not tried in game.
+
 ## Not done yet
 
 - Objectives and team spawns; names for the weapon models CA's word list does not crack.
