@@ -138,7 +138,7 @@ MCP (`server/Services/McpServer.cs`):
 - Play-test (launch in PCSX2).
 - Per-asset in-game verification checklist.
 - glTF import and export.
-- CA object graph additions and deletions, and GTA write support.
+- CA object graph additions and deletions. GTA native frame, geometry, material and primary UV edits save to DFF or IMG copies. GTA mesh topology and TXD pixel editing are still open.
 
 **AI**
 - A "map brief → layout" workflow built on prefabs, validate and dry-run.

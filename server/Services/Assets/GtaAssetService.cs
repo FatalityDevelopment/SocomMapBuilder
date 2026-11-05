@@ -8,16 +8,21 @@ namespace MapBuilder.Server.Services.Assets
 {
     /// <summary>
     /// GTA: San Andreas asset sessions: the ASSET_* commands over a <see cref="GtaPackage"/> (the disc image or a loose
-    /// GTA3.IMG). Read-only: models (peds as skinned characters, weapons, vehicles, map objects), meshes and textures.
+    /// IMG, native DFF or mounted disc). Models, native edits, textures, animations and SOCOM II conversion.
     /// The asset command handlers hand a message here when its session is a GTA one.
     /// </summary>
-    internal static class GtaAssetService
+    internal static partial class GtaAssetService
     {
         internal sealed class Session
         {
             public required string Id { get; init; }
             public required GtaPackage Package { get; init; }
             public object Gate { get; } = new();
+            public int Revision { get; set; }
+            public Dictionary<GtaPackage.Model, byte[]> Originals { get; } = new();
+            public HashSet<GtaPackage.Model> Dirty { get; } = new();
+            public Stack<Step> Undo { get; } = new();
+            public Stack<Step> Redo { get; } = new();
         }
 
         private static readonly ConcurrentDictionary<string, Session> Sessions = new(StringComparer.OrdinalIgnoreCase);
@@ -28,13 +33,23 @@ namespace MapBuilder.Server.Services.Assets
         public static string? TryOpen(string full)
         {
             if (!GtaPackage.IsGtaPath(full)) return null;
-            Session? existing = Sessions.Values.FirstOrDefault(s => s.Package.SourcePath.Equals(full, StringComparison.OrdinalIgnoreCase));
-            Session session = existing ?? new Session { Id = AssetJson.SessionId(full), Package = GtaPackage.Open(full) };
-            Sessions[session.Id] = session;
-            return AssetJson.Ok("ASSET_OPEN", new { reused = existing != null, status = Status(session) });
+            Session session;
+            bool reused;
+            lock (FileGate)
+            {
+                var existing = Sessions.Values.FirstOrDefault(s => s.Package.SourcePath.Equals(full, StringComparison.OrdinalIgnoreCase));
+                reused = existing != null;
+                session = existing ?? new Session { Id = AssetJson.SessionId(full), Package = GtaPackage.Open(full) };
+                Sessions[session.Id] = session;
+            }
+            return AssetJson.Ok("ASSET_OPEN", new { reused, status = Status(session) });
         }
 
-        public static bool Close(string id) => Sessions.TryRemove(id, out _);
+        public static int? Close(string id)
+        {
+            if (!Sessions.TryGetValue(id, out var s)) return null;
+            lock (s.Gate) return Sessions.TryRemove(id, out _) ? s.Dirty.Count : null;
+        }
 
         public static IEnumerable<object> Statuses() => Sessions.Values.Select(Status);
 
@@ -47,12 +62,18 @@ namespace MapBuilder.Server.Services.Assets
                 object result;
                 lock (s.Gate)
                 {
+                    if (!Sessions.ContainsKey(s.Id)) throw new InvalidOperationException("The GTA session has closed.");
                     result = command switch
                     {
                         "ASSET_STATUS" => Status(s),
                         "ASSET_LIST_MODELS" => ListModels(s, c.AssetJson),
-                        "ASSET_DESCRIBE_MODEL" => Describe(s, c.AssetName),
-                        "ASSET_MODEL_MESH" => Mesh(s, c.AssetName, AssetJson.Parse<AssetJson.MeshArgs>(c.AssetJson)?.Arrays ?? true),
+                        "ASSET_DESCRIBE_MODEL" => Describe(s, c.AssetName, c.AssetArchive),
+                        "ASSET_MODEL_MESH" => Mesh(s, c.AssetName, c.AssetArchive, AssetJson.Parse<AssetJson.MeshArgs>(c.AssetJson)?.Arrays ?? true),
+                        "ASSET_EDIT" => Edit(s, c.AssetJson),
+                        "ASSET_UNDO" => UndoRedo(s, true),
+                        "ASSET_REDO" => UndoRedo(s, false),
+                        "ASSET_HISTORY" => History(s),
+                        "ASSET_SAVE" => Save(s, c.AssetJson),
                         "ASSET_TEXTURE" => Texture(s, c.AssetName),
                         "ASSET_MAP_POINTS" => new { points = Array.Empty<object>() },
                         "ASSET_LIST_ANIMATIONS" => ListAnimations(s, c.AssetJson),
@@ -61,44 +82,44 @@ namespace MapBuilder.Server.Services.Assets
                             .Select(m => new { internalName = m.Name, model = m.Name, archive = m.Archive, fireAnimName = "", fireWait = 0f, tracerTextureName = (string?)null }).ToList(),
                         "ASSET_WEAPON_FX" => new { weapon = c.AssetName, effect = (object?)null },
                         "ASSET_EFFECTS" => Array.Empty<object>(),
-                        "ASSET_EXPORT" => Export(s, c.AssetName, c.AssetJson),
-                        _ => throw new NotSupportedException($"{Game} sessions are read-only for now ({command} is not available)"),
+                        "ASSET_EXPORT" => Export(s, c.AssetName, c.AssetArchive, c.AssetJson),
+                        _ => throw new NotSupportedException($"{command} is unavailable for {Game} models"),
                     };
                 }
                 return AssetJson.Ok(command, result);
             }
-            catch (Exception ex) when (ex is ArgumentException or KeyNotFoundException or InvalidOperationException or InvalidDataException or NotSupportedException)
+            catch (Exception ex) when (ex is ArgumentException or KeyNotFoundException or InvalidOperationException or InvalidDataException or NotSupportedException
+                or IOException or UnauthorizedAccessException or System.Text.Json.JsonException or FormatException or OverflowException)
             {
                 return Responses.Error($"{command}: {ex.Message}");
             }
         }
 
-        private static object Status(Session s) => new
+        private static object Status(Session s)
         {
-            session = s.Id,
-            path = s.Package.SourcePath,
-            game = Game,
-            readOnly = true,
-            isZdb = true,
-            mapNamespace = (string?)null,
-            revision = 0,
-            dirty = Array.Empty<string>(),
-            canUndo = (string?)null,
-            canRedo = (string?)null,
-            entries = s.Package.Archives.Sum(a => a.Entries.Count),
-            models = s.Package.Models.GroupBy(m => m.Kind).ToDictionary(g => g.Key, g => g.Count()),
-        };
+            lock (s.Gate) return new
+            {
+                session = s.Id, path = s.Package.SourcePath, game = Game, readOnly = false,
+                initialModel = s.Package.InitialModel, isZdb = true, mapNamespace = (string?)null,
+                revision = s.Revision, dirty = s.Dirty.Select(Label).Order().ToArray(),
+                canUndo = s.Undo.TryPeek(out var undo) ? undo.Description : null,
+                canRedo = s.Redo.TryPeek(out var redo) ? redo.Description : null,
+                entries = s.Package.Archives.Sum(a => a.Entries.Count),
+                models = s.Package.Models.GroupBy(m => m.Kind).ToDictionary(g => g.Key, g => g.Count()),
+            };
+        }
 
-        private static GtaPackage.Model Find(Session s, string? name) =>
+        private static GtaPackage.Model Find(Session s, string? name, string? archive) =>
             string.IsNullOrEmpty(name) ? throw new ArgumentException("AssetName (the model) is required")
-            : s.Package.FindModel(name) ?? throw new KeyNotFoundException($"Model {name} not found");
+            : s.Package.FindModel(name, archive) ?? throw new KeyNotFoundException($"Model {archive}/{name} not found");
 
         private static object ListModels(Session s, string? json)
         {
             var f = AssetJson.Parse<AssetJson.ModelFilter>(json) ?? new AssetJson.ModelFilter(null, null, null);
             return s.Package.Models
                 .Where(m => (f.Kind == null || m.Kind.Equals(f.Kind, StringComparison.OrdinalIgnoreCase))
-                    && (f.Query == null || m.Name.Contains(f.Query, StringComparison.OrdinalIgnoreCase)))
+                    && (f.Query == null || m.Name.Contains(f.Query, StringComparison.OrdinalIgnoreCase))
+                    && (f.Archive == null || m.Archive.Equals(f.Archive, StringComparison.OrdinalIgnoreCase)))
                 .Select(m => new { archive = m.Archive, name = m.Name, kind = m.Kind, @namespace = m.Txd, size = 0, visualCount = 1 })
                 .ToList();
         }
@@ -107,11 +128,11 @@ namespace MapBuilder.Server.Services.Assets
         // locator is that hand -> mesh transform, (x, y, z) -> (x, -z, y), applied when it is held.
         private static readonly float[] WeaponMount = { 1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1 };
 
-        private static object Mesh(Session s, string? name, bool arrays)
+        private static object Mesh(Session s, string? name, string? archive, bool arrays)
         {
-            var m = Find(s, name);
+            var m = Find(s, name, archive);
             object? locators = m.Kind == "weapon" ? new[] { new { name = "mount", matrix = WeaponMount } } : null;
-            return AssetJson.Mesh(s.Package.BuildMesh(m), m.Archive, m.Name, Game, arrays, locators);
+            return AssetJson.Mesh(s.Package.BuildMesh(m), m.Archive, m.Name, Game, arrays, locators, s.Revision);
         }
 
         private static object ListAnimations(Session s, string? json)
@@ -167,9 +188,9 @@ namespace MapBuilder.Server.Services.Assets
         private const float UnitsPerMetre = 10.4f;
 
         /// <summary>ASSET_EXPORT (target SOCOM II): a ped (with clips), weapon, vehicle or object as a SOCOM II pack.</summary>
-        private static object Export(Session s, string? name, string? json)
+        private static object Export(Session s, string? name, string? archive, string? json)
         {
-            var m = Find(s, name);
+            var m = Find(s, name, archive);
             var a = AssetJson.Parse<ExportArgs>(json) ?? new ExportArgs(null, null, null, null, null, null, null);
             if (a.Target != null && !a.Target.Contains("SOCOM II", StringComparison.OrdinalIgnoreCase) && !a.Target.Equals("socom2", StringComparison.OrdinalIgnoreCase))
                 throw new NotSupportedException($"{Game} models export to SOCOM II only");
@@ -205,9 +226,10 @@ namespace MapBuilder.Server.Services.Assets
                 kind == "character" ? GtaPedRig.BoneMap : null, kind == "character" ? GtaPedRig.Anchors : null, points);
             string modelName = a.ModelName ?? ("gta_" + m.Name.ToLowerInvariant());
             if (modelName.Length > 31) modelName = modelName[..31];
-            string pack = a.Pack ?? $"mg{Fnv(m.Name) & 0xFFFFF:x5}";
-            var r = ModelToSocom2.Export(source, clips, templates,
-                new CaToSocom2.Options(pack, modelName, a.OutputDir ?? ZipperAssetService.DefaultExportDir(), null, a.MaxTextureSize ?? 64));
+            string output = a.OutputDir ?? ZipperAssetService.DefaultExportDir();
+            CaToSocom2.Result Convert(string pack, string directory) => ModelToSocom2.Export(source, clips, templates,
+                new CaToSocom2.Options(pack, modelName, directory, null, a.MaxTextureSize ?? 64));
+            var r = a.Pack != null ? Convert(a.Pack, output) : ExportWithDefaultName(m, output, Convert);
             return new
             {
                 target = "SOCOM II", path = r.CdbPath, r.Pack, model = r.Model, r.Kind, r.Library, r.Triangles, r.Textures, r.Palettes,
@@ -216,11 +238,40 @@ namespace MapBuilder.Server.Services.Assets
             };
         }
 
-        private static uint Fnv(string text)
+        // Six base-36 characters fit the SOCOM II memory-card naming limit. Include the archive so two
+        // identically named models (e.g. the coach bus and jacket) get independent exports.
+        internal static string DefaultPackName(GtaPackage.Model model, int attempt = 0)
         {
-            uint h = 2166136261;
-            foreach (char ch in text.ToLowerInvariant()) { h ^= ch; h *= 16777619; }
-            return h;
+            string key = string.Concat(model.Archive.ToUpperInvariant(), "\0", model.Name.ToUpperInvariant(), "\0", attempt.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            var digest = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(key));
+            ulong hash = System.Buffers.Binary.BinaryPrimitives.ReadUInt64LittleEndian(digest);
+            const string digits = "0123456789abcdefghijklmnopqrstuvwxyz";
+            Span<char> name = stackalloc char[7];
+            name[0] = 'm';
+            for (int i = name.Length - 1; i > 0; i--) { name[i] = digits[(int)(hash % 36)]; hash /= 36; }
+            return new string(name);
+        }
+
+        // Never replace an existing automatic export. Publish the completed folder with one move. This
+        // handles collisions between separate processes or archives opened without the rest of the disc.
+        private static CaToSocom2.Result ExportWithDefaultName(GtaPackage.Model model, string output,
+            Func<string, string, CaToSocom2.Result> convert)
+        {
+            string staging = Path.Combine(output, ".gta-export-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(staging);
+            try
+            {
+                for (int attempt = 0; ; attempt++)
+                {
+                    string pack = DefaultPackName(model, attempt), target = Path.Combine(output, pack);
+                    if (Path.Exists(target)) continue;
+                    var result = convert(pack, staging);
+                    try { Directory.Move(Path.Combine(staging, pack), target); }
+                    catch (IOException) when (Path.Exists(target)) { continue; }
+                    return result with { CdbPath = Path.Combine(target, Path.GetFileName(result.CdbPath)) };
+                }
+            }
+            finally { Directory.Delete(staging, recursive: true); }
         }
 
         private static object TextureInfo(Session s, string name)
@@ -232,22 +283,26 @@ namespace MapBuilder.Server.Services.Assets
                 name, found = true, @namespace = (string?)null, width = t.Width, height = t.Height,
                 psm = t.Depth switch { 8 => "0x13", 4 => "0x14", 16 => "0x02", _ => "0x00" }, bpp = t.Depth,
                 palette = (int?)null, paletteResolved = true, hasTransparency = t.HasAlpha,
-                alphaTest = t.HasAlpha ? 0.5f : (float?)null, alphaBlend = (bool?)null, clamp = (bool[]?)null,
+                alphaTest = t.HasAlpha && !t.HasTranslucency ? 0.5f : (float?)null, alphaBlend = t.HasTranslucency ? true : (bool?)null, clamp = (bool[]?)null,
             };
         }
 
-        private static object Describe(Session s, string? name)
+        private static object Describe(Session s, string? name, string? archive)
         {
-            var m = Find(s, name);
+            var m = Find(s, name, archive);
             var mesh = s.Package.BuildMesh(m);
             var chunks = mesh.Chunks.Select(c => new
             {
                 index = c.Index, offset = c.GeometryOffset, visual = c.Visual, texture = c.Texture, binding = "gta",
                 vertices = c.VertexCount, triangles = c.Triangles.Length / 3, scale = c.Scale, origin = c.Origin, vertexColors = c.Colors != null,
             }).ToList();
+            var native = s.Package.IsEditable(m) ? GtaDffEdits.Describe(s.Package.ReadModelData(m)) : null;
             return new
             {
                 archive = m.Archive, name = m.Name, kind = m.Kind, @namespace = m.Txd, size = 0, nodeIndex = 0,
+                gta = native == null ? null : new { native.Frames, native.Materials, native.GeometryCount, textureChoices = s.Package.TextureChoices(m) },
+                revision = s.Revision,
+                skinned = mesh.Skinned,
                 textureNamespace = (string?)null, geoArchive = (string?)null, fromChains = true, game = Game,
                 visuals = chunks.Select(c => c.visual).Distinct().ToList(), chunks,
                 textures = mesh.Chunks.Select(c => c.Texture).Where(t => t != null).Distinct().Select(t => TextureInfo(s, t!)).ToList(),

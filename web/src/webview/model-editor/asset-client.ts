@@ -17,6 +17,7 @@ export interface SessionStatus {
   models: Record<string, number>;
   // Set for packages from another game. CA supports a subset of Map Builder edits.
   game?: string;
+  initialModel?: string | null;
   readOnly?: boolean;
   // The last autosave (a recovery copy of unsaved edits), if any.
   autosave?: { path: string; revision: number; at: string } | null;
@@ -82,6 +83,8 @@ export interface GeoInfo {
 }
 
 export interface ModelDescription {
+  revision?: number;
+  gta?: GtaModelInfo | null;
   archive: string;
   name: string;
   kind: string;
@@ -97,6 +100,13 @@ export interface ModelDescription {
   chunks: ChunkInfo[];
   textures: TextureInfo[];
   geo: GeoInfo | null;
+}
+
+export interface GtaModelInfo {
+  textureChoices: Array<{ name: string; dictionary: string }>;
+  frames: Array<{ index: number; name: string; position: number[] }>;
+  materials: Array<{ geometry: number; index: number; color: number[]; texture: string | null; textureCapacity: number }>;
+  geometryCount: number;
 }
 
 export interface EditResult {
@@ -359,7 +369,7 @@ export class AssetClient {
 
   redo(): Promise<EditResult> { return this.call('ASSET_REDO'); }
 
-  save(args: { mode: 'zdb' | 'pack'; outputPath?: string; packName?: string; folderCard?: string }): Promise<{ written: string[]; leaves: string[]; revision?: number }> {
+  save(args: { mode: 'zdb' | 'pack' | 'dff' | 'img'; outputPath?: string; packName?: string; folderCard?: string; archive?: string; model?: string }): Promise<{ written: string[]; leaves: string[]; revision?: number }> {
     return this.withJson('ASSET_SAVE', args);
   }
 

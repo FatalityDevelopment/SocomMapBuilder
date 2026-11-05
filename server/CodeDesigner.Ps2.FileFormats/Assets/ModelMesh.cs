@@ -90,7 +90,7 @@ namespace CodeDesigner.Ps2.FileFormats.Assets
                 mesh.Chunks.Add(new MeshChunk
                 {
                     Index = mesh.Chunks.Count, GeometryOffset = g.DrawOffset, Visual = $"section{g.Section}", Texture = g.Texture,
-                    MaterialBlend = null, Unit = unit, Scale = scale,
+                    MaterialBlend = g.MaterialBlend, Colors = g.Colors, Unit = unit, Scale = scale,
                     VertexCount = n, Positions = pos, Uvs = g.Uvs, Normals = nrm, Triangles = g.Triangles,
                     SkinBones = bones, SkinWeights = weights, SkinPositions = local, SkinNormals = localN,
                 });

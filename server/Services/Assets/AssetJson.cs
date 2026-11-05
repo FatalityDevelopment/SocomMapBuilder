@@ -23,13 +23,13 @@ namespace MapBuilder.Server.Services.Assets
             $"{Path.GetFileNameWithoutExtension(path).ToLowerInvariant()}-{Guid.NewGuid().ToString("N")[..6]}";
 
         /// <summary>ASSET_MODEL_MESH for any game's <see cref="ModelMesh"/>: chunks with base64 arrays, skin, skeleton.</summary>
-        internal static object Mesh(ModelMesh mesh, string archive, string name, string game, bool arrays, object? locators = null)
+        internal static object Mesh(ModelMesh mesh, string archive, string name, string game, bool arrays, object? locators = null, int revision = 0)
         {
             static string F(float[] a) { var bytes = new byte[a.Length * 4]; Buffer.BlockCopy(a, 0, bytes, 0, bytes.Length); return Convert.ToBase64String(bytes); }
             static string I(int[] a) { var bytes = new byte[a.Length * 4]; Buffer.BlockCopy(a, 0, bytes, 0, bytes.Length); return Convert.ToBase64String(bytes); }
             return new
             {
-                archive, name, revision = 0, textureNamespace = (string?)null, game,
+                archive, name, revision, textureNamespace = (string?)null, game,
                 boundsMin = mesh.BoundsMin, boundsMax = mesh.BoundsMax,
                 chunks = mesh.Chunks.Select(c => new
                 {

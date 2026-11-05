@@ -107,7 +107,10 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
     /// </summary>
     public sealed class RwTexDictionary
     {
-        public sealed record Texture(string Name, int Width, int Height, int Depth, byte[] Rgba, bool HasAlpha);
+        public sealed record Texture(string Name, int Width, int Height, int Depth, byte[] Rgba, bool HasAlpha)
+        {
+            public bool HasTranslucency { get; init; }
+        }
 
         private readonly byte[] _data;
         private readonly Dictionary<string, (int Raster, int Size, string Name)> _rasters = new(StringComparer.OrdinalIgnoreCase);
@@ -132,8 +135,8 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
         {
             if (_decoded.TryGetValue(name, out var hit)) return hit;
             Texture? t = null;
-            if (_rasters.TryGetValue(name, out var r))
-                try { t = Decode(r.Name, r.Raster, r.Size); } catch (Exception e) when (e is IndexOutOfRangeException or ArgumentException or InvalidDataException) { t = null; }
+            if (!_rasters.TryGetValue(name, out var r)) return null;
+            try { t = Decode(r.Name, r.Raster, r.Size); } catch (Exception e) when (e is IndexOutOfRangeException or ArgumentException or InvalidDataException) { t = null; }
             return _decoded[name] = t;
         }
 
@@ -163,11 +166,13 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
         private Texture? Decode(string name, int o, int size)
         {
             var inner = Rw.Chunks(_data, o, o + size).ToList();
-            if (inner.Count < 2) return null;
+            if (inner.Count < 2 || inner[0].Size < 56) return null;
             int h0 = inner[0].Data;
             int width = BitConverter.ToInt32(_data, h0), height = BitConverter.ToInt32(_data, h0 + 4), depth = BitConverter.ToInt32(_data, h0 + 8);
+            if (width is <= 0 or > 1024 || height is <= 0 or > 1024 || depth is not (4 or 8 or 16 or 32)) return null;
             ulong tex0 = BitConverter.ToUInt64(_data, h0 + 16);
             int pixSize = BitConverter.ToInt32(_data, h0 + 48), palSize = BitConverter.ToInt32(_data, h0 + 52);
+            if (pixSize < 0 || palSize < 0 || (long)pixSize + palSize > inner[1].Size) return null;
             int psm = (int)((tex0 >> 20) & 0x3F), tbw = (int)((tex0 >> 14) & 0x3F);
             int p = inner[1].Data;
             var pixels = Packets(_data, p, p + pixSize);
@@ -180,7 +185,9 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
                 var pd = palette[0].Image;
                 int n = depth == 8 ? 256 : 16;
                 colours = new uint[n];
-                bool wide = pd.Length >= n * 4;
+                int cpsm = (int)(tex0 >> 51) & 15;
+                bool wide = cpsm == 0;
+                if ((!wide && cpsm is not (2 or 10)) || pd.Length < n * (wide ? 4 : 2)) return null;
                 for (int i = 0; i < n; i++)
                 {
                     int src = n == 256 ? (i & ~0x18) | ((i & 0x08) << 1) | ((i & 0x10) >> 1) : i;
@@ -189,12 +196,12 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
             }
 
             var rgba = new byte[width * height * 4];
-            bool alpha = false;
+            bool alpha = false, translucent = false;
             void Put(int i, uint c)
             {
                 byte a = (byte)Math.Min(255, (int)(c >> 24) * 2);
                 rgba[4 * i] = (byte)c; rgba[4 * i + 1] = (byte)(c >> 8); rgba[4 * i + 2] = (byte)(c >> 16); rgba[4 * i + 3] = a;
-                if (a < 250) alpha = true;
+                if (a < 250) { alpha = true; if (a > 0) translucent = true; }
             }
             if (depth is 4 or 8 && colours != null)
             {
@@ -215,7 +222,7 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
             else if (depth == 16)
                 for (int i = 0; i < width * height && 2 * i + 2 <= image.Length; i++) Put(i, Rgba16(BitConverter.ToUInt16(image, 2 * i)));
             else return null;
-            return new Texture(name, width, height, depth, rgba, alpha);
+            return new Texture(name, width, height, depth, rgba, alpha) { HasTranslucency = translucent };
         }
 
         private static byte[] Linear(byte[] image, int depth, int w, int h)
@@ -228,6 +235,6 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
 
         // A1B5G5R5 -> RGBA8 with PS2 alpha (0x80 = opaque).
         private static uint Rgba16(ushort c) =>
-            (uint)((c & 31) * 255 / 31) | (uint)((((c >> 5) & 31) * 255 / 31) << 8) | (uint)((((c >> 10) & 31) * 255 / 31) << 16) | ((c & 0x8000) != 0 ? 0x80000000u : 0x80000000u);
+            (uint)((c & 31) * 255 / 31) | (uint)((((c >> 5) & 31) * 255 / 31) << 8) | (uint)((((c >> 10) & 31) * 255 / 31) << 16) | ((c & 0x8000) != 0 ? 0x80000000u : 0u);
     }
 }

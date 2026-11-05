@@ -6,17 +6,20 @@ import { AssetClient, pngToRgba } from './asset-client';
 
 export class TextureCache {
   private revision = -1;
+  private session: string | null = null;
   private readonly cache = new Map<string, ModelTexturePixels | null>();
 
   constructor(private readonly client: AssetClient) {}
 
   invalidate(revision: number): void {
-    if (revision === this.revision) { return; }
+    if (revision === this.revision && this.session === this.client.session) { return; }
+    this.session = this.client.session;
     this.revision = revision;
     this.cache.clear();
   }
 
   async get(name: string, namespace: string | null): Promise<ModelTexturePixels | null> {
+    const session = this.session, revision = this.revision;
     const key = `${namespace ?? ''}:${name.toLowerCase()}`;
     if (this.cache.has(key)) { return this.cache.get(key)!; }
     let pixels: ModelTexturePixels | null = null;
@@ -34,7 +37,10 @@ export class TextureCache {
         alphaBlend: !!info.alphaBlend,
       };
     } catch { pixels = null; }
-    this.cache.set(key, pixels);
+    if (session === this.session && revision === this.revision) {
+      if (this.cache.size >= 192) { this.cache.delete(this.cache.keys().next().value!); }
+      this.cache.set(key, pixels);
+    }
     return pixels;
   }
 }

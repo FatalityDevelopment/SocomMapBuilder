@@ -17,7 +17,7 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
             {
                 uint type = BitConverter.ToUInt32(d, o);
                 int size = BitConverter.ToInt32(d, o + 4);
-                if (size < 0 || o + 12 + size > end) yield break;
+                if (size < 0 || size > end - o - 12) yield break;
                 yield return (type, o + 12, size);
                 o += 12 + size;
             }
@@ -66,6 +66,9 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
 
         public sealed class Batch
         {
+            internal VectorStream? PositionStream { get; set; }
+            internal VectorStream? NormalStream { get; set; }
+            internal VectorStream? UvStream { get; set; }
             public int Count { get; set; }
             public float[] Positions { get; set; } = Array.Empty<float>();
             public bool[] Restart { get; set; } = Array.Empty<bool>();
@@ -78,8 +81,12 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
             public int[]? Indices { get; set; }
         }
 
+        internal sealed record VectorStream(int Offset, int Stride, int ComponentBytes, float Unit, bool Unsigned = false);
+
         public sealed class Mesh
         {
+            internal int SourceOffset { get; init; }
+            internal int EditableUvOffset => Batches.Count > 0 && Batches.All(b => b.UvStream != null && b.Count <= b.Uvs.Length / 2) ? SourceOffset : -1;
             public int Material { get; init; }
             public List<Batch> Batches { get; } = new();
         }
@@ -94,6 +101,9 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
 
         public sealed class Geometry
         {
+            internal int MorphCount { get; init; }
+            internal int SphereOffset { get; set; }
+            internal int StructEnd { get; init; }
             public uint Flags { get; init; }
             public int TriangleCount { get; init; }
             public int VertexCount { get; init; }
@@ -120,6 +130,26 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
             foreach (var a in Rw.Chunks(d, clump.Data, end))
                 if (a.Type == Rw.Atomic && Rw.Find(d, a.Data, a.Data + a.Size, Rw.Struct) is { } s)
                     c.Atomics.Add((BitConverter.ToInt32(d, s.Data), BitConverter.ToInt32(d, s.Data + 4)));
+            // PLAYER.IMG shirt and mohican have a geometry-list length that crosses the real atomic.
+            // Recover the single declared attachment only from a complete atomic with the matching RW
+            // version, its frame/geometry struct and a bounded extension. Only inspect this clump.
+            if (c.Atomics.Count == 0 && c.Geometries.Count == 1 && c.Geometries[0].Skin != null
+                && Rw.Find(d, clump.Data, end, Rw.Struct) is { Size: >= 4 } header && BitConverter.ToInt32(d, header.Data) == 1)
+            {
+                uint version = BitConverter.ToUInt32(d, clump.Data - 4);
+                for (int at = header.Data + header.Size; at <= end - 52; at++)
+                {
+                    if (d[at] != Rw.Atomic || BitConverter.ToUInt32(d, at) != Rw.Atomic || BitConverter.ToUInt32(d, at + 8) != version) continue;
+                    int size = BitConverter.ToInt32(d, at + 4);
+                    if (size < 40 || size > end - at - 12 || BitConverter.ToUInt32(d, at + 12) != Rw.Struct
+                        || BitConverter.ToInt32(d, at + 16) != 16 || BitConverter.ToUInt32(d, at + 20) != version
+                        || BitConverter.ToUInt32(d, at + 40) != Rw.Extension || BitConverter.ToInt32(d, at + 44) != size - 40) continue;
+                    int frame = BitConverter.ToInt32(d, at + 24);
+                    if ((uint)frame >= c.Frames.Count || BitConverter.ToInt32(d, at + 28) != 0) continue;
+                    c.Atomics.Add((frame, 0));
+                    break;
+                }
+            }
             return c;
         }
 
@@ -169,11 +199,17 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
             var g = new Geometry
             {
                 Flags = BitConverter.ToUInt32(d, st.Data), TriangleCount = BitConverter.ToInt32(d, st.Data + 4), VertexCount = BitConverter.ToInt32(d, st.Data + 8),
+                MorphCount = BitConverter.ToInt32(d, st.Data + 12), SphereOffset = st.Data + 16, StructEnd = st.Data + st.Size,
             };
+            var pipelines = new List<uint>();
             if (parts.FirstOrDefault(p => p.Type == Rw.MaterialList) is { Size: > 0 } ml)
                 foreach (var m in Rw.Chunks(d, ml.Data, ml.Data + ml.Size).Where(c => c.Type == Rw.Material))
                 {
                     var ms = Rw.Find(d, m.Data, m.Data + m.Size, Rw.Struct);
+                    var plugins = Rw.Find(d, m.Data, m.Data + m.Size, Rw.Extension);
+                    var rights = plugins is { } extMat ? Rw.Find(d, extMat.Data, extMat.Data + extMat.Size, 0x1F) : null;
+                    pipelines.Add(rights is { Size: 8 } rightsMat && BitConverter.ToUInt32(d, rightsMat.Data) == 0x131
+                        ? BitConverter.ToUInt32(d, rightsMat.Data + 4) : 0);
                     g.MaterialColors.Add(ms is { } s ? d[(s.Data + 4)..(s.Data + 8)] : new byte[] { 255, 255, 255, 255 });
                     string? tex = null;
                     if (Rw.Find(d, m.Data, m.Data + m.Size, Rw.Texture) is { } t)
@@ -202,8 +238,10 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
                         {
                             int size = BitConverter.ToInt32(d, p);
                             if (size <= 0 || p + 8 + size > nend) break;
-                            var mesh = new Mesh { Material = i < materials.Count ? materials[i] : 0 };
-                            DecodeNative(d, p + 8, size, mesh);
+                            var mesh = new Mesh { Material = i < materials.Count ? materials[i] : 0, SourceOffset = p };
+                            uint pipeline = mesh.Material >= 0 && mesh.Material < pipelines.Count ? pipelines[mesh.Material] : 0;
+                            bool building = pipeline is 0x53F20081 or 0x53F20083 or 0x53F2008D or 0x53F2008F or 0x53F20091 or 0x53F20093;
+                            DecodeNative(d, p + 8, size, mesh, building ? 1f / 128 : 1f / 1024, (g.Flags & 8) != 0);
                             g.Meshes.Add(mesh);
                             p += 8 + size;
                         }
@@ -237,6 +275,7 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
         private sealed class PlainData
         {
             public int Count;
+            public VectorStream? UvStream;
             public float[] Positions = Array.Empty<float>(), Uvs = Array.Empty<float>();
             public float[]? Normals;
             public byte[]? Colors;
@@ -249,10 +288,10 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
             {
                 foreach (var group in Triangles.GroupBy(t => t.Material).OrderBy(x => x.Key))
                 {
-                    var mesh = new Mesh { Material = Math.Clamp(group.Key, 0, Math.Max(0, materials - 1)) };
+                    var mesh = new Mesh { Material = Math.Clamp(group.Key, 0, Math.Max(0, materials - 1)), SourceOffset = UvStream?.Offset ?? -1 };
                     mesh.Batches.Add(new Batch
                     {
-                        Count = Count, Positions = Positions, Uvs = Uvs, Normals = Normals, Colors = Colors, Bones = Bones, Weights = Weights,
+                        Count = Count, Positions = Positions, Uvs = Uvs, UvStream = UvStream, Normals = Normals, Colors = Colors, Bones = Bones, Weights = Weights,
                         Indices = group.SelectMany(t => new[] { t.A, t.B, t.C }).ToArray(),
                     });
                     yield return mesh;
@@ -276,6 +315,7 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
             if (sets > 0)
             {
                 if (p + 8 * nv * sets > end) return null;
+                pd.UvStream = new(p, 8, 4, 1f);
                 pd.Uvs = new float[2 * nv];
                 for (int i = 0; i < 2 * nv; i++) pd.Uvs[i] = BitConverter.ToSingle(d, p + 4 * i);
                 p += 8 * nv * sets;
@@ -286,6 +326,7 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
                 int v2 = BitConverter.ToUInt16(d, p), v1 = BitConverter.ToUInt16(d, p + 2), mat = BitConverter.ToUInt16(d, p + 4), v3 = BitConverter.ToUInt16(d, p + 6);
                 if (v1 < nv && v2 < nv && v3 < nv) pd.Triangles.Add((v1, v2, v3, mat));
             }
+            g.SphereOffset = p;
             p += 16;                                               // bounding sphere
             if (p + 8 > end) return null;
             bool hasPos = BitConverter.ToUInt32(d, p) != 0, hasNrm = BitConverter.ToUInt32(d, p + 4) != 0;
@@ -330,7 +371,7 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
 
         // ------------------------------------------------------------------ PS2 native data
 
-        private static void DecodeNative(byte[] d, int start, int size, Mesh mesh)
+        private static void DecodeNative(byte[] d, int start, int size, Mesh mesh, float positionUnit, bool prelit)
         {
             int end = start + size;
             var cur = new Batch();
@@ -354,7 +395,7 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
                     int n = num == 0 ? 256 : num;
                     int bits = vl switch { 0 => 32, 1 => 16, 2 => 8, _ => 16 };
                     int bytes = vl == 3 ? 2 * n : ((vn + 1) * bits * n + 31) / 32 * 4;
-                    if (dataAt + bytes <= dataEnd) Unpack(d, dataAt, cmd, n, imm, cur);
+                    if (dataAt + bytes <= dataEnd) Unpack(d, dataAt, cmd, n, imm, cur, positionUnit, prelit);
                     consumed = bytes;
                 }
                 else if (cmd == 0x04) cur.Count = imm & 0x3FF;                         // ITOP: vertex count
@@ -404,7 +445,7 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
             Finish();
         }
 
-        private static void Unpack(byte[] d, int at, int cmd, int n, int imm, Batch b)
+        private static void Unpack(byte[] d, int at, int cmd, int n, int imm, Batch b, float positionUnit, bool prelit)
         {
             int slot = imm & 0x3FF;
             bool unsigned = (imm & 0x4000) != 0;
@@ -419,25 +460,35 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
             {
                 case 0:                                                                 // positions
                 {
-                    float s = vl == 1 ? 1f / 1024f : 1f;
+                    if (comps < 3 || vl > 1) throw new InvalidDataException("Unsupported PS2 position stream");
+                    float s = vl == 1 ? positionUnit : 1f;
+                    int width = vl == 1 ? 2 : 4;
+                    b.PositionStream = new(at, comps * width, width, s);
                     b.Positions = new float[n * 3];
                     b.Restart = new bool[n];
                     for (int i = 0; i < n; i++)
                     {
                         for (int k = 0; k < 3 && k < comps; k++) b.Positions[3 * i + k] = Comp(i, k) * s;
                         if (comps == 4 && vl == 1) b.Restart[i] = BitConverter.ToInt16(d, at + 2 * (4 * i + 3)) == -32768;
+                        if (comps == 4 && vl == 0) b.Restart[i] = (BitConverter.ToUInt32(d, at + 16 * i + 12) & 0x8000) != 0;
                     }
                     break;
                 }
                 case 1:                                                                 // UVs (first set)
                 {
                     float s = vl == 1 ? 1f / 4096f : 1f;
+                    if (comps >= 2 && vl <= 1)
+                    {
+                        int width = vl == 0 ? 4 : 2;
+                        b.UvStream = new(at, comps * width, width, s, unsigned);
+                    }
+                    else b.UvStream = null;
                     b.Uvs = new float[n * 2];
                     for (int i = 0; i < n; i++) { b.Uvs[2 * i] = Comp(i, 0) * s; b.Uvs[2 * i + 1] = Comp(i, 1) * s; }
                     break;
                 }
                 default:
-                    if (cmd == 0x6C && slot == 3)                                       // skin weights + bone indices
+                    if (cmd == 0x6C && slot is 3 or 4)                                  // skin weights + bone indices
                     {
                         b.Weights = new float[n * 4];
                         b.Bones = new int[n * 4];
@@ -445,18 +496,24 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
                             for (int k = 0; k < 4; k++)
                             {
                                 uint bits = BitConverter.ToUInt32(d, at + 16 * i + 4 * k);
-                                b.Weights[4 * i + k] = BitConverter.ToSingle(d, at + 16 * i + 4 * k);
+                                b.Weights[4 * i + k] = BitConverter.UInt32BitsToSingle(bits & ~0x3FFu);
                                 b.Bones[4 * i + k] = bits == 0 ? -1 : (int)((bits & 0x3FF) >> 2) - 1;
                             }
                     }
-                    else if (vl == 2 && unsigned)                                       // prelit colours (RGBA bytes)
+                    else if (prelit && slot == 2 && vl == 1 && unsigned && comps == 4)  // RGBA, each component followed by its night value
+                    {
+                        b.Colors = new byte[n * 4];
+                        for (int i = 0; i < n * 4; i++) b.Colors[i] = d[at + 2 * i];
+                    }
+                    else if (vl == 2 && unsigned && prelit)                              // prelit colours (RGBA bytes)
                     {
                         b.Colors = new byte[n * 4];
                         for (int i = 0; i < n; i++)
                             for (int k = 0; k < 4; k++) b.Colors[4 * i + k] = k < comps ? d[at + comps * i + k] : (byte)255;
                     }
-                    else if (vl == 2)                                                   // normals (signed bytes)
+                    else if (vl == 2 && !unsigned && comps >= 3)                        // normals (signed bytes)
                     {
+                        b.NormalStream = new(at, comps, 1, 1f / 127);
                         b.Normals = new float[n * 3];
                         for (int i = 0; i < n; i++)
                             for (int k = 0; k < 3; k++) b.Normals[3 * i + k] = (sbyte)d[at + comps * i + k] / 127f;

@@ -1396,7 +1396,7 @@ namespace MapBuilder.Server.Services
                 string full = Path.GetFullPath(inputPath);
                 // SOCOM 3 / Combined Assault location archives and v6 ZDBs.
                 if (TryOpenCa(full) is string ca) return ca;
-                // GTA: San Andreas (the disc image or GTA3.IMG) opens as a read-only GTA session.
+                // GTA: San Andreas mounted discs, images, archives and loose DFFs.
                 if (Assets.GtaAssetService.TryOpen(full) is string gta) return gta;
                 AssetSession session = OpenSession(full, out bool reused);
                 // A session the Asset Viewer opened to browse becomes an editor's (or an agent's) once they open it.
@@ -1452,7 +1452,7 @@ namespace MapBuilder.Server.Services
                     return Ok("ASSET_CLOSE", new { session = id, discardedEdits = ca.Dirty.Count });
                 }
             }
-            if (id != null && Assets.GtaAssetService.Close(id)) return Ok("ASSET_CLOSE", new { session = id, discardedEdits = 0 });
+            if (id != null && Assets.GtaAssetService.Close(id) is int discarded) return Ok("ASSET_CLOSE", new { session = id, discardedEdits = discarded });
             if (Find(id) is not { } s) return Responses.Error($"No asset session '{id}'");
             // Wait for an edit in progress on it to finish.
             lock (s.Gate) Sessions.TryRemove(s.Id, out _);

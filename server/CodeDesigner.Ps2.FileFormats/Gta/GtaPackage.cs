@@ -6,9 +6,9 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
     /// GTA: San Andreas (PS2) as an asset package: the disc image (or a loose MODELS/GTA3.IMG). Models come from the
     /// IMG archives (GTA3.IMG, GTA_INT.IMG), named and typed by the IDE files - DATA/PEDS.IDE (peds: characters),
     /// DEFAULT.IDE (weapons), VEHICLES.IDE (vehicles), DATA/MAPS/**.IDE (objects: props) - which also give each model's
-    /// texture dictionary (and txdp parents). Read-only.
+    /// texture dictionary (and txdp parents). Native edits are held in memory for DFF or IMG copy saves.
     /// </summary>
-    public sealed class GtaPackage
+    public sealed partial class GtaPackage
     {
         public sealed record Model(string Name, string Kind, string Txd, string Archive, int Id);
 
@@ -16,102 +16,178 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
         public bool IsDisc { get; }
         private readonly Dictionary<string, FileSpan> _disc = new(StringComparer.OrdinalIgnoreCase);
         private readonly List<GtaImg> _imgs = new();
+        private readonly Dictionary<string, GtaImg> _imgByArchive = new(StringComparer.OrdinalIgnoreCase);
+        private readonly HashSet<string> _playerArchives = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<Model, FileSpan> _modelFiles = new();
+        private readonly Dictionary<Model, byte[]> _edited = new();
+        private Model? _assembledCj;
+        private Model? _looseOutfitPart;
+        public string? InitialModel { get; private set; }
         private readonly List<Model> _models = new();
         private readonly Dictionary<string, string> _txdParent = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, RwTexDictionary?> _txds = new(StringComparer.OrdinalIgnoreCase);
-        private readonly Dictionary<string, ModelMesh> _meshes = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Queue<string> _txdOrder = new();
+        private readonly Dictionary<Model, ModelMesh> _meshes = new();
         private List<GtaAnimations.Clip>? _clips;
         private Dictionary<int, string>? _boneNames;
 
         private GtaPackage(string path, bool disc) { SourcePath = path; IsDisc = disc; }
 
-        /// <summary>True for a GTA disc image (MODELS/GTA3.IMG inside) or a VER2 IMG archive.</summary>
+        private static string? DiscRoot(string path)
+        {
+            var dir = new DirectoryInfo(Directory.Exists(path) ? path : Path.GetDirectoryName(path)!);
+            while (dir != null)
+            {
+                if (File.Exists(Path.Combine(dir.FullName, "MODELS", "GTA3.IMG"))) return dir.FullName;
+                dir = dir.Parent;
+            }
+            return null;
+        }
+
         public static bool IsGtaPath(string path)
         {
-            if (!File.Exists(path)) return false;
-            if (path.EndsWith(".img", StringComparison.OrdinalIgnoreCase))
+            if (Directory.Exists(path))
             {
-                using var f = File.OpenRead(path);
-                var h = new byte[4];
-                return f.Read(h, 0, 4) == 4 && h[0] == 'V' && h[1] == 'E' && h[2] == 'R' && h[3] == '2';
+                string dir = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
+                string? root = DiscRoot(dir);
+                return root != null && (dir.Equals(root, StringComparison.OrdinalIgnoreCase)
+                    || dir.Equals(Path.Combine(root, "MODELS"), StringComparison.OrdinalIgnoreCase));
             }
-            if (!path.EndsWith(".iso", StringComparison.OrdinalIgnoreCase)) return false;
-            try { return Iso9660.Files(path).ContainsKey("MODELS/GTA3.IMG"); }
-            catch (Exception e) when (e is InvalidDataException or IOException) { return false; }
+            if (!File.Exists(path)) return false;
+            string ext = Path.GetExtension(path).ToLowerInvariant();
+            if (ext == ".iso")
+            {
+                try { return Iso9660.Files(path).ContainsKey("MODELS/GTA3.IMG"); }
+                catch (Exception e) when (e is InvalidDataException or IOException) { return false; }
+            }
+            if (ext != ".img" && ext != ".dff") return false;
+            using var f = File.OpenRead(path);
+            Span<byte> head = stackalloc byte[4];
+            return f.Read(head) == 4 && (ext == ".img" ? head.SequenceEqual("VER2"u8) : BitConverter.ToUInt32(head) == Rw.Clump);
         }
 
         public static GtaPackage Open(string path)
         {
-            bool disc = path.EndsWith(".iso", StringComparison.OrdinalIgnoreCase);
-            var pkg = new GtaPackage(Path.GetFullPath(path), disc);
-            if (disc)
+            string full = Path.GetFullPath(path);
+            bool directory = Directory.Exists(full);
+            string ext = directory ? "" : Path.GetExtension(full).ToLowerInvariant();
+            string? root = ext == ".iso" ? null : DiscRoot(full);
+            var pkg = new GtaPackage(full, ext == ".iso" || root != null);
+            if (ext == ".iso")
+                foreach (var (k, v) in Iso9660.Files(full)) pkg._disc[k] = v;
+            if (root != null)
+                foreach (string folder in new[] { "MODELS", "DATA", "ANIM" })
+                {
+                    string dir = Path.Combine(root, folder);
+                    if (!Directory.Exists(dir)) continue;
+                    foreach (var f in new DirectoryInfo(dir).EnumerateFiles("*", SearchOption.AllDirectories))
+                        pkg._disc[Path.GetRelativePath(root, f.FullName).Replace('\\', '/')] = new FileSpan(f.FullName, 0, f.Length);
+                }
+
+            string? selected = ext == ".img" ? Path.GetFileName(full) : null;
+            if (selected != null) pkg.AddArchive(selected, new FileSpan(full, 0, new FileInfo(full).Length));
+            if (pkg.IsDisc)
             {
-                foreach (var (k, v) in Iso9660.Files(path)) pkg._disc[k] = v;
-                foreach (string img in new[] { "MODELS/GTA3.IMG", "MODELS/GTA_INT.IMG", "MODELS/PLAYER.IMG" })
-                    if (pkg._disc.TryGetValue(img, out var span)) pkg._imgs.Add(new GtaImg(span));
+                // GTA3_1.IMG is a second on-disc copy of GTA3.IMG. Open it only when explicitly selected.
+                foreach (var file in new[] { "MODELS/GTA3.IMG", "MODELS/GTA_INT.IMG", "MODELS/PLAYER.IMG", "MODELS/CUTSCENE.IMG", "ANIM/CUTS.IMG" })
+                    if (pkg._disc.TryGetValue(file, out var span) && !pkg._imgByArchive.ContainsKey(Path.GetFileName(file)))
+                        pkg.AddArchive(Path.GetFileName(file), span);
             }
-            else pkg._imgs.Add(new GtaImg(new FileSpan(path, 0, new FileInfo(path).Length)));
-            pkg.LoadDefinitions();
-            pkg.AddCj();
+            if (ext == ".dff")
+            {
+                pkg.InitialModel = Path.GetFileNameWithoutExtension(full);
+                if (root == null)
+                {
+                    foreach (var txd in new DirectoryInfo(Path.GetDirectoryName(full)!).EnumerateFiles("*.txd"))
+                        pkg._disc[txd.Name] = new FileSpan(txd.FullName, 0, txd.Length);
+                }
+                string key = root == null ? Path.GetFileName(full) : Path.GetRelativePath(root, full).Replace('\\', '/');
+                pkg._disc[key] = new FileSpan(full, 0, new FileInfo(full).Length);
+            }
+            pkg.LoadDefinitions(selected, ext == ".dff" ? full : null);
+            if (ext == ".dff" && pkg._models.FirstOrDefault() is { } part
+                && CjOutfit.Any(o => o.Dff.Equals(part.Name, StringComparison.OrdinalIgnoreCase))
+                && HasClothingLayout(pkg.ReadModelData(part))) pkg._looseOutfitPart = part;
+            if (pkg._disc.TryGetValue("DATA/CARCOLS.DAT", out var paints)) pkg.LoadCarPaint(paints.Read());
             return pkg;
         }
 
-        public IReadOnlyList<Model> Models => _models;
+        private void AddArchive(string name, FileSpan span)
+        {
+            var img = new GtaImg(span);
+            _imgByArchive.Add(name, img);
+            _imgs.Add(img);
+            // An IMG has no header flag for its role. A renamed player archive still contains the five
+            // outfit meshes and GTA's three base skin dictionaries. Keep its physical name for reads and saves.
+            if (name.Equals("PLAYER.IMG", StringComparison.OrdinalIgnoreCase) || CjOutfit.All(p => img.Find(p.Dff + ".dff") != null)
+                && img.Find("player_torso.txd") != null && img.Find("player_legs.txd") != null && img.Find("player_feet.txd") != null)
+                _playerArchives.Add(name);
+        }
 
+        private bool IsPlayerArchive(string? archive) => archive != null && _playerArchives.Contains(archive);
+
+        public IReadOnlyList<Model> Models => _models;
         public IReadOnlyList<GtaImg> Archives => _imgs;
 
-        public Model? FindModel(string name) => _models.FirstOrDefault(m => m.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        public Model? FindModel(string name, string? archive = null) => _models.FirstOrDefault(m =>
+            m.Name.Equals(name, StringComparison.OrdinalIgnoreCase)
+            && (string.IsNullOrEmpty(archive) || m.Archive.Equals(archive, StringComparison.OrdinalIgnoreCase)));
 
-        // ------------------------------------------------------------------ definitions
-
-        private void LoadDefinitions()
+        private void LoadDefinitions(string? selectedArchive, string? selectedFile)
         {
-            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            void Add(string name, string kind, string txd, int id)
-            {
-                if (!seen.Add(name)) return;
-                string archive = ArchiveName(name + ".dff");
-                if (archive.Length > 0) _models.Add(new Model(name, kind, txd, archive, id));
-            }
-            if (IsDisc)
-            {
-                foreach (var (path, span) in _disc.Where(f => f.Key.EndsWith(".IDE", StringComparison.OrdinalIgnoreCase)).OrderBy(f => f.Key))
+            var definitions = new Dictionary<string, (string Kind, string Txd, int Id)>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (path, span) in _disc.Where(f => f.Key.EndsWith(".IDE", StringComparison.OrdinalIgnoreCase)).OrderBy(f => f.Key))
+                foreach (var (section, cols) in Ide(span.Read()))
                 {
-                    string file = Path.GetFileName(path).ToUpperInvariant();
-                    foreach (var (section, cols) in Ide(span.Read()))
+                    if (section == "txdp" && cols.Length >= 2) { _txdParent[cols[0]] = cols[1]; continue; }
+                    if (cols.Length < 3 || !int.TryParse(cols[0], out int id)) continue;
+                    string? kind = section switch
                     {
-                        if (cols.Length < 3) continue;
-                        if (section == "txdp") { _txdParent[cols[0]] = cols[1]; continue; }
-                        if (!int.TryParse(cols[0], out int id)) continue;
-                        string kind = section switch
-                        {
-                            "peds" => "character",
-                            "weap" => "weapon",
-                            "cars" => "vehicle",
-                            "objs" or "tobj" or "anim" => "prop",
-                            _ => "",
-                        };
-                        if (kind.Length > 0) Add(cols[1], kind, cols[2], id);
+                        "peds" => "character", "weap" => "weapon", "cars" => "vehicle",
+                        "objs" or "tobj" or "anim" => "prop", _ => null,
+                    };
+                    if (kind != null) definitions.TryAdd(cols[1], (kind, cols[2], id));
+                    if (section == "cars" && cols.Length > 13) RegisterWheelSizes(cols);
+                }
+
+            void Add(string name, string archive, FileSpan data)
+            {
+                // An identically named clothing or cutscene model is independent of the world model's IDE entry.
+                bool useIde = !IsPlayerArchive(archive)
+                    && !archive.Equals("CUTSCENE.IMG", StringComparison.OrdinalIgnoreCase);
+                Model model;
+                if (useIde && definitions.TryGetValue(name, out var d)) model = new Model(name, d.Kind, d.Txd, archive, d.Id);
+                else
+                {
+                    byte[] dff = data.Read();
+                    string kind = HasSkin(dff) ? "character" : HasFrame(dff, "chassis") ? "vehicle" : "model";
+                    model = new Model(name, kind, name, archive, -1);
+                }
+                _models.Add(model);
+                _modelFiles.Add(model, data);
+            }
+            if (selectedFile == null)
+            {
+                foreach (var (archive, img) in _imgByArchive)
+                {
+                    if (selectedArchive != null && !archive.Equals(selectedArchive, StringComparison.OrdinalIgnoreCase)) continue;
+                    foreach (var e in img.Entries.Where(e => e.Name.EndsWith(".dff", StringComparison.OrdinalIgnoreCase)))
+                        Add(e.Name[..^4], archive, new FileSpan(img.Source.Path, img.Source.Offset + e.Offset, e.Size));
+                    if (IsPlayerArchive(archive) && CjOutfit.All(p => img.Find(p.Dff + ".dff") != null)
+                        && img.Find(CjModel + ".dff") == null)
+                    {
+                        _assembledCj = new Model(CjModel, "character", "", archive, -1);
+                        _models.Insert(0, _assembledCj);
                     }
                 }
             }
-            // Anything else in the archives (story/cutscene characters, CJ's body parts, cutscene props): by name, its own
-            // .txd if there is one; skinned ones are characters.
-            foreach (var img in _imgs)
-                foreach (var e in img.Entries)
-                    if (e.Name.EndsWith(".dff", StringComparison.OrdinalIgnoreCase) && !seen.Contains(e.Name[..^4]))
-                    {
-                        string n = e.Name[..^4];
-                        byte[] dff = img.Read(e);
-                        string kind = HasSkin(dff) ? "character" : HasFrame(dff, "chassis") ? "vehicle" : "model";
-                        Add(n, kind, img.Find(n + ".txd") != null ? n : "", -1);
-                    }
-        }
-
-        private void AddCj()
-        {
-            if (ArchiveName("head.dff") is { Length: > 0 } archive && FindModel(CjModel) == null)
-                _models.Insert(0, new Model(CjModel, "character", "", archive, -1));
+            if (selectedArchive != null) return;
+            foreach (var (key, span) in _disc.Where(e => e.Key.EndsWith(".dff", StringComparison.OrdinalIgnoreCase)))
+            {
+                if (selectedFile != null && !selectedFile.Equals(span.Path, StringComparison.OrdinalIgnoreCase)) continue;
+                int end = key.LastIndexOf('/');
+                Add(Path.GetFileNameWithoutExtension(key), end < 0 ? "LOOSE" : key[..end].ToUpperInvariant(), span);
+            }
         }
 
         /// <summary>True when a DFF's geometry carries a Skin plugin (a skinned character).</summary>
@@ -125,15 +201,6 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
         /// <summary>True when a DFF names a frame <paramref name="name"/> (a vehicle's "chassis").</summary>
         private static bool HasFrame(byte[] dff, string name) =>
             dff.AsSpan().IndexOf(System.Text.Encoding.ASCII.GetBytes(name)) >= 0;
-
-        /// <summary>The IMG (GTA3.IMG / GTA_INT.IMG) holding <paramref name="file"/>, or "".</summary>
-        private string ArchiveName(string file)
-        {
-            foreach (var img in _imgs)
-                if (img.Find(file) != null)
-                    return IsDisc ? Path.GetFileName(_disc.First(kv => kv.Value == img.Source).Key) : Path.GetFileName(img.Source.Path);
-            return "";
-        }
 
         /// <summary>IDE text: "section" lines open a section, "end" closes it; entries are comma-separated.</summary>
         private static IEnumerable<(string Section, string[] Columns)> Ide(byte[] data)
@@ -149,26 +216,124 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
             }
         }
 
-        public byte[]? ReadFile(string name)
+        public byte[]? ReadFile(string name, string? archive = null)
         {
-            foreach (var img in _imgs) if (img.Read(name) is { } d) return d;
-            return null;
+            if (archive == null)
+            {
+                foreach (var img in _imgs) if (img.Read(name) is { } data) return data;
+                return _disc.GetValueOrDefault(name)?.Read();
+            }
+            if (_imgByArchive.TryGetValue(archive, out var source)) return source.Read(name);
+            string key = archive == "LOOSE" ? name : archive + "/" + name;
+            return _disc.GetValueOrDefault(key)?.Read();
+        }
+
+        public bool IsEditable(Model model) => _modelFiles.ContainsKey(model);
+
+        public bool IsSourceFile(string fullPath)
+        {
+            string full = Path.GetFullPath(fullPath);
+            return full.Equals(SourcePath, StringComparison.OrdinalIgnoreCase)
+                || _imgs.Any(i => full.Equals(i.Source.Path, StringComparison.OrdinalIgnoreCase))
+                || _disc.Values.Any(file => full.Equals(file.Path, StringComparison.OrdinalIgnoreCase));
+        }
+
+        public byte[] ReadModelData(Model model) => _edited.TryGetValue(model, out var bytes) ? (byte[])bytes.Clone()
+            : _modelFiles.TryGetValue(model, out var span) ? span.Read()
+            : throw new InvalidOperationException("CJ is assembled from individual clothing models. Edit a source model instead.");
+
+        public void SetModelData(Model model, byte[]? edited)
+        {
+            if (!_modelFiles.ContainsKey(model))
+                throw new InvalidOperationException("Select a source DFF to edit.");
+            if (edited == null) _edited.Remove(model);
+            else _edited[model] = (byte[])edited.Clone();
+            _meshes.Remove(model);
+            if (_assembledCj != null && model.Archive == _assembledCj.Archive) _meshes.Remove(_assembledCj);
+        }
+
+        /// <summary>Stream the original IMG to an atomic copy and write the edited DFFs to their own slots.</summary>
+        public void SaveImgCopy(string archive, string outputPath)
+        {
+            if (!_imgByArchive.TryGetValue(archive, out var img))
+                throw new ArgumentException($"No IMG archive named {archive} in this package");
+            string full = Path.GetFullPath(outputPath);
+            if (!Path.GetExtension(full).Equals(".img", StringComparison.OrdinalIgnoreCase))
+                throw new ArgumentException("Choose an .IMG output file.");
+            if (IsSourceFile(full))
+                throw new InvalidOperationException("Choose a separate output file for the IMG copy.");
+            var changes = _edited.Where(e => e.Key.Archive.Equals(archive, StringComparison.OrdinalIgnoreCase)).ToArray();
+            if (changes.Length == 0) throw new InvalidOperationException($"No edited models in {archive}.");
+            Directory.CreateDirectory(Path.GetDirectoryName(full)!);
+            string temp = full + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                using (var writer = new FileStream(temp, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None))
+                {
+                    img.CopyTo(writer);
+                    foreach (var (model, bytes) in changes)
+                        img.WriteEntry(writer, img.Find(model.Name + ".dff")!, bytes);
+                    writer.Flush(flushToDisk: true);
+                }
+                File.Move(temp, full, overwrite: true);
+            }
+            finally { if (File.Exists(temp)) File.Delete(temp); }
         }
 
         // ------------------------------------------------------------------ textures
 
+        public sealed record TextureChoice(string Name, string Dictionary);
+
+        private IEnumerable<string> TextureChain(string name)
+        {
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            for (string? t = name; !string.IsNullOrEmpty(t) && visited.Add(t); t = _txdParent.GetValueOrDefault(t))
+                yield return t;
+        }
+
+        /// <summary>Texture names available in the model's assigned and inherited dictionaries, in lookup order.</summary>
+        public IReadOnlyList<TextureChoice> TextureChoices(Model model)
+        {
+            var names = new Dictionary<string, TextureChoice>(StringComparer.OrdinalIgnoreCase);
+            void Add(string dictionary, string archive)
+            {
+                if (Txd(dictionary, archive) is not { } txd) return;
+                foreach (string name in txd.Names)
+                    if (name.Length is > 0 and <= 31) names.TryAdd(name, new TextureChoice(name, dictionary));
+            }
+            foreach (string dict in TextureChain(model.Txd)) Add(dict, model.Archive);
+            if ((IsPlayerArchive(model.Archive) || model == _looseOutfitPart) && ClothingTexture(model, 0) is { } clothing)
+                foreach (string layer in clothing.Split('+'))
+                    Add(layer[..layer.IndexOf('/')], model.Archive);
+            if (model.Kind == "vehicle") Add("vehicle", "MODELS/GENERIC");
+            return names.Values.OrderBy(c => c.Dictionary, StringComparer.OrdinalIgnoreCase)
+                .ThenBy(c => c.Name, StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
         /// <summary>A texture dictionary by name (IMG, then the disc's MODELS/**.TXD), cached.</summary>
-        public RwTexDictionary? Txd(string name)
+        public RwTexDictionary? Txd(string name, string? archive = null)
         {
             if (string.IsNullOrEmpty(name)) return null;
-            if (_txds.TryGetValue(name, out var hit)) return hit;
-            byte[]? d = ReadFile(name + ".txd");
-            if (d == null && IsDisc)
-                d = _disc.FirstOrDefault(kv => Path.GetFileNameWithoutExtension(kv.Key).Equals(name, StringComparison.OrdinalIgnoreCase)
-                    && kv.Key.EndsWith(".TXD", StringComparison.OrdinalIgnoreCase)).Value?.Read();
+            string file = name + ".txd";
+            string key = archive + "|" + name;
+            if (_txds.TryGetValue(key, out var hit)) return hit;
+            byte[]? d = archive == null ? ReadFile(file) : ReadFile(file, archive);
+            // An IDE parent may live in a different world archive. Clothing uses a separate set of
+            // names; never bind a world material to a same-named PLAYER.IMG dictionary or vice versa.
+            if (d == null && !IsPlayerArchive(archive))
+            {
+                if (archive != null)
+                    foreach (var (other, img) in _imgByArchive)
+                        if (!IsPlayerArchive(other) && !other.Equals(archive, StringComparison.OrdinalIgnoreCase) && img.Read(file) is { } bytes)
+                        { d = bytes; break; }
+                d ??= _disc.FirstOrDefault(kv => Path.GetFileName(kv.Key).Equals(file, StringComparison.OrdinalIgnoreCase)).Value?.Read();
+            }
             RwTexDictionary? txd = null;
             if (d != null) try { txd = new RwTexDictionary(d); } catch (InvalidDataException) { }
-            return _txds[name] = txd;
+            // Decoded RGBA images are much larger than the indexed TXDs on disc. Keep only recently loaded dictionaries.
+            if (_txdOrder.Count >= 24) _txds.Remove(_txdOrder.Dequeue());
+            _txdOrder.Enqueue(key);
+            return _txds[key] = txd;
         }
 
         /// <summary>A texture named "&lt;txd&gt;/&lt;texture&gt;" (as the meshes name them): that dictionary, its txdp parents,
@@ -176,18 +341,92 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
         public RwTexDictionary.Texture? FindTexture(string name)
         {
             // "base+over": over alpha-blended onto base (CJ's clothes on his skin), at the larger size.
-            int plus = name.IndexOf('+');
-            if (plus > 0)
+            int pipe = name.IndexOf('|');
+            // Clothing layers are qualified with the same source archive. '+' is also valid in a
+            // user's archive filename and in a single raster name.
+            int plus = pipe >= 0 ? name.IndexOf("+" + name[..(pipe + 1)], pipe + 1, StringComparison.OrdinalIgnoreCase)
+                : name.IndexOf('+', name.IndexOf('/') + 1);
+            if (plus > 0 && name.IndexOf('/', plus + 1) >= 0)
             {
                 var under = FindTexture(name[..plus]);
                 var over = FindTexture(name[(plus + 1)..]);
                 return under == null || over == null ? under ?? over : Composite(name, under, over);
             }
+            string? archive = pipe > 0 ? name[..pipe] : null;
+            if (archive != null) name = name[(pipe + 1)..];
             int slash = name.IndexOf('/');
-            string txd = slash > 0 ? name[..slash] : "", tex = slash > 0 ? name[(slash + 1)..] : name;
-            for (string? t = txd; !string.IsNullOrEmpty(t); t = _txdParent.GetValueOrDefault(t))
-                if (Txd(t)?.Get(tex) is { } found) return found;
-            return Txd("vehicle")?.Get(tex);
+            string txd = slash >= 0 ? name[..slash] : "", tex = slash >= 0 ? name[(slash + 1)..] : name;
+            foreach (string t in TextureChain(txd))
+                if (Txd(t, archive)?.Get(tex) is { } found) return found;
+            var sharedVehicle = IsPlayerArchive(archive) ? null : Txd("vehicle", "MODELS/GENERIC")?.Get(tex);
+            return sharedVehicle ?? FindUnambiguousTexture(archive, tex);
+        }
+
+        // Prefer the model's own archive. If the name is absent there, look in the other mounted
+        // model sources. Require matching dimensions and pixels across every candidate at that level.
+        private sealed record TextureSource(string Archive, string Dictionary);
+        private readonly Dictionary<string, Dictionary<string, List<TextureSource>>> _textureNames = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<(string Archive, string Name), TextureSource?> _fallbackTxd = new();
+        private string[]? _sharedTextureArchives;
+
+        private static string TextureFolder(string path)
+        {
+            int slash = path.LastIndexOf('/');
+            return slash < 0 ? "LOOSE" : path[..slash];
+        }
+
+        private Dictionary<string, List<TextureSource>> TextureIndex(string archive)
+        {
+            if (_textureNames.TryGetValue(archive, out var index)) return index;
+            index = new(StringComparer.OrdinalIgnoreCase);
+            IEnumerable<string> files = _imgByArchive.TryGetValue(archive, out var img)
+                ? img.Entries.Select(e => e.Name)
+                : _disc.Keys.Where(f => TextureFolder(f).Equals(archive, StringComparison.OrdinalIgnoreCase));
+            foreach (string file in files.Where(f => f.EndsWith(".txd", StringComparison.OrdinalIgnoreCase)))
+            {
+                string dictionary = Path.GetFileNameWithoutExtension(file);
+                if (Txd(dictionary, archive) is not { } txd) continue;
+                var source = new TextureSource(archive, dictionary);
+                foreach (string texture in txd.Names)
+                {
+                    if (!index.TryGetValue(texture, out var sources)) index[texture] = sources = new();
+                    sources.Add(source);
+                }
+            }
+            return _textureNames[archive] = index;
+        }
+
+        private RwTexDictionary.Texture? FindUnambiguousTexture(string? archive, string name)
+        {
+            if (string.IsNullOrEmpty(archive) || string.IsNullOrEmpty(name)) return null;
+            var key = (archive.ToUpperInvariant(), name.ToUpperInvariant());
+            RwTexDictionary.Texture? Read(TextureSource src) => Txd(src.Dictionary, src.Archive)?.Get(name);
+            if (_fallbackTxd.TryGetValue(key, out var known)) return known == null ? null : Read(known);
+            IEnumerable<TextureSource> candidates = Array.Empty<TextureSource>();
+            if (TextureIndex(archive).TryGetValue(name, out var local)) candidates = local;
+            else if (!IsPlayerArchive(archive))
+            {
+                _sharedTextureArchives ??= _imgByArchive.Keys.Concat(_disc.Keys.Where(f => f.EndsWith(".txd", StringComparison.OrdinalIgnoreCase)).Select(TextureFolder))
+                    .Where(a => !IsPlayerArchive(a)).Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+                candidates = _sharedTextureArchives.Where(a => !a.Equals(archive, StringComparison.OrdinalIgnoreCase))
+                    .SelectMany(a => TextureIndex(a).TryGetValue(name, out var hits) ? (IEnumerable<TextureSource>)hits : Array.Empty<TextureSource>());
+            }
+            RwTexDictionary.Texture? first = null;
+            TextureSource? selected = null;
+            foreach (var candidate in candidates)
+            {
+                var texture = Read(candidate);
+                if (texture == null || first != null && (first.Width != texture.Width || first.Height != texture.Height
+                    || !first.Rgba.AsSpan().SequenceEqual(texture.Rgba)))
+                {
+                    _fallbackTxd[key] = null;
+                    return null;
+                }
+                first ??= texture;
+                selected ??= candidate;
+            }
+            _fallbackTxd[key] = selected;
+            return first;
         }
 
         // ------------------------------------------------------------------ animations
@@ -218,7 +457,8 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
                 _boneNames = new Dictionary<int, string>();
                 foreach (var m in _models.Where(m => m.Kind == "character").Take(8))
                 {
-                    if (ReadFile(m.Name + ".dff") is not { } dff) continue;
+                    if (!IsEditable(m)) continue;
+                    byte[] dff = ReadModelData(m);
                     var clump = RwClump.Parse(dff);
                     foreach (var f in clump.Frames) if (f.BoneId is int b && !string.IsNullOrEmpty(f.Name)) _boneNames.TryAdd(b, f.Name.Trim());
                     if (_boneNames.Count > 0) break;
@@ -232,15 +472,20 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
             int w = Math.Max(a.Width, b.Width), h = Math.Max(a.Height, b.Height);
             byte Sample(RwTexDictionary.Texture t, int x, int y, int k) => t.Rgba[((y * t.Height / h) * t.Width + x * t.Width / w) * 4 + k];
             var rgba = new byte[w * h * 4];
+            bool transparent = false, translucent = false;
             for (int y = 0; y < h; y++)
                 for (int x = 0; x < w; x++)
                 {
-                    int alpha = Sample(b, x, y, 3);
+                    int alpha = Sample(b, x, y, 3), underAlpha = Sample(a, x, y, 3);
+                    int underWeight = underAlpha * (255 - alpha), overWeight = alpha * 255, total = underWeight + overWeight;
                     for (int k = 0; k < 3; k++)
-                        rgba[(y * w + x) * 4 + k] = (byte)((Sample(b, x, y, k) * alpha + Sample(a, x, y, k) * (255 - alpha) + 127) / 255);
-                    rgba[(y * w + x) * 4 + 3] = Math.Max(Sample(a, x, y, 3), (byte)alpha);
+                        rgba[(y * w + x) * 4 + k] = total == 0 ? (byte)0 :
+                            (byte)((Sample(b, x, y, k) * overWeight + Sample(a, x, y, k) * underWeight + total / 2) / total);
+                    int outputAlpha = (total + 127) / 255;
+                    rgba[(y * w + x) * 4 + 3] = (byte)outputAlpha;
+                    if (outputAlpha < 250) { transparent = true; if (outputAlpha > 0) translucent = true; }
                 }
-            return new RwTexDictionary.Texture(name, w, h, 32, rgba, rgba.Where((v, i) => i % 4 == 3).Any(v => v < 255));
+            return new RwTexDictionary.Texture(name, w, h, 32, rgba, transparent) { HasTranslucency = translucent };
         }
 
         // ------------------------------------------------------------------ meshes
@@ -273,8 +518,10 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
             var parts = new List<(RwClump, Func<RwClump.Geometry, int, string?>)>();
             foreach (var (dff, textures) in CjOutfit)
             {
-                if (ReadFile(dff + ".dff") is not { } data) continue;
-                parts.Add((RwClump.Parse(data), (g, m) => textures[Math.Clamp(m, 0, textures.Length - 1)]));
+                if (FindModel(dff, model.Archive) is not { } part) continue;
+                byte[] data = ReadModelData(part);
+                var scoped = textures.Select(t => ScopeClothingTexture(model.Archive, t)).ToArray();
+                parts.Add((RwClump.Parse(data), (g, m) => scoped[Math.Clamp(m, 0, scoped.Length - 1)]));
             }
             if (parts.Count == 0) throw new KeyNotFoundException("PLAYER.IMG's clothes are not in this package");
             return Skinned(model, parts[0].Item1, parts);
@@ -282,18 +529,20 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
 
         public ModelMesh BuildMesh(Model model)
         {
-            if (_meshes.TryGetValue(model.Name, out var hit)) return hit;
-            if (model.Name == CjModel) return _meshes[model.Name] = BuildCj(model);
-            byte[] dff = ReadFile(model.Name + ".dff") ?? throw new KeyNotFoundException($"{model.Name}.dff is not in the archives");
+            if (_meshes.TryGetValue(model, out var hit)) return hit;
+            // Keep repeated describe/mesh requests fast without retaining the whole disc as the user browses.
+            if (_meshes.Count >= 8) _meshes.Remove(_meshes.Keys.First());
+            if (model == _assembledCj) return _meshes[model] = BuildCj(model);
+            byte[] dff = ReadModelData(model);
             var clump = RwClump.Parse(dff);
             var mesh = clump.Geometries.Any(g => g.Skin != null) ? Skinned(model, clump) : Static(model, clump);
-            return _meshes[model.Name] = mesh;
+            return _meshes[model] = mesh;
         }
 
         /// <summary>Every named frame's origin in the static model space (Y up), e.g. a weapon's "gunflash" muzzle.</summary>
         public Dictionary<string, float[]> FramePoints(Model model)
         {
-            byte[] dff = ReadFile(model.Name + ".dff") ?? throw new KeyNotFoundException($"{model.Name}.dff is not in the archives");
+            byte[] dff = ReadModelData(model);
             var clump = RwClump.Parse(dff);
             var worlds = clump.FrameWorlds();
             var points = new Dictionary<string, float[]>(StringComparer.OrdinalIgnoreCase);
@@ -306,8 +555,61 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
             return points;
         }
 
-        private string? TextureName(Model model, RwClump.Geometry g, int material) =>
-            material >= 0 && material < g.Materials.Count && g.Materials[material] is { } tex ? $"{model.Txd}/{tex}" : null;
+        private GtaClothingTextures? _clothing;
+
+        // The outfit DFFs each contain three plain skinned clumps. All use the same 38-frame body
+        // hierarchy, with the body variant named on frame 1. A loose model named "head" may be unrelated.
+        private static bool HasClothingLayout(byte[] data)
+        {
+            var clumps = Rw.Chunks(data, 0, data.Length).Where(c => c.Type == Rw.Clump).Take(4).ToArray();
+            if (clumps.Length != 3) return false;
+            string[] variants = { "Ripped", "Fat", "Normal" };
+            for (int i = 0; i < variants.Length; i++)
+            {
+                var c = clumps[i];
+                if (Rw.Find(data, c.Data, c.Data + c.Size, Rw.FrameList) is not { } frames) return false;
+                var header = Rw.Find(data, frames.Data, frames.Data + frames.Size, Rw.Struct);
+                if (header is not { } h || h.Size < 4 + 38 * 56 || BitConverter.ToInt32(data, h.Data) != 38) return false;
+                var ext = Rw.Chunks(data, frames.Data, frames.Data + frames.Size).Where(p => p.Type == Rw.Extension).Skip(1).FirstOrDefault();
+                if (Rw.Find(data, ext.Data, ext.Data + ext.Size, Rw.NodeName) is not { } name
+                    || Rw.ReadString(data, name.Data, name.Size).Trim() != variants[i]) return false;
+            }
+            var mesh = RwClump.Parse(data);
+            return mesh.Geometries.Any(g => g.Skin != null && (g.Flags & 0x01000000) == 0);
+        }
+
+        private string? TextureName(Model model, RwClump.Geometry g, int material)
+        {
+            if (material < 0 || material >= g.Materials.Count) return null;
+            if (g.Materials[material] is { Length: > 0 } name)
+                return LodTextureName(model, name) ?? $"{model.Archive}|{model.Txd}/{name}";
+            return (IsPlayerArchive(model.Archive) || model == _looseOutfitPart) && ClothingTexture(model, material) is { } layers
+                ? ScopeClothingTexture(model.Archive, layers) : null;
+        }
+
+        private static string ScopeClothingTexture(string archive, string texture) =>
+            string.Join("+", texture.Split('+').Select(layer => archive + "|" + layer));
+
+        private string? ClothingTexture(Model model, int material)
+        {
+            if (model == _looseOutfitPart || !_disc.ContainsKey("DATA/SHOPPING.DAT"))
+                foreach (var (dff, layers) in CjOutfit)
+                    if (model.Name.Equals(dff, StringComparison.OrdinalIgnoreCase))
+                    {
+                        string texture = layers[Math.Clamp(material, 0, layers.Length - 1)];
+                        if (model != _looseOutfitPart) return texture;
+                        foreach (string layer in texture.Split('+'))
+                        {
+                            int slash = layer.IndexOf('/');
+                            string dict = layer[..slash];
+                            string file = (model.Archive == "LOOSE" ? "" : model.Archive + "/") + dict + ".txd";
+                            if (!_disc.ContainsKey(file) || Txd(dict, model.Archive)?.Names.Contains(layer[(slash + 1)..], StringComparer.OrdinalIgnoreCase) != true) return null;
+                        }
+                        return texture;
+                    }
+            _clothing ??= new GtaClothingTextures(ReadFile("DATA/SHOPPING.DAT"), ReadFile("DATA/CLOTHES.DAT"));
+            return _clothing.For(model.Name, model.Archive, name => _imgByArchive[model.Archive].Find(name + ".txd") != null ? Txd(name, model.Archive) : null);
+        }
 
         /// <summary>Weapons, vehicles, objects: every atomic placed by its frame, Z up turned Y up. Damage states
         /// (*_dam), low LODs (*_vlo, *_lo) and muzzle flashes are left out.</summary>
@@ -315,51 +617,95 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
         {
             var mesh = new ModelMesh { Archive = model.Archive, Name = model.Name };
             var worlds = clump.FrameWorlds();
+            var occupied = clump.Atomics.Select(a => a.Frame).ToHashSet();
+            static bool IsAlternate(string name) => name.EndsWith("_dam", StringComparison.OrdinalIgnoreCase)
+                || name.EndsWith("_vlo", StringComparison.OrdinalIgnoreCase) || name.EndsWith("_lo", StringComparison.OrdinalIgnoreCase)
+                || name.Contains("gunflash", StringComparison.OrdinalIgnoreCase);
+            bool hasPrimary = clump.Atomics.Any(a => (uint)a.Frame < clump.Frames.Count && !IsAlternate(clump.Frames[a.Frame].Name));
+            var wheelSizes = WheelSizes(model);
             foreach (var (frame, geometry) in clump.Atomics)
             {
                 if (geometry < 0 || geometry >= clump.Geometries.Count) continue;
                 string fname = frame >= 0 && frame < clump.Frames.Count ? clump.Frames[frame].Name : "";
-                if (fname.EndsWith("_dam", StringComparison.OrdinalIgnoreCase) || fname.EndsWith("_vlo", StringComparison.OrdinalIgnoreCase)
-                    || fname.EndsWith("_lo", StringComparison.OrdinalIgnoreCase) || fname.Contains("gunflash", StringComparison.OrdinalIgnoreCase)) continue;
-                var world = Matrix4.Multiply(ZUpToYUp, frame >= 0 && frame < worlds.Count ? worlds[frame] : Matrix4.Identity());
+                if (hasPrimary && IsAlternate(fname)) continue;
                 var g = clump.Geometries[geometry];
-                foreach (var m in g.Meshes)
-                    AddChunk(mesh, m, g, TextureName(model, g, m.Material), fname, (x, y, z) => Matrix4.Apply(world, x, y, z), world);
+                void Draw(string visual, float[] frameWorld)
+                {
+                    var world = Matrix4.Multiply(ZUpToYUp, frameWorld);
+                    foreach (var m in g.Meshes)
+                        AddChunk(mesh, m, g, TextureName(model, g, m.Material), visual, world, MaterialColor(model, g, m.Material));
+                }
+                int parent = frame >= 0 && frame < clump.Frames.Count ? clump.Frames[frame].Parent : -1;
+                if (model.Kind == "vehicle" && parent >= 0 && parent < worlds.Count && clump.Frames[parent].Name is "wheel_rf_dummy" or "wheel_rf1_dummy"
+                    && fname.StartsWith("wheel", StringComparison.OrdinalIgnoreCase))
+                {
+                    // SA instances the right-front wheel mesh at the other wheel dummies. Opposite-side
+                    // wheels turn 180 degrees about GTA's vertical Z axis so the rim faces outwards.
+                    for (int i = 0; i < clump.Frames.Count; i++)
+                    {
+                        string mount = clump.Frames[i].Name;
+                        if (!mount.StartsWith("wheel_", StringComparison.OrdinalIgnoreCase) || !mount.EndsWith("_dummy", StringComparison.OrdinalIgnoreCase)
+                            || mount.Length < 14 || mount[6] is not ('r' or 'l') || mount[7] is not ('f' or 'm' or 'b')) continue;
+                        if (i != parent && (occupied.Contains(i) || clump.Atomics.Any(a =>
+                            a.Frame >= 0 && a.Frame < clump.Frames.Count && clump.Frames[a.Frame].Parent == i))) continue;
+                        float size = mount[7] == 'f' ? wheelSizes.Front : wheelSizes.Rear;
+                        var local = Matrix4.Compose(0, 0, 0, scale: size);
+                        if (mount[6] == 'l') { local[0] *= -1; local[5] *= -1; }
+                        Draw(mount, Matrix4.Multiply(worlds[i], Matrix4.Multiply(local, clump.Frames[frame].Local)));
+                    }
+                }
+                else Draw(fname, frame >= 0 && frame < worlds.Count ? worlds[frame] : Matrix4.Identity());
             }
             mesh.Recompute();
             return mesh;
         }
 
-        private static void AddChunk(ModelMesh mesh, RwClump.Mesh m, RwClump.Geometry g, string? texture, string visual,
-            Func<float, float, float, (float, float, float)> place, float[]? rotate)
+        private byte[] MaterialColor(Model model, RwClump.Geometry g, int material) =>
+            material >= 0 && material < g.MaterialColors.Count ? PreviewMaterialColor(model, g.MaterialColors[material]) : WhiteMaterial;
+
+        private static readonly byte[] WhiteMaterial = { 255, 255, 255, 255 };
+
+        // RenderWare material RGBA modulates per-vertex prelighting. Editor colours use 128 as 1.0.
+        private static byte[]? DrawColors(RwClump.Mesh mesh, byte[] material)
         {
-            var pos = new List<float>(); var uv = new List<float>(); var nrm = new List<float>(); var col = new List<byte>(); var tri = new List<int>();
-            bool colours = m.Batches.Any(b => b.Colors != null);
+            if (material.All(c => c == 255) && mesh.Batches.All(b => b.Colors == null)) return null;
+            var result = new byte[mesh.Batches.Sum(b => b.Count) * 4];
+            int at = 0;
+            foreach (var batch in mesh.Batches)
+                for (int i = 0; i < batch.Count * 4; i++)
+                {
+                    int prelit = batch.Colors != null && i < batch.Colors.Length ? batch.Colors[i] : 255;
+                    result[at++] = (byte)Math.Round(prelit * material[i % 4] * (128.0 / (255 * 255)));
+                }
+            return result;
+        }
+
+        private static void AddChunk(ModelMesh mesh, RwClump.Mesh m, RwClump.Geometry g, string? texture, string visual,
+            float[] world, byte[] material)
+        {
+            var pos = new List<float>(); var uv = new List<float>(); var nrm = new List<float>(); var tri = new List<int>();
             foreach (var b in m.Batches)
             {
                 int baseIndex = pos.Count / 3;
                 for (int i = 0; i < b.Count; i++)
                 {
-                    var (x, y, z) = place(b.Positions[3 * i], b.Positions[3 * i + 1], b.Positions[3 * i + 2]);
+                    var (x, y, z) = Matrix4.Apply(world, b.Positions[3 * i], b.Positions[3 * i + 1], b.Positions[3 * i + 2]);
                     pos.Add(x); pos.Add(y); pos.Add(z);
                     uv.Add(b.Uvs.Length > 2 * i + 1 ? b.Uvs[2 * i] : 0);
                     uv.Add(b.Uvs.Length > 2 * i + 1 ? 1f - b.Uvs[2 * i + 1] : 0);          // RW V is top-down
                     float nx = 0, ny = 1, nz = 0;
                     if (b.Normals != null && b.Normals.Length >= 3 * i + 3) { nx = b.Normals[3 * i]; ny = b.Normals[3 * i + 1]; nz = b.Normals[3 * i + 2]; }
-                    if (rotate != null) (nx, ny, nz) = (rotate[0] * nx + rotate[4] * ny + rotate[8] * nz, rotate[1] * nx + rotate[5] * ny + rotate[9] * nz, rotate[2] * nx + rotate[6] * ny + rotate[10] * nz);
+                    (nx, ny, nz) = (world[0] * nx + world[4] * ny + world[8] * nz, world[1] * nx + world[5] * ny + world[9] * nz, world[2] * nx + world[6] * ny + world[10] * nz);
                     nrm.Add(nx); nrm.Add(ny); nrm.Add(nz);
-                    if (colours)
-                        for (int k = 0; k < 4; k++)                                          // RW prelit 255 = 1.0, editors 0x80
-                            col.Add(b.Colors != null && b.Colors.Length >= 4 * i + 4 ? (byte)(k < 3 ? b.Colors[4 * i + k] / 2 : b.Colors[4 * i + k] / 2) : (byte)0x80);
                 }
                 foreach (int t in RwClump.Triangles(b, g.TriStrip)) tri.Add(baseIndex + t);
             }
             if (tri.Count == 0) return;
             mesh.Chunks.Add(new ModelMesh.MeshChunk
             {
-                Index = mesh.Chunks.Count, Visual = visual, Texture = texture, Unit = "Float", Scale = 1,
+                Index = mesh.Chunks.Count, GeometryOffset = m.EditableUvOffset, Visual = visual, Texture = texture, Unit = "Float", Scale = 1,
                 VertexCount = pos.Count / 3, Positions = pos.ToArray(), Uvs = uv.ToArray(), Normals = nrm.ToArray(),
-                Colors = colours ? col.ToArray() : null, Triangles = tri.ToArray(),
+                Colors = DrawColors(m, material), MaterialBlend = material[3] < 255 ? true : null, Triangles = tri.ToArray(),
             });
         }
 
@@ -443,7 +789,10 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
                             }
                             foreach (int t in RwClump.Triangles(b, g.TriStrip)) tris.Add(baseIndex + t);
                         }
-                        groups.Add(new SkinnedMesh.Group { Texture = textureOf(g, m.Material) ?? "", Section = m.Material, DrawOffset = groups.Count, Vertices = verts.ToArray(), Uvs = uvs.ToArray(), Triangles = tris.ToArray() });
+                        var color = MaterialColor(model, g, m.Material);
+                        groups.Add(new SkinnedMesh.Group { Texture = textureOf(g, m.Material) ?? "", Section = m.Material, DrawOffset = model == _assembledCj ? -1 : m.EditableUvOffset,
+                            Vertices = verts.ToArray(), Uvs = uvs.ToArray(), Triangles = tris.ToArray(), Colors = DrawColors(m, color),
+                            MaterialBlend = color[3] < 255 ? true : null });
                     }
                 }
             }
