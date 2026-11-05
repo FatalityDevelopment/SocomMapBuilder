@@ -59,7 +59,7 @@ export function MapPage() {
     retryScene, edit, history, saveCopy, exportPack, openDialog, loadModel, texturePixels, jump, sceneReady, reload } = mapSession;
   const ca = status?.game === 'SOCOM 3 / Combined Assault';
   const battlefront = status?.game === 'Star Wars: Battlefront';
-  const canPlace = !!status && !status.readOnly && !ca;
+  const canPlace = !!status && !status.readOnly && !ca && status.game !== 'Star Wars: Battlefront';
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   // The Map tab's check: rerun while the tab is open whenever the session changes.
   const [check, setCheck] = useState<MapValidation | null>(null);
@@ -926,7 +926,7 @@ export function MapPage() {
 
   return (
     <div className="me-app mp-app has-header" onPointerDown={e => { if (!(e.target as HTMLElement).closest('.me-menu')) { setOpenMenu(null); } }}>
-      <PageHeader icon="globe" title="Map Builder" subtitle={ca ? 'Combined Assault maps and missions' : battlefront ? 'Star Wars: Battlefront maps (read-only)' : 'Props, clutter and spawn points of SOCOM II maps'} />
+      <PageHeader icon="globe" title="Map Builder" subtitle={ca ? 'Combined Assault maps and missions' : battlefront ? 'Star Wars: Battlefront maps: move props, command posts and vehicle spawns' : 'Props, clutter and spawn points of SOCOM II maps'} />
       <MenuBar {...menuBarProps} />
       {shortcutsOpen && <ShortcutReference onClose={() => setShortcutsOpen(false)} />}
       {paletteOpen && <CommandPalette commands={commandsFromMenus(menus)} onClose={() => setPaletteOpen(false)} />}

@@ -6,10 +6,12 @@ namespace MapBuilder.Server.Services.Assets
 {
     /// <summary>
     /// Star Wars: Battlefront asset sessions: the ASSET_* commands over a <see cref="SwbfPackage"/> (the disc image or
-    /// a loose .LVL). Read-only: models (shown in their bind pose) and textures. Models and textures are named within
-    /// their level, so a model's level travels as its archive (TAT/TAT2.LVL) and as its meshes' texture namespace.
+    /// a loose .LVL): models (shown in their bind pose), textures and maps. Models and textures are named within their
+    /// level, so a model's level travels as its archive (TAT/TAT2.LVL) and as its meshes' texture namespace. A map's
+    /// placements (props, command posts, vehicle spawns) can be moved and turned and saved to .LVL or disc copies
+    /// (SwbfAssetService.Edits.cs).
     /// </summary>
-    internal static class SwbfAssetService
+    internal static partial class SwbfAssetService
     {
         internal sealed class Session
         {
@@ -19,6 +21,8 @@ namespace MapBuilder.Server.Services.Assets
             /// <summary>The map (a world's level, e.g. TAT/TAT2.LVL) Map Builder draws; null on a level with none.</summary>
             public string? Map { get; set; }
             public int Revision { get; set; }
+            public Stack<Step> Undo { get; } = new();
+            public Stack<Step> Redo { get; } = new();
         }
 
         private static readonly ConcurrentDictionary<string, Session> Sessions = new(StringComparer.OrdinalIgnoreCase);
@@ -75,18 +79,23 @@ namespace MapBuilder.Server.Services.Assets
                             loadoutSource = (string?)null, mission = (object?)null, world = (object?)null, extents = (object?)null, cams = Array.Empty<object>(),
                             valves = Array.Empty<object>(), texts = new Dictionary<string, string>() },
                         "ASSET_MAP_HUD" => new { revision = s.Revision, map = s.Map, icons = new Dictionary<string, object>(), missing = Array.Empty<string>(), tacmap = (object?)null },
-                        "ASSET_HISTORY" => new { revision = s.Revision, undo = Array.Empty<object>(), redo = Array.Empty<object>(), dirty = Array.Empty<string>() },
+                        "ASSET_HISTORY" => History(s),
+                        "ASSET_EDIT" => Edit(s, c.AssetJson),
+                        "ASSET_UNDO" => UndoRedo(s, true),
+                        "ASSET_REDO" => UndoRedo(s, false),
+                        "ASSET_SAVE" => Save(s, c.AssetJson),
                         "ASSET_VALIDATE" => new { ok = true, counts = new Dictionary<string, int>(), instances = 0, textures = 0, textureBytes = 0, problems = Array.Empty<object>() },
                         "ASSET_LIST_ANIMATIONS" => new { packageArchive = (string?)null, sharedPath = (string?)null, clips = Array.Empty<object>() },
                         "ASSET_WEAPONS" => Array.Empty<object>(),
                         "ASSET_WEAPON_FX" => new { weapon = c.AssetName, effect = (object?)null },
                         "ASSET_EFFECTS" => Array.Empty<object>(),
-                        _ => throw new NotSupportedException($"{Game} sessions are read-only for now ({command} is not available)"),
+                        _ => throw new NotSupportedException($"{command} is not available for {Game}"),
                     };
                 }
                 return AssetJson.Ok(command, result);
             }
-            catch (Exception ex) when (ex is ArgumentException or KeyNotFoundException or InvalidOperationException or InvalidDataException or NotSupportedException or IOException)
+            catch (Exception ex) when (ex is ArgumentException or KeyNotFoundException or InvalidOperationException or InvalidDataException or NotSupportedException or IOException
+                or System.Text.Json.JsonException or UnauthorizedAccessException or FormatException)
             {
                 return Responses.Error($"{command}: {ex.Message}");
             }
@@ -97,7 +106,8 @@ namespace MapBuilder.Server.Services.Assets
             session = s.Id,
             path = s.Package.SourcePath,
             game = Game,
-            readOnly = true,
+            // Placements on a map can be edited; a level without one is browse-only.
+            readOnly = s.Map == null,
             isZdb = true,
             packageKind = s.Package.Worlds.Count > 0 ? "map" : "assets",
             mapNamespace = s.Map == null ? null : s.Package.WorldsIn(s.Map).FirstOrDefault()?.Name,
@@ -107,9 +117,9 @@ namespace MapBuilder.Server.Services.Assets
             // Each map level as a "mission" to pick from; a level's hero (_H) copy is its own entry.
             missions = s.Package.Worlds.Select(w => w.Archive).Distinct(StringComparer.OrdinalIgnoreCase)
                 .Select(a => new { id = a, kind = "", mode = "" }).ToList(),
-            dirty = Array.Empty<string>(),
-            canUndo = (string?)null,
-            canRedo = (string?)null,
+            dirty = DirtyNames(s),
+            canUndo = s.Undo.TryPeek(out var undo) ? undo.Description : null,
+            canRedo = s.Redo.TryPeek(out var redo) ? redo.Description : null,
             entries = s.Package.Levels.Count,
             levels = s.Package.Levels.Count,
             textures = s.Package.Textures.Count,
@@ -171,32 +181,38 @@ namespace MapBuilder.Server.Services.Assets
         /// The map's points (view only): its command posts (team 1 or 2 at the start, 0 neutral; Label names them) and
         /// vehicle spawns, named by the command post they belong to. A point's y is its own height.
         /// </summary>
-        private static List<object> MapPoints(Session s)
+        private static List<object> MapPoints(Session s) => PointRefs(s).Select(p => (object)new
         {
-            var list = new List<object>();
+            name = p.Name, team = p.Team, kind = p.Kind, x = p.Record.Matrix[12], y = (float?)p.Record.Matrix[13], z = p.Record.Matrix[14],
+            cellX = 0, cellZ = 0, island = (string?)null, editable = false, canMove = true,
+        }).ToList();
+
+        internal sealed record PointRef(string Name, string Kind, int Team, SwbfWorld.Record Record, int Level);
+
+        /// <summary>The map's points with the instances they are: command posts by Label, vehicle spawns by the command
+        /// post they belong to (ControlZone); names made unique in order.</summary>
+        private static List<PointRef> PointRefs(Session s)
+        {
+            var list = new List<PointRef>();
             var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             string Unique(string name) { string n = name; for (int k = 2; !names.Add(n); k++) n = $"{name} {k}"; return n; }
-            object Point(string name, string kind, int team, float[] m) => new
-            {
-                name, team, kind, x = m[12], y = (float?)m[13], z = m[14], cellX = 0, cellZ = 0, island = (string?)null, editable = false, canMove = false,
-            };
+            int TeamOf(SwbfWorld.Record r) => int.TryParse(SwbfWorld.PropOf(r, "Team"), out int t) ? t : 0;
             foreach (var w in s.Package.WorldsIn(s.Map!))
             {
                 var data = s.Package.ReadWorld(w);
                 foreach (var r in data.Instances.Where(IsCommandPost))
                 {
                     string label = SwbfWorld.PropOf(r, "Label") is { Length: > 0 } l ? l : r.Name;
-                    list.Add(Point(Unique(label.Length > 0 ? label : "command post"), "command post", int.TryParse(SwbfWorld.PropOf(r, "Team"), out int t) ? t : 0, r.Matrix));
+                    list.Add(new PointRef(Unique(label.Length > 0 ? label : "command post"), "command post", TeamOf(r), r, w.Level));
                 }
                 foreach (var r in data.Instances.Where(IsVehicleSpawn))
-                {
-                    // The spawn's command post (its ControlZone) names it.
-                    string? post = SwbfWorld.PropOf(r, "ControlZone");
-                    list.Add(Point(Unique($"vehicles {post ?? r.Name}".Trim()), "vehicle spawn", int.TryParse(SwbfWorld.PropOf(r, "Team"), out int t) ? t : 0, r.Matrix));
-                }
+                    list.Add(new PointRef(Unique($"vehicles {SwbfWorld.PropOf(r, "ControlZone") ?? r.Name}".Trim()), "vehicle spawn", TeamOf(r), r, w.Level));
             }
             return list;
         }
+
+        /// <summary>A world instance's id in the scene: its NAME, else its class and position in the world's list.</summary>
+        internal static string InstanceId(SwbfWorld.Record r, int n) => r.Name.Length > 0 ? r.Name : $"{r.Type}#{n}";
 
         /// <summary>The map's paths: a command post's SpawnPath is "spawn", INFO kind 2 is the map's boundary (a closed
         /// loop), the rest are AI paths.</summary>
@@ -251,10 +267,11 @@ namespace MapBuilder.Server.Services.Assets
             if (s.Map == null) throw new InvalidOperationException("This level has no map (no world). Open the disc or a map level such as TAT/TAT2.LVL.");
             var pkg = s.Package;
             var instances = new List<object>();
-            object Item(string kind, string model, string instance, string path, float[] m, string source) => new
+            // caNode: moved by its instance id (moveInstance); multiMove: several move in one batch.
+            object Item(string kind, string model, string instance, string path, float[] m, string source, bool movable = false) => new
             {
                 kind, model, instance, path, position = new[] { m[12], m[13], m[14] }, scale = 1f, matrix = m,
-                geoIndex = (int?)null, clutterIndex = (int?)null, source,
+                geoIndex = (int?)null, clutterIndex = (int?)null, source, caNode = movable, multiMove = movable,
             };
             var placed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             int notDrawn = 0, props = 0, terrains = 0;
@@ -281,8 +298,8 @@ namespace MapBuilder.Server.Services.Assets
                     if (pkg.ModelForClass(r.Type, w.Level) is not { } m) { notDrawn++; continue; }
                     placed.Add(m.Name);
                     props++;
-                    string id = r.Name.Length > 0 ? r.Name : $"{r.Type}#{n}";
-                    instances.Add(Item("reference", m.Name, id, $"/{w.Name}/{r.Type}/{id}", r.Matrix, $"{m.Archive}:{m.Name}"));
+                    string id = InstanceId(r, n);
+                    instances.Add(Item("reference", m.Name, id, $"/{w.Name}/{r.Type}/{id}", r.Matrix, $"{m.Archive}:{m.Name}", movable: true));
                 }
             }
             // The game draws its sky models in a few-metre dome space that follows the camera; here they are scaled

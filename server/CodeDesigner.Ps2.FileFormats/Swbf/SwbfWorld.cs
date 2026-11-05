@@ -11,8 +11,9 @@ namespace CodeDesigner.Ps2.FileFormats.Swbf
     {
         public sealed record Prop(uint Key, string Value);
 
-        /// <summary>A placed record: its row-vector 4x4 matrix as 16 floats.</summary>
-        public sealed record Record(string Type, string Name, float[] Matrix, float[]? Size, IReadOnlyList<Prop> Props);
+        /// <summary>A placed record: its row-vector 4x4 matrix as 16 floats; <see cref="XfrmAt"/> is where its 48-byte XFRM
+        /// body sits in the level's bytes (an edit rewrites it in place).</summary>
+        public sealed record Record(string Type, string Name, float[] Matrix, float[]? Size, IReadOnlyList<Prop> Props, int XfrmAt = -1);
 
         public sealed record World(string Name, string? Terrain, string? Sky, IReadOnlyList<Record> Instances, IReadOnlyList<Record> Regions);
 
@@ -50,7 +51,16 @@ namespace CodeDesigner.Ps2.FileFormats.Swbf
             for (int k = 0; k < 3; k++) m[12 + k] = x.F32(36 + k * 4);
             m[15] = 1;
             float[]? size = info.Child("SIZE") is { Size: >= 12 } s ? new[] { s.F32(0), s.F32(4), s.F32(8) } : null;
-            return new Record(info.ChildText("TYPE") ?? "", info.ChildText("NAME") ?? "", m, size, Props(rec));
+            return new Record(info.ChildText("TYPE") ?? "", info.ChildText("NAME") ?? "", m, size, Props(rec), x.Body);
+        }
+
+        /// <summary>A row-vector matrix as XFRM's 48 bytes (rotation rows, then translation).</summary>
+        public static byte[] Xfrm(float[] m)
+        {
+            var b = new byte[48];
+            for (int r = 0; r < 3; r++) for (int k = 0; k < 3; k++) BitConverter.TryWriteBytes(b.AsSpan((r * 3 + k) * 4), m[r * 4 + k]);
+            for (int k = 0; k < 3; k++) BitConverter.TryWriteBytes(b.AsSpan(36 + k * 4), m[12 + k]);
+            return b;
         }
 
         public static List<Prop> Props(Ucfb parent)

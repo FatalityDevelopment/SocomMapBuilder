@@ -117,6 +117,7 @@ export interface EditResult {
 
 export interface MapInstanceWire {
   caNode?: boolean;
+  multiMove?: boolean;
   kind: string;
   model: string;
   instance: string;

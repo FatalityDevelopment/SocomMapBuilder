@@ -1,5 +1,7 @@
 using System.Text;
 using CodeDesigner.Ps2.FileFormats.Swbf;
+using MapBuilder.Server;
+using MapBuilder.Tests.Fixtures;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -147,6 +149,79 @@ public sealed class SwbfTests : IDisposable
         string? iso = Environment.GetEnvironmentVariable("MAPBUILDER_SWBF_DISC");
         if (string.IsNullOrEmpty(iso) || !File.Exists(iso)) return null;
         lock (typeof(SwbfTests)) return _disc ??= SwbfPackage.Open(iso);
+    }
+
+    private static byte[] Inst(string type, string name, float x, float y, float z, params (string Key, string Value)[] props) => Chunk("inst",
+        new[] { Chunk("INFO", Chunk("TYPE", Str(type)), Chunk("NAME", Str(name)), Chunk("XFRM", F32(1, 0, 0, 0, 1, 0, 0, 0, 1, x, y, z))) }
+            .Concat(props.Select(p => Chunk("PROP", U32((int)SwbfWorld.Fnv1a(p.Key)), Str(p.Value)))).ToArray());
+
+    /// <summary>A map level: a crate prop and a command post on a world, moved, undone, saved and reopened.</summary>
+    [Fact]
+    public void MapEdits_MoveTurnUndoSaveAndReopen()
+    {
+        string path = Level(QuadModel("crate_a"), QuadModel("com_bldg_controlzone"),
+            Chunk("wrld", Chunk("NAME", Str("test")), Inst("crate_a", "box1", 5, 0, 7), Inst("com_bldg_controlzone", "cp1", 10, 0, 10, ("Label", "CP1"), ("Team", "1"))));
+        var b = new Backend();
+        string session = b.Open(path);
+        try
+        {
+            Assert.False(b.Status(session).GetProperty("readOnly").GetBoolean());
+            var box = b.Scene(session).GetProperty("instances").EnumerateArray().Single(i => i.GetProperty("instance").GetString() == "box1");
+            Assert.True(box.GetProperty("caNode").GetBoolean());
+
+            b.Edit(session, new { op = "moveInstance", instance = "box1", position = new[] { 1f, 2f, 3f }, yaw = 90f });
+            b.Edit(session, new { op = "movePoint", name = "CP1", position = new[] { 20f, 1f, 30f } });
+            Assert.Contains("scaled", b.EditFails(session, new { op = "moveInstance", instance = "box1", scale = 2f }));
+            Assert.Equal("TEST.LVL", b.Status(session).GetProperty("dirty")[0].GetString());
+
+            b.Undo(session);
+            Assert.Equal(10f, b.Points(session).GetProperty("points")[0].GetProperty("x").GetSingle());
+            b.Redo(session);
+
+            string outDir = Path.Combine(_root, "out");
+            var saved = b.Ok(new CommandMessage { Command = "ASSET_SAVE", AssetSession = session, AssetJson = System.Text.Json.JsonSerializer.Serialize(new { outputPath = outDir }) });
+            string copy = saved.GetProperty("written")[0].GetString()!;
+            Assert.Equal(Path.Combine(outDir, "TEST.LVL"), copy);
+            Assert.Equal(new FileInfo(path).Length, new FileInfo(copy).Length);
+
+            var pkg = SwbfPackage.Open(copy);
+            var world = pkg.ReadWorld(pkg.Worlds.Single());
+            var m = world.Instances.Single(i => i.Name == "box1").Matrix;
+            Assert.Equal(new[] { 1f, 2f, 3f }, new[] { m[12], m[13], m[14] });
+            Assert.Equal(0f, m[0], 4);                                                // turned 90 degrees about Y
+            Assert.Equal(-1f, m[2], 4);
+            var cp = world.Instances.Single(i => i.Name == "cp1").Matrix;
+            Assert.Equal(new[] { 20f, 1f, 30f }, new[] { cp[12], cp[13], cp[14] });
+        }
+        finally { b.Close(session); }
+    }
+
+    /// <summary>On the disc: moving one TAT2 building and saving changes that placement's 48 bytes and nothing else.</summary>
+    [Fact]
+    public void Retail_MoveSavesOnlyThatPlacement()
+    {
+        string? iso = Environment.GetEnvironmentVariable("MAPBUILDER_SWBF_DISC");
+        if (string.IsNullOrEmpty(iso) || !File.Exists(iso)) return;
+        var b = new Backend();
+        string session = b.Open(iso);
+        try
+        {
+            b.Points(session);
+            b.Ok(new CommandMessage { Command = "ASSET_MAP_POINTS", AssetSession = session, AssetJson = "{\"mission\":\"TAT/TAT2.LVL\"}" });
+            string id = b.Scene(session).GetProperty("instances").EnumerateArray().First(i => i.GetProperty("kind").GetString() == "reference").GetProperty("instance").GetString()!;
+            b.Edit(session, new { op = "moveInstance", instance = id, yaw = 45f, position = new[] { -100f, 20f, 50f } });
+            string outDir = Path.Combine(_root, "disc-out");
+            var saved = b.Ok(new CommandMessage { Command = "ASSET_SAVE", AssetSession = session, AssetJson = System.Text.Json.JsonSerializer.Serialize(new { outputPath = outDir }) });
+            string copy = saved.GetProperty("written")[0].GetString()!;
+            Assert.EndsWith(Path.Combine("TAT", "TAT2.LVL"), copy);
+            var pkg = Disc()!;
+            var original = pkg.OriginalBytes(pkg.LevelIndex("TAT/TAT2.LVL"));
+            var edited = File.ReadAllBytes(copy);
+            Assert.Equal(original.Length, edited.Length);
+            int differing = Enumerable.Range(0, original.Length).Count(i => original[i] != edited[i]);
+            Assert.InRange(differing, 1, 48);
+        }
+        finally { b.Close(session); }
     }
 
     [Fact]
