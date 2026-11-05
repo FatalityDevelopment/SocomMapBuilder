@@ -60,4 +60,10 @@ An LA zone can contain about 800 distinct models. The time to load it depends on
 - Additions and deletions use stable session IDs. On save the writer rebuilds the text or binary INST rows, updates LOD indices and adjusts offsets to later binary sections. Undo restores the original rows.
 - A move or turn carries its dedicated LOD through the same transform. The editor warns about shared LODs. Pass `followLod: false` on a move to edit just the detailed placement.
 - The **Time** picker filters timed placements by hour. The water preview uses `waterclear256` from the disc when available and animates ripples from the flow and wave values in `WATER.DAT`.
-- The web clients request up to 16 GTA meshes per batch. A model failure identifies its source, and successful meshes stay cached.
+- The web clients request up to 16 GTA meshes per batch. On the US PS2 disc the whole-map overview requests 4,299 distinct meshes, including water, in 269 batches on a cold load. A model failure identifies its source, and successful meshes stay cached.
+
+## In-game check on the US PS2 disc
+
+In a copy of SLUS-20946, raise `lae:lae_stream3:145` (`compmedhos4_lae`, model 3557) by 10 m next to the opening BMX alley. Reopen the saved ISO and inspect `lae_stream3.ipl` in both `GTA3.IMG` and `GTA3_1.IMG`. Each copy contained the new Z of 36.4609375 instead of 26.4609375. Every other row in that stream matched retail.
+
+PCSX2 booted the patched ISO. The game streamed model 3557 at the edited height. A call to the game's downward collision query at world XY (2249.21094, −1277.94531) hit that same house at Z 38.6501. The original roof geometry predicts Z 28.6587 at that point. Moving this placement carried its collision with it, with no edit to its COL file. The archive comparison covers both copies. The gameplay observation covers one boot.
