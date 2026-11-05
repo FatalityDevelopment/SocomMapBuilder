@@ -1302,6 +1302,8 @@ namespace MapBuilder.Server.Services
                     }
                     break;
                 case "pack":
+                    if (s.Package.IsSocom1DiscMap)
+                        throw new NotSupportedException("Memory-card packs are SOCOM II's; a SOCOM 1 map saves as loose files (mode zdb)");
                     string name = args.PackName ?? throw new ArgumentException("\"packName\" is required for a pack");
                     string dir = args.OutputPath ?? Path.Combine(Path.GetDirectoryName(s.Package.SourcePath)!, "packs", name);
                     written = PackageSave.WritePack(s.Package, leaves, name, dir, args.FolderCard, args.ArchiveDir);
@@ -1315,7 +1317,7 @@ namespace MapBuilder.Server.Services
         // A ZDB saved over its own file, or a loose folder written back in place.
         private static bool SavesOverSource(AssetSession s, string? outputPath) =>
             outputPath == null
-            || (s.Package.IsZdb
+            || !s.Package.IsSocom1DiscMap && (s.Package.IsZdb
                 ? Path.GetFullPath(outputPath).Equals(Path.GetFullPath(s.Package.SourcePath), StringComparison.OrdinalIgnoreCase)
                 : Path.TrimEndingDirectorySeparator(Path.GetFullPath(outputPath)).Equals(Path.GetDirectoryName(s.Package.SourcePath), StringComparison.OrdinalIgnoreCase));
 
@@ -1477,6 +1479,10 @@ namespace MapBuilder.Server.Services
                 session = s.Id,
                 path = s.Package.SourcePath,
                 isZdb = s.Package.IsZdb,
+                // Not "game": the pages read a set game as "SOCOM 3 / CA or GTA session".
+                edition = s.Package.IsSocom1DiscMap ? "SOCOM 1" : "SOCOM II",
+                missingLibraries = s.Package.IsSocom1DiscMap ? s.Package.MissingLibraries : null,
+                blankFiles = s.Package.IsSocom1DiscMap ? s.Package.BlankFiles : null,
                 mapNamespace = s.Package.MapNamespace,
                 revision = s.Revision,
                 dirty = s.Dirty.OrderBy(x => x).ToList(),
