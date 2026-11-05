@@ -138,7 +138,7 @@ namespace MapBuilder.Server.Services
                 session = s.Id,
                 path = s.Package.SourcePath,
                 game = GameOf(s),
-                readOnly = s.Package.IsPsp || world == null && s.Mission == null,
+                readOnly = world == null && s.Mission == null,
                 packageKind = location == "UI" ? "menu" : world != null || s.Mission != null ? "map" : "assets",
                 isZdb = true,
                 mapNamespace = world?.Name,
@@ -394,7 +394,7 @@ namespace MapBuilder.Server.Services
                     : "This package has no ISLE world or mission");
             var instances = placements.Select(p => new
             {
-                kind = "model", model = p.World, instance = p.Instance, path = "/" + p.Instance, caNode = p.NodeOffset >= 0,
+                kind = "model", model = p.World, instance = p.Instance, path = "/" + p.Instance, caNode = p.NodeOffset >= 0 || p.InstanceRecord >= 0,
                 position = new[] { p.Matrix[12], p.Matrix[13], p.Matrix[14] }, scale = 1f, matrix = p.Matrix,
                 geoIndex = (int?)null, clutterIndex = (int?)null,
                 source = $"{s.Package.LibraryArchive(p.LibraryIndex)}:{CaPackage.ObjectName(p.Object)}",
@@ -475,7 +475,7 @@ namespace MapBuilder.Server.Services
         /// optionally with CA clips retargeted into its MOTION_S.ZAR. Templates come from SOCOM II's RUN folder
         /// (socom2Run, else the first drive with RUN/MP52.ZDB).
         /// </summary>
-        /// <summary>Fireteam Bravo 2 sessions are read-only for now.</summary>
+        /// <summary>Fireteam Bravo 2 models do not convert yet.</summary>
         private static void RefusePsp(CaSession s, string what)
         {
             if (s.Package.IsPsp) throw new NotSupportedException($"{what} is not available for {FtbGame} yet: its packages open read-only.");

@@ -20,7 +20,6 @@ internal sealed partial class ZipperAssetService
 
     private static object CaEdit(CaSession s, string? json)
     {
-        RefusePsp(s, "Editing");
         using var doc = JsonDocument.Parse(json ?? "{}");
         var a = doc.RootElement;
         if (EditOps.Check(a) is { } error) throw new ArgumentException(error);
@@ -116,8 +115,8 @@ internal sealed partial class ZipperAssetService
 
     private static object CaSave(CaSession s, string? json)
     {
-        RefusePsp(s, "Saving");
         var args = Parse<SaveArgs>(json);
+        if (s.Package.IsPsp) return PspSave(s, args);
         if (args?.Mode != null && !args.Mode.Equals("zdb", StringComparison.OrdinalIgnoreCase))
             throw new NotSupportedException("CA maps save as complete location archives or standalone v6 ZDBs.");
         if (args?.Leaves != null) throw new NotSupportedException("CA saves include the complete archive.");
@@ -135,6 +134,37 @@ internal sealed partial class ZipperAssetService
             throw new ArgumentException($"The output copy needs the source extension {Path.GetExtension(source)}.");
         WriteCaCopy(s, path);
         return new { written = new[] { path }, leaves = CaResourceNames(s, s.Dirty), revision = s.Revision };
+    }
+
+    /// <summary>
+    /// Fireteam Bravo 2: every ZDB with an edit, written into the output folder at its place under RUN
+    /// (<c>&lt;output&gt;\FORT_MP\ISLAND_F.ZDB</c>), so a folder save mirrors the disc and a disc-image save finds each
+    /// file's place.
+    /// </summary>
+    private static object PspSave(CaSession s, SaveArgs? args)
+    {
+        if (args?.Mode != null && !args.Mode.Equals("zdb", StringComparison.OrdinalIgnoreCase))
+            throw new NotSupportedException("Fireteam Bravo 2 maps save as ZDB copies.");
+        if (s.Dirty.Count == 0) throw new InvalidOperationException("No changes to save");
+        if (string.IsNullOrWhiteSpace(args?.OutputPath)) throw new ArgumentException("Choose a writable output folder for the edited ZDBs.");
+        string folder = Path.GetFullPath(args.OutputPath);
+        if (File.Exists(folder) || Path.HasExtension(folder) && !Directory.Exists(folder))
+            throw new ArgumentException("Fireteam Bravo 2 saves write a folder of ZDBs: choose a folder (or a .ISO for a disc copy).");
+        var written = new List<string>();
+        lock (CaWriteGate)
+        {
+            foreach (var (rel, bytes) in s.Package.BuildPspCopies(s.Dirty))
+            {
+                string path = Path.Combine(folder, rel);
+                string source = Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(Directory.Exists(s.Package.SourcePath) ? Path.Combine(s.Package.SourcePath, "x") : s.Package.SourcePath)!) ?? "", rel);
+                if (Path.GetFullPath(path).Equals(Path.GetFullPath(source), StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Choose a folder other than the game's RUN folder for the edited copy.");
+                Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+                SafeFile.Write(path, bytes);
+                written.Add(path);
+            }
+        }
+        return new { written, leaves = CaResourceNames(s, s.Dirty), revision = s.Revision };
     }
 
     private static readonly object CaWriteGate = new();

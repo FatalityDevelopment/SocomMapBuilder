@@ -1,4 +1,4 @@
-using System.Buffers.Binary;
+﻿using System.Buffers.Binary;
 using System.Text;
 using System.Text.Json;
 
@@ -61,7 +61,7 @@ public static class CaMissionEdits
             WriteName(bytes, point.RecordOffset + 8, newName);
             if (package.MissionResource(missionId, "MSNv") is { } actors)
             {
-                var starts = CaMissionTables.ParseActors(actors.Data).SelectMany(a => a.Starts).Where(s => SameName(s.Point, point.Name)).ToList();
+                var starts = CaMissionTables.ParseActors(actors.Data, package.IsPsp).SelectMany(a => a.Starts).Where(s => SameName(s.Point, point.Name)).ToList();
                 if (starts.Count > 0)
                 {
                     var actorBytes = (byte[])actors.Data.Clone();
@@ -117,6 +117,8 @@ public static class CaMissionEdits
 
         CaPackage.Resource resource;
         byte[] bytes;
+        if (package.IsPsp && !(SameName(table, "vehicles.rdr") && path.GetArrayLength() == 3 && Field(1, "starts")))
+            throw new NotSupportedException("Fireteam Bravo 2 table edits support actor starts only: its mission header is not read yet.");
         if (SameName(table, "vehicles.rdr") && path.GetArrayLength() == 3 && Field(1, "starts"))
         {
             if (values.GetArrayLength() != 2 || values[0].ValueKind != JsonValueKind.String)
@@ -125,7 +127,7 @@ public static class CaMissionEdits
             var mission = CaMissions.ParseMission(Require(package, missionId, "AIMm").Data);
             var (_, point) = FindPoint(mission, values[0].GetString()!);
             resource = Require(package, missionId, "MSNv");
-            var actors = CaMissionTables.ParseActors(resource.Data);
+            var actors = CaMissionTables.ParseActors(resource.Data, package.IsPsp);
             var actor = actors[Index(path[0], actors.Count, "Actor row")];
             var start = actor.Starts[Index(path[2], actor.Starts.Count, "Start index")];
             bytes = (byte[])resource.Data.Clone();

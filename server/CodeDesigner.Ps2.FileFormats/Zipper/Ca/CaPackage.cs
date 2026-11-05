@@ -98,6 +98,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
             void Add(string file)
             {
                 using var zdb = ZdbArchive.FromBytes(File.ReadAllBytes(file));
+                int fileIndex = pkg._pspFiles.Count;
+                pkg._pspFiles.Add(file);
                 for (int i = 0; i < zdb.EntryCount; i++)
                 {
                     var e = zdb.GetEntry(i);
@@ -105,6 +107,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
                     // The copies differ only in a header word, so match tag, name and size.
                     string key = $"{e.Tag}|{e.FullPath}|{e.Data.Length}";
                     if (e.Tag is "ASST" or "ISLE" && !seen.Add(key)) continue;
+                    pkg._entryLocations.Add(pkg.Resources.Count, (fileIndex, i));
                     pkg.Resources.Add(new Resource(Path.GetFileName(file), e.FullPath, e.Tag, e.ResourceVersion, e.Data));
                 }
             }
@@ -197,6 +200,27 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
             if (replacements.Keys.Any(i => Resources[i].Tag == "ISLE")) IndexLibraries();
         }
 
+        // Fireteam Bravo 2: the ZDB files the package was read from (an entry location's Outer indexes this list).
+        private readonly List<string> _pspFiles = new();
+
+        /// <summary>
+        /// Fireteam Bravo 2: a copy of every ZDB with an edited resource, keyed by its path under <c>RUN</c>
+        /// (<c>FORT_MP\ISLAND_F.ZDB</c>). Each is re-read from disk and only its edited entries are replaced; same-size
+        /// edits keep the file's layout byte for byte apart from them and their checksums.
+        /// </summary>
+        public Dictionary<string, byte[]> BuildPspCopies(IEnumerable<int> dirty)
+        {
+            var copies = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+            foreach (var file in dirty.GroupBy(i => _entryLocations[i].Outer))
+            {
+                string path = _pspFiles[file.Key];
+                using var zdb = ZdbArchive.FromBytes(File.ReadAllBytes(path));
+                foreach (int index in file) zdb.ReplaceEntryData(_entryLocations[index].Inner, Resources[index].Data);
+                copies[Path.Combine(Path.GetFileName(Path.GetDirectoryName(path)) ?? "", Path.GetFileName(path))] = zdb.ToBytes();
+            }
+            return copies;
+        }
+
         /// <summary>Build a complete copy from the opened bytes, rewriting only the edited v6 entries.</summary>
         public byte[] BuildCopy(IEnumerable<int> dirty)
         {
@@ -273,7 +297,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         /// <summary>One placed mesh object of a world: the node's world transform and the object. A scatter instance's
         /// pieces have <paramref name="NodeOffset"/> -1 (they are not nodes and cannot be moved as one).</summary>
         public sealed record Placement(string World, uint NodeHash, int LibraryIndex, int Object, float[] Matrix,
-            string Instance, int NodeOffset, float[] ParentWorld);
+            string Instance, int NodeOffset, float[] ParentWorld, int InstanceRecord = -1);
 
         private readonly Dictionary<(int Lib, int Obj), ModelMesh> _objectMeshes = new();
 
@@ -372,7 +396,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
                         // A Fireteam Bravo 2 instance places one static object; the sun cards stand above 1,000 units.
                         if (Enumerable.Range(0, 3).Any(k => inst.Matrix[12 + k] < min[k] - ParkedMargin || inst.Matrix[12 + k] > max[k] + ParkedMargin)) continue;
                         list.Add(new Placement(inst.Matrix[13] > SkyHeight ? SkyWorld : w.Name, lib.U32(inst.Offset + 0x50), w.LibraryIndex, inst.Object, inst.Matrix,
-                            $"{w.Name}/inst_{inst.Offset:x}", -1, inst.Matrix));
+                            $"{w.Name}/inst_{inst.Offset:x}", -1, Matrix4.Identity(), inst.Offset));
                         continue;
                     }
                     if (inst.Model == w.Offset) continue;

@@ -81,6 +81,16 @@ Each game mode of an online map (`DEM.ZDB`, `SUP.ZDB` … and `DEFAULT.ZDB`) and
 
 The mission header (`MISN`) is not read: it holds the world ZDB's path, (online) a list of character types and the loading-screen tips, but no title, briefing or map image. Team spawns are not read.
 
+## Editing and saving
+
+Edits are same-size patches, as for Combined Assault:
+
+- **Instances** (trees, rocks, vehicles, props): the record's matrix is rewritten (only its translation for a move). Node objects move like CA nodes.
+- **Points**: CA's point edit (position within the point's zone, rename), and actor starts in `vehicles.rdr`.
+- The world-space terrain and buildings cannot move (their vertices would have to), and the mission header's tables are not editable.
+
+**Save copy** writes each ZDB with an edit into the chosen folder at its place under `RUN` (`<folder>\FORT_MP\ISLAND_F.ZDB`). Only the edited entries and their checksums change; the checksum is CA's, and it matches every entry checked on the disc. Saving to a `.ISO` patches the files into a copy of the UMD image by those paths; this has not been tried, as only the mounted UMD was available. Nothing has been tested in game.
+
 ## Not done yet
 
 - Objectives and team spawns; names for the weapon models CA's word list does not crack.

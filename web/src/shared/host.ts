@@ -165,6 +165,10 @@ export const host = {
 
   async pickPackageCopy(s: { path: string; game?: string }): Promise<string | null> {
     // CA location archives keep their disc filename in the selected output directory.
+    // Fireteam Bravo 2: the edited ZDBs, each at its place under RUN (FORT_MP/ISLAND_F.ZDB) in the folder.
+    if (/^SOCOM: Fireteam Bravo/.test(s.game ?? '')) {
+      return host.browse({ mode: 'folder', title: 'Choose a folder for the edited ZDBs', key: 'ftb-save', submitLabel: 'Save here' });
+    }
     if (s.game === 'SOCOM 3 / Combined Assault') {
       return host.browse({ mode: 'folder', title: 'Choose a folder for the edited archive', key: 'ca-save', submitLabel: 'Save here' });
     }
