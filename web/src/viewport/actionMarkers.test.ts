@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { actionMarkers, markerAnchor } from './actionMarkers';
 import { actionKind } from '../shared/actionIcons';
-import { checkAction, cleanFields, defaultsFor, groupRows } from '../components/mapActionsModel';
+import { checkAction, cleanFields, defaultsFor, groupRows, withKind } from '../components/mapActionsModel';
 
 // A door node with its frame and leaf drawn below it, a switch drawn by its own node, and a row naming nothing.
 const targets = [
@@ -40,6 +40,26 @@ describe('action markers', () => {
     expect(markerAnchor([], 1)).toBeNull();
   });
 
+  it('marks a placed turret on the node holding its model, unless an action row marks it', () => {
+    const turretTargets = [
+      { index: 50, name: 'mp73turret_1', path: '/mp73turret_1', model: '' },
+      { index: 51, name: 'RMG_turret_ledge', path: '/mp73turret_1/RMG_turret_ledge', model: 'RMG_turret_ledge', turret: true },
+      { index: 60, name: 'RMG_turret', path: '/RMG_turret', model: 'RMG_turret', turret: true },
+    ];
+    const placed = [{ geoIndex: 51 }, { geoIndex: 60 }];
+    expect(actionMarkers({ rows: [], targets: turretTargets }, placed)).toEqual([
+      { geoIndex: 50, node: 'mp73turret_1', kind: 'TURRET', rows: [], instances: [0] },
+      { geoIndex: 60, node: 'RMG_turret', kind: 'TURRET', rows: [], instances: [1] },
+    ]);
+    const withRow = actionMarkers({ rows: [{ node: ['mp73turret_1'], type: ['SATCHEL'] }], targets: turretTargets }, placed);
+    expect(withRow.map(m => m.kind)).toEqual(['SATCHEL', 'TURRET']);
+  });
+
+  it('tells an air strike (a switch with the helicopter prompt) from a plain switch', () => {
+    expect(actionKind({ type: ['SWITCH'], bitmap: ['action_helo.tif'] })).toBe('AIRSTRIKE');
+    expect(actionKind({ type: ['SWITCH'], bitmap: ['action_pull_lever.tif'] })).toBe('SWITCH');
+  });
+
   it('names the kind from the type, with animation-only and unknown rows', () => {
     expect(actionKind({ type: ['door'] })).toBe('DOOR');
     expect(actionKind({ anim: ['x'] })).toBe('ANIM');
@@ -54,6 +74,18 @@ describe('actions panel rules', () => {
     expect(defaultsFor('DOOR', data, 'door09')).toEqual({ type: ['DOOR'], range: [30], bitmap: ['action_door_open.tif'], anim: ['singleDoor_left', 'kick_Door'], valve: ['door09'] });
     expect(defaultsFor('SATCHEL', data, 'charge1')).toEqual({ type: ['SATCHEL'], range: [30], bitmap: ['action_MP_Bomb.tif'], valve: ['charge1'] });
     expect(defaultsFor('ANIM', data, 'x')).toEqual({});
+  });
+
+  it('starts an air strike like the retail ones and keeps the prompt in step with the kind', () => {
+    const strike = { ...data, icons: [...data.icons, 'action_helo.tif', 'action_pull_lever.tif'], animations: ['airstrike_anim_1'] };
+    expect(defaultsFor('AIRSTRIKE', strike, 'radio_call_1')).toEqual({ type: ['SWITCH'], range: [30], bitmap: ['action_helo.tif'],
+      anim: ['airstrike_anim_1'], descriptor: ['AIRSTRIKE'], tcm: [], valve: ['radio_call_1'] });
+    const lever = withKind({ type: ['SWITCH'], bitmap: ['action_helo.tif'], tcm: [], descriptor: ['AIRSTRIKE'] }, 'AIRSTRIKE', 'SWITCH', strike);
+    expect(lever).toEqual({ type: ['SWITCH'], bitmap: ['action_pull_lever.tif'], descriptor: ['AIRSTRIKE'] });
+    // A picture chosen by hand stays when the kind changes.
+    expect(withKind({ type: ['DOOR'], bitmap: ['action_MP_Bomb.tif'] }, 'DOOR', 'SWITCH', strike).bitmap).toEqual(['action_MP_Bomb.tif']);
+    expect(withKind({ type: ['SWITCH'], bitmap: ['action_pull_lever.tif'] }, 'SWITCH', 'AIRSTRIKE', strike))
+      .toEqual({ type: ['SWITCH'], bitmap: ['action_helo.tif'], tcm: [], descriptor: ['AIRSTRIKE'] });
   });
 
   it('flags bad numbers and empty actions, and warns about names the map lacks', () => {
