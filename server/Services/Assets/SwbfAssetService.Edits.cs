@@ -169,8 +169,7 @@ namespace MapBuilder.Server.Services.Assets
 
         /// <summary>
         /// Writes the edited levels: to a folder (each at its disc path, e.g. TAT/TAT2.LVL, or its own name for a loose
-        /// level), to one .LVL path when one level changed, or (from a disc) to a new .ISO copy of the disc with the
-        /// edited levels written in place. Never over the source.
+        /// level) or to one .LVL path when one level changed. Never over the source.
         /// </summary>
         private static object Save(Session s, string? json)
         {
@@ -182,12 +181,8 @@ namespace MapBuilder.Server.Services.Assets
             if (path.Equals(s.Package.SourcePath, StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("Save to a copy, not over the source.");
             var written = new List<string>();
             string ext = Path.GetExtension(path);
-            if (ext.Equals(".iso", StringComparison.OrdinalIgnoreCase))
-            {
-                s.Package.WriteDisc(path);
-                written.Add(path);
-            }
-            else if (ext.Equals(".lvl", StringComparison.OrdinalIgnoreCase))
+            // (A path ending .ISO never reaches here: ZipperAssetService.DiscSave saves to a folder and patches the disc.)
+            if (ext.Equals(".lvl", StringComparison.OrdinalIgnoreCase))
             {
                 if (dirty.Count > 1) throw new ArgumentException($"{dirty.Count} levels changed ({string.Join(", ", DirtyNames(s))}); save to a folder instead.");
                 s.Package.WriteLevel(dirty[0], path);

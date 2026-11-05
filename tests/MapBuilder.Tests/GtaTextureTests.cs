@@ -10,7 +10,7 @@ public sealed class GtaTextureTests
     {
         string? root = Environment.GetEnvironmentVariable("MAPBUILDER_GTA_DISC");
         if (string.IsNullOrEmpty(root)) return;
-        string img = Path.Combine(root, "MODELS", "PLAYER.IMG");
+        string img = MapBuilder.Tests.Fixtures.DiscFiles.Gta(root, "MODELS/PLAYER.IMG");
         var player = new GtaImg(new FileSpan(img, 0, new FileInfo(img).Length));
         var folder = Directory.CreateTempSubdirectory("mb-gta-outfit-");
         try

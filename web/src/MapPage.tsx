@@ -56,7 +56,7 @@ export function MapPage() {
   }, () => { setPlaceModel(null); setPlacePrefab(null); setSelection([]); setSelectedPoint(null); thumbsRef.current?.clear(); });
   const { client, instancesRef, statusRef, status, setStatus, sceneNs, counts, instances, points, shapes, models, setModels,
     busy, progress, loading, loadWarnings, connectionIssue, message, messageIsError, say,
-    retryScene, edit, history, saveCopy, exportPack, openDialog, loadModel, texturePixels, jump, sceneReady, reload } = mapSession;
+    retryScene, edit, history, saveCopy, saveDisc, exportPack, openDialog, loadModel, texturePixels, jump, sceneReady, reload } = mapSession;
   const ca = status?.game === 'SOCOM 3 / Combined Assault';
   const battlefront = status?.game === 'Star Wars: Battlefront';
   const canPlace = !!status && !status.readOnly && !ca && status.game !== 'Star Wars: Battlefront';
@@ -672,6 +672,7 @@ export function MapPage() {
         { label: 'Import from package…', action: () => void importFromPackage(), disabled: () => !canPlace || busy },
         { separator: true, label: '' },
         { label: 'Save copy…', shortcut: SHORTCUTS.save.label, action: () => void saveCopy(), disabled: () => busy || loading || !dirtyCount },
+        { label: 'Save to disc image…', action: () => void saveDisc(), disabled: () => busy || loading || !dirtyCount },
         { label: 'Export memory-card pack…', action: () => void exportPack(), disabled: () => !canPlace || !dirtyCount },
       ],
     },

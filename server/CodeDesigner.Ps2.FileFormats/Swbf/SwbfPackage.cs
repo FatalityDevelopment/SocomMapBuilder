@@ -247,38 +247,6 @@ namespace CodeDesigner.Ps2.FileFormats.Swbf
             File.Move(temp, path, true);
         }
 
-        /// <summary>A copy of the disc image with the edited levels written over their own bytes (an edit never changes
-        /// a level's size, so every file keeps its place).</summary>
-        public void WriteDisc(string path)
-        {
-            if (!IsDisc) throw new InvalidOperationException("Only a disc session saves a disc image");
-            if (Path.GetFullPath(path).Equals(SourcePath, StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("Save the disc to a new file, not over the original");
-            string temp = path + ".tmp";
-            var drive = new DriveInfo(Path.GetPathRoot(Path.GetFullPath(path))!);
-            long need = new FileInfo(SourcePath).Length;
-            if (drive.IsReady && drive.AvailableFreeSpace < need)
-                throw new IOException($"The disc copy needs {need / (1 << 20):N0} MB; {drive.Name} has {drive.AvailableFreeSpace / (1 << 20):N0} MB free. Save the edited levels to a folder instead.");
-            try
-            {
-                File.Copy(SourcePath, temp, true);
-                using (var f = new FileStream(temp, FileMode.Open, FileAccess.Write))
-                    foreach (int level in DirtyLevels())
-                    {
-                        var span = _levels[level].Span;
-                        var data = LevelBytes(level);
-                        if (data.Length != span.Length) throw new InvalidOperationException($"{_levels[level].Name} changed size");
-                        f.Position = span.Offset;
-                        f.Write(data);
-                    }
-                File.Move(temp, path, true);
-            }
-            catch
-            {
-                try { File.Delete(temp); } catch (IOException) { }
-                throw;
-            }
-        }
-
         public byte[] LevelBytes(int level)
         {
             lock (_edited)
@@ -421,6 +389,24 @@ namespace CodeDesigner.Ps2.FileFormats.Swbf
                 _meshes[key] = mesh;
             }
             return mesh;
+        }
+
+        /// <summary>A model for export: like <see cref="BuildMesh"/>, plus its skeleton and per-vertex bones when it is
+        /// skinned (not cached).</summary>
+        public ModelMesh BuildExportMesh(Model model)
+        {
+            Ucfb? skel = _skels.TryGetValue((model.Level, model.Name.ToLowerInvariant()), out int at) ? ChunkAt(model.Level, at) : null;
+            return SwbfModel.Build(ChunkAt(model.Level, model.Offset), model.Archive, skel, skin: true);
+        }
+
+        /// <summary>A model's hardpoints (hp_fire, hp_active ...) from its skeleton: name -> bind position.</summary>
+        public Dictionary<string, float[]> Hardpoints(Model model)
+        {
+            var points = new Dictionary<string, float[]>(StringComparer.OrdinalIgnoreCase);
+            if (!_skels.TryGetValue((model.Level, model.Name.ToLowerInvariant()), out int at)) return points;
+            foreach (var b in SwbfModel.BindMatrices(ChunkAt(model.Level, at)))
+                if (b.Name.StartsWith("hp_", StringComparison.OrdinalIgnoreCase)) points.TryAdd(b.Name, new[] { b.Bind[12], b.Bind[13], b.Bind[14] });
+            return points;
         }
 
         /// <summary>A texture by name: the copy in <paramref name="archive"/> (the level asking for it) first, then the

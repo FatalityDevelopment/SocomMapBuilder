@@ -26,6 +26,9 @@ namespace MapBuilder.Server.Services.Assets
         }
 
         private static readonly ConcurrentDictionary<string, Session> Sessions = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>The disc image or file a session was opened from (null when the id is not one of these sessions).</summary>
+        public static string? SourcePathOf(string id) => Sessions.TryGetValue(id, out var s) ? s.Package.SourcePath : null;
         private static readonly object OpenGate = new();
 
         public const string Game = "Star Wars: Battlefront";
@@ -84,6 +87,7 @@ namespace MapBuilder.Server.Services.Assets
                         "ASSET_UNDO" => UndoRedo(s, true),
                         "ASSET_REDO" => UndoRedo(s, false),
                         "ASSET_SAVE" => Save(s, c.AssetJson),
+                        "ASSET_EXPORT" => Export(s, c.AssetName, c.AssetArchive, c.AssetJson),
                         "ASSET_VALIDATE" => new { ok = true, counts = new Dictionary<string, int>(), instances = 0, textures = 0, textureBytes = 0, problems = Array.Empty<object>() },
                         "ASSET_LIST_ANIMATIONS" => new { packageArchive = (string?)null, sharedPath = (string?)null, clips = Array.Empty<object>() },
                         "ASSET_WEAPONS" => Array.Empty<object>(),

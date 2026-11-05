@@ -27,6 +27,9 @@ namespace MapBuilder.Server.Services.Assets
 
         private static readonly ConcurrentDictionary<string, Session> Sessions = new(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>The disc image or file a session was opened from (null when the id is not one of these sessions).</summary>
+        public static string? SourcePathOf(string id) => Sessions.TryGetValue(id, out var s) ? s.Package.SourcePath : null;
+
         public const string Game = "GTA: San Andreas";
 
         /// <summary>ASSET_OPEN for a GTA disc image / IMG archive; null when the path is not one.</summary>
