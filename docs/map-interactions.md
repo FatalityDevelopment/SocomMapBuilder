@@ -13,7 +13,11 @@ Read from all 34 map ZDBs in the SCUS_972.75 disc's RUN directory. Counts below 
 | range, elevation, points, team | One integer per field |
 | one_shot, tcm | Presence of an empty list |
 
-Named types on disc are DOOR, SWITCH, ITEM, SATCHEL, MPBOMB, DEFUSE and ACT_BREACH. Some rows use only node, valve and anim. READERM.ZAR/valves.rdr supplies mission state names. MZANIM.ZAR contains map animation scripts, HUD_TXR.ZED contains prompt art, and the shared MOTION_P.ZAR contains character motions. A copied binding can operate an existing mission valve. It does not create an independent script or door mechanism.
+Named types on disc are DOOR, SWITCH, ITEM, SATCHEL, MPBOMB, DEFUSE and ACT_BREACH (449 rows: 200 DOOR, 133 ACT_BREACH, 40 SWITCH, 15 MPBOMB, 11 DEFUSE, 7 SATCHEL, 5 ITEM, 38 with no type). What the player sees comes from `bitmap` as much as `type`. The 7 **air strikes** (MP61, MP62, MP73, MP82) are SWITCH rows with `action_helo.tif`, a `descriptor` naming the target (`AIRSTRIKE AT DUNES`), the `tcm` flag (seen on no other row) and an `airstrike_*` animation; the editor shows them as their own kind. SWITCH rows also use `action_pickup_item.tif` (M53's `TAKE ITEM` documents) and `action_pull_lever.tif`.
+
+**Turrets** have no actions.rdr rows. Every placed model from the shared turret archives (TURR, TRMG, TLRM, TLMG, TLLM, T30M: `RMG_turret`, `LMG_turret`, `30mm_MGL_turret` and their `_ledge` forms) gets the game's own `action_mount_turret.tif` / `action_dismount_turret.tif` prompts. Its settings (`MANUAL`, `MOUNTABLE_ANGLE`, aim limits, weapon) are in READERC.ZAR › ai_turrets.rdr under a name like the bare node holding the model (`mp73turret` for `mp73turret_1`). The link from a placed node to its ai_turrets entry is not decoded. The Actions tab marks these holders with a turret icon and shows the two prompts.
+
+HUD_TXR.ZED carries 37 `action_*` prompts. Besides the ones above, it includes climb, slide, restrain, conceal body, knife, escort, talk and radio-channel prompts. These are not used by any actions.rdr row and are probably driven by the game code. Some rows use only node, valve and anim. READERM.ZAR/valves.rdr supplies mission state names. MZANIM.ZAR contains map animation scripts, HUD_TXR.ZED contains prompt art, and the shared MOTION_P.ZAR contains character motions. A copied binding can operate an existing mission valve. It does not create an independent script or door mechanism.
 
 ## Traversal geometry
 
