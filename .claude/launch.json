@@ -6,6 +6,12 @@
       "runtimeExecutable": "dotnet",
       "runtimeArgs": ["run", "--project", "server", "-c", "Release", "--no-launch-profile", "--urls", "http://127.0.0.1:8770"],
       "port": 8770
+    },
+    {
+      "name": "mapbuilder-verify",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": ["run", "--project", "server", "--no-launch-profile", "--urls", "http://127.0.0.1:8771"],
+      "port": 8771
     }
   ]
 }
