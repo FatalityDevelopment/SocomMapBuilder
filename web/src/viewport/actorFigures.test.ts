@@ -6,6 +6,14 @@ const at = (...names: string[]) => names.map((name, i) => ({ name, x: i * 1000, 
 const weapons = ['WEAP_MDL.ZED:mp5sd', 'WEAP_MDL.ZED:m4Acarbine', 'WEAP_MDL.ZED:m4Acarbine_sd', 'WEAP_MDL.ZED:ak47', 'WEAP_MDL.ZED:remington870'];
 
 describe('actor figures', () => {
+  it('uses the native armed standing pose when the CA bank is available', () => {
+    const armed = { name: 'player', character: 'SPECTER', model: 'clib', weapon: 'm4', weapons: [], starts: [{ point: 'Able' }] };
+    const options = { ca: true, chosen: {}, armory: [] };
+    expect(planFigures([armed], at('Able'), { ...options, clips: ['seal_stand', 'guard_stand'] })[0].clip).toBe('guard_stand');
+    expect(planFigures([armed], at('Able'), { ...options, clips: ['seal_stand'] })[0].clip).toBe('seal_stand');
+    expect(planFigures([armed], at('Able'), { ...options, clips: [] })[0].clip).toBeNull();
+  });
+
   it('finds the weapon model an armory valve stands for', () => {
     expect(weaponForValve('Enable_mp5sd', weapons)).toBe('WEAP_MDL.ZED:mp5sd');
     expect(weaponForValve('Enable_M4A1_SD', weapons)).toBe('WEAP_MDL.ZED:m4Acarbine_sd');

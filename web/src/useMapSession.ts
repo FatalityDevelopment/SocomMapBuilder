@@ -26,6 +26,7 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
   const pixelCacheRef = useRef<Record<string, ModelTexturePixels>>({});
   const instancesRef = useRef<MapInstanceWire[]>([]);
   const pointsRef = useRef<MapPointWire[]>([]);
+  const pointsMissionRef = useRef<string | null>(null);
   const statusRef = useRef<SessionStatus | null>(null);
   const busyRef = useRef(false);
   const operationRevisionRef = useRef(0);
@@ -87,7 +88,7 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
       clientRef.current.mapScene(),
       clientRef.current.mapPoints().catch(error => {
         warnings.push(`AIMAPS points could not be loaded: ${errText(error)}`);
-        return { points: [] as MapPointWire[] };
+        return { points: [] as MapPointWire[], mission: null, teamSpawns: [] };
       }),
     ]);
     setSceneNs(scene.sceneNamespace);
@@ -97,14 +98,19 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
       (done, total) => setProgress(`Loading models ${done}/${total}…`));
     setProgress('Preparing viewport…');
     instancesRef.current = scene.instances;
-    pointsRef.current = pts.points;
+    const shownPoints = pts.mission ? [
+      ...pts.points.map(p => ({ ...p, canMove: !!p.island })),
+      ...(pts.teamSpawns ?? []).map(p => ({ ...p, canMove: false, editable: false })),
+    ] : pts.points;
+    pointsRef.current = shownPoints;
+    pointsMissionRef.current = pts.mission ?? null;
     setInstances(scene.instances);
-    setPoints(pts.points);
-    vp.setScene(scene.instances, meshCacheRef.current, pixelCacheRef.current, pts.points, keepCamera);
+    setPoints(shownPoints);
+    vp.setScene(scene.instances, meshCacheRef.current, pixelCacheRef.current, shownPoints, keepCamera);
     onLoadedRef.current(vp, keepCamera);
     if (!keepCamera) {
       const kinds = Object.entries(scene.counts).map(([kind, count]) => `${count} ${kind}`).join(', ');
-      say(`${scene.sceneNamespace}: ${scene.instances.length} instances (${kinds}), ${pts.points.length} points.`);
+      say(`${scene.sceneNamespace}: ${scene.instances.length} instances (${kinds}), ${shownPoints.length} points.`);
     }
     warnings.push(...failed.map(failure => `Model not drawn: ${failure}`));
     setLoadWarnings(warnings);
@@ -198,6 +204,7 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
     if (!vp || !f) { return; }
     if (f.point) { vp.selectPoint(f.point); vp.frameSelected(); return; }
     const i = instancesRef.current.findIndex(inst =>
+      (f.instance != null && inst.instance === f.instance) ||
       (f.clutterIndex != null && inst.clutterIndex === f.clutterIndex) ||
       (f.geoIndex != null && inst.clutterIndex === null && inst.geoIndex === f.geoIndex));
     if (i >= 0) { vp.select([i]); vp.frameSelected(); }
@@ -242,11 +249,14 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
         receivedStatus = true;
         if (busyRef.current || reloadingRef.current > 0 || clientRef.current.session !== session || operationRevisionRef.current !== operationRevision) { return; }
         setConnectionIssue(null);
-        const before = statusRef.current?.revision;
+        const before = statusRef.current;
         setStatus(next);
-        if (before !== undefined && next.revision !== before) {
+        if (before && next.revision !== before.revision) {
           await reload(true, true);
           say(`Session changed (revision ${next.revision}${next.canUndo ? `: ${next.canUndo}` : ''}).`);
+        } else if (before && next.mission !== before.mission) {
+          viewportRef.current?.clearSelection();
+          await reload(true, false);
         }
       } catch (error) {
         if (!receivedStatus && clientRef.current.session === session && operationRevisionRef.current === operationRevision) {
@@ -293,11 +303,15 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
     }
     setBusyFlag(true);
     try {
-      const raw = await clientRef.current.edit({ label, ...op }) as unknown as Record<string, unknown>;
-      const result = (raw['result'] ?? raw) as { revision: number; description?: string };
+      const missionOp = op.op === 'movePoint' || op.op === 'setPoint' || op.op === 'mapTable';
+      const context = statusRef.current?.missions
+        ? { mission: missionOp ? pointsMissionRef.current : undefined, revision: statusRef.current.revision } : {};
+      const raw = await clientRef.current.edit({ label, ...context, ...op }) as unknown as Record<string, unknown>;
+      const result = (raw['result'] ?? raw) as { revision: number; description?: string; warnings?: string[] };
       setStatus(await clientRef.current.status());
-      say(`${result.description ?? label} (revision ${result.revision})`);
       await reload(true, false);
+      const warnings = result.warnings ?? (Array.isArray(raw.warnings) ? raw.warnings : []);
+      say([`${result.description ?? label} (revision ${result.revision})`, ...warnings].join(' '));
       return raw;
     } catch (err) {
       say(`${label}: ${errText(err)}`, true);
@@ -315,8 +329,8 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
       const r = undo ? await clientRef.current.undo() : await clientRef.current.redo();
       setStatus(await clientRef.current.status());
       say(`${undo ? 'Undid' : 'Redid'} ${r.description ?? ''} (revision ${r.revision})`);
-      // Undo can touch models as well as placements.
-      await reload(true, true);
+      // CA edits change placements and mission records. SOCOM II history can also change meshes.
+      await reload(true, statusRef.current?.game !== 'SOCOM 3 / Combined Assault');
     } catch (err) {
       say(errText(err), true);
     } finally {
@@ -334,7 +348,7 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
       for (let i = 0; i < redoSteps; i++) { last = await clientRef.current.redo(); }
       setStatus(await clientRef.current.status());
       if (last) { say(`${undoSteps ? `Undid ${undoSteps}` : `Redid ${redoSteps}`} step(s), to revision ${last.revision}`); }
-      await reload(true, true);
+      await reload(true, statusRef.current?.game !== 'SOCOM 3 / Combined Assault');
     } catch (err) {
       say(errText(err), true);
     } finally {
@@ -361,9 +375,8 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
   const saveCopy = async () => {
     const s = statusRef.current;
     if (!s || !s.dirty.length) { return; }
-    // A .CDB pack keeps its name (the game mounts mc0:/BASCUS-97275<NAME>/<NAME>.CDB); a .ZDB gets an _edit copy.
-    const picked = await host.pickSavePath('zdb', /.cdb$/i.test(s.path) ? s.path : s.path.replace(/(.zdb)$/i, '_edit$1'));
-    if (picked.path) { void save({ mode: 'zdb', outputPath: picked.path }); }
+    const path = await host.pickPackageCopy(s);
+    if (path) { await save({ mode: 'zdb', outputPath: path }); }
   };
 
   const exportPack = async () => {

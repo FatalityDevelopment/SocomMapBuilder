@@ -29,7 +29,9 @@ public sealed class CaMissionTablesTests
 
         Assert.Equal(2, actors.Count);
         Assert.Equal(("player", "_15020_SPECTER_OCN_MSG", 0x9B290F55u, 1), (actors[0].Name, actors[0].Display, actors[0].Type, actors[0].Group));
-        Assert.Equal(new[] { new CaMissionTables.Start("s_Able1", 2) }, actors[0].Starts);
+        Assert.Equal("character", actors[0].Kind);
+        Assert.Equal("vehicle", actors[1].Kind);
+        Assert.Equal(new[] { new CaMissionTables.Start("s_Able1", 2, 0x14 + 0x5C) }, actors[0].Starts);
         Assert.Empty(actors[1].Starts);
         Assert.Throws<InvalidDataException>(() => CaMissionTables.ParseActors(d[..^4]));
     }
@@ -68,6 +70,14 @@ public sealed class CaMissionTablesTests
         Assert.False(w.ContainsKey(0x12345678));
     }
 
+    [Theory]
+    [InlineData(0x6C448E95u, "CurrentMission")]
+    [InlineData(0x15108EA6u, "POBJ1")]
+    [InlineData(0xB8D9ECE4u, "PObj1")]
+    [InlineData(0x9BC1C1C3u, "v9bc1c1c3")]
+    public void Valves_use_their_matched_spelling_or_hash(uint hash, string label) =>
+        Assert.Equal(label, CaNames.Valve(hash));
+
     [Fact]
     public void A_header_lists_strings_types_weapons_and_valves_and_valves_carry_values()
     {
@@ -102,10 +112,18 @@ public sealed class CaMissionTablesTests
         var actors = CaMissionTables.ParseActors(compound.MissionResource("SP432", "MSNv")!.Data);
         Assert.Equal(new[] { "player", "able2", "bravo1", "bravo2", "ext_boat1" }, actors.Select(a => a.Name));
         Assert.Equal("s_Able2", actors[1].Starts.Single().Point);
+        Assert.Equal("vehicle", actors.Single(a => a.Name == "ext_boat1").Kind);
+        Assert.Equal("character", actors[0].Kind);
 
         var types = CaMissionTables.ParseCharacterTypes(compound.MissionResource("SP432", "CHAR")!.Data);
         var player = types.Single(t => t.Hash == actors[0].Type);
-        Assert.NotNull(compound.ModelByHash(player.Model, "character"));
+        var playerModel = Assert.IsType<CaPackage.Model>(compound.ModelByHash(player.Model, "character"));
+        uint hand = CaNames.Crc32("rightHand"), rifle = CaNames.Crc32("rifle");
+        Assert.Contains(compound.Libraries[playerModel.LibraryIndex].Lib.Nodes(playerModel.Offset), n => n.Hash == hand);
+        var idle = Assert.Single(compound.Animations(), c => c.Name == "guard_stand");
+        Assert.Equal("aux_gzan", idle.Bank);
+        Assert.Contains(idle.Tracks, t => t.Bone == hand && t.Rotations.Length > 0);
+        Assert.Contains(idle.Tracks, t => t.Bone == rifle && t.Rotations.Length > 0 && t.Positions.Length > 0);
         Assert.NotEmpty(player.Weapons);
         Assert.Contains(types, t => t.Display == "BULLFROG");
 
@@ -119,6 +137,9 @@ public sealed class CaMissionTablesTests
         var header = CaMissionTables.ParseHeader(compound.MissionResource("SP432", "MISN")!.Data);
         Assert.Contains(@"RUN\RAW\MAPS\m_432.RAW", header.Strings);
         Assert.Equal(header.Valves.Count, CaMissionTables.ParseValves(compound.MissionResource("SP432", "VALV")!.Data).Count);
+        var valveNames = header.Valves.Select(CaNames.Valve).ToList();
+        Assert.Contains("CurrentMission", valveNames);
+        Assert.Contains("SOBJ1Fail", valveNames);
 
         // POLAND_RURAL MP341CTR: its vehicles are GLOBAL ai_vehicles types, not characters.
         var rural = CaPackage.Open(Path.Combine(run, "055146D2.ZAR"));

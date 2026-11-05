@@ -27,7 +27,7 @@ export interface ViewerFocus {
   atom?: number; record?: number; sequence?: number; offset?: number | null; map?: number;
 }
 
-export interface AiFocus { geoIndex?: number | null; clutterIndex?: number | null; point?: string | null; viewer?: ViewerFocus | null; clip?: string | null }
+export interface AiFocus { geoIndex?: number | null; instance?: string | null; clutterIndex?: number | null; point?: string | null; viewer?: ViewerFocus | null; clip?: string | null }
 
 export interface AiChange {
   seq: number;

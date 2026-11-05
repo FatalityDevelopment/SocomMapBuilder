@@ -14,7 +14,7 @@ import { propDrawChunks } from './propFaces';
 import { groupInstancesByLayer, isSkyChunk, layerOf, movable as isMovable, pointColor } from '../mapModel';
 import { actionIconCanvas, objectiveIconCanvas, type ActionKind } from '../shared/actionIcons';
 import { markerAnchor, type ActionMarker } from './actionMarkers';
-import { poseBones, skinChunk, type PoseClip } from '../webview/zipper-core/skinning';
+import { heldWeaponMatrix, poseBones, skinChunk, type PoseClip } from '../webview/zipper-core/skinning';
 import { yawOf } from './actorFigures';
 
 export type MapTool = 'select' | 'move' | 'rotate' | 'scale' | 'place' | 'paint' | 'measure';
@@ -26,6 +26,7 @@ export interface BrushOptions extends ScatterOptions { erase: boolean }
 export type MapLayer = 'world' | 'reference' | 'clutter' | 'sky' | 'points';
 
 export interface MapInstance {
+  caNode?: boolean;
   kind: string;
   model: string;
   instance: string;
@@ -40,7 +41,7 @@ export interface MapInstance {
   source: string | null;
 }
 
-export interface MapPointInfo { name: string; team: number; kind: string; x: number; y?: number | null; z: number }
+export interface MapPointInfo { name: string; team: number; kind: string; x: number; y?: number | null; z: number; canMove?: boolean }
 
 export interface MapModel { mesh: EditorMesh; textureNamespace: string | null }
 
@@ -80,16 +81,6 @@ export interface ActorFigure {
 export type MarkerPick = { kind: 'action'; geoIndex: number; instance: number } | { kind: 'objective'; row: number };
 /** A HUD objective's map location (hudobjectives.rdr LOCATION is x, z). */
 export interface ObjectiveMarker { row: number; x: number; z: number; label: string; secondary: boolean }
-
-// Where a held weapon sits in the right hand's frame: SOCOM clips carry a clip-only "rifle" (or "pistol" / "weapon")
-// bone under rhand whose first key places the weapon (as the Animation Editor mounts it); without one, the hand itself.
-function weaponMount(clip: PoseClip | null): THREE.Matrix4 {
-  const track = clip?.bones.find(b => ['rifle', 'weapon', 'pistol'].includes(b.name.toLowerCase()));
-  if (!track) { return new THREE.Matrix4(); }
-  const p = track.positions[0] ? new THREE.Vector3().fromArray(track.positions[0]) : new THREE.Vector3();
-  const q = track.rotations[0] ? new THREE.Quaternion().fromArray(track.rotations[0]) : new THREE.Quaternion();
-  return new THREE.Matrix4().compose(p, q, new THREE.Vector3(1, 1, 1));
-}
 
 // Screen height of a marker icon in CSS pixels, whatever the distance.
 const MARKER_PX = 26;
@@ -444,7 +435,7 @@ export class MapViewport extends ViewportCore {
     });
     this.billboardsDirty = true;
 
-    this.updateWorldBounds();
+    this.updateWorldBounds(points);
     this.flySpeed = this.worldBox.isEmpty() ? 100 : this.extent / 12;
     this.applyVisibility();
     this.buildPoints(points);
@@ -457,13 +448,16 @@ export class MapViewport extends ViewportCore {
     this.updatePlacementGhost();
   }
 
-  private updateWorldBounds(): void {
+  private updateWorldBounds(points: MapPointInfo[]): void {
     this.worldBox.makeEmpty();
     this.instances.forEach((inst, i) => {
       const bounds = inst.source ? this.localBounds.get(inst.source) : null;
       if (!bounds || bounds.isEmpty() || layerOf(inst) === 'sky') { return; }
       this.worldBox.union(bounds.clone().applyMatrix4(this.display[i]));
     });
+    if (!this.instances.length) {
+      for (const p of points) { this.worldBox.expandByPoint(new THREE.Vector3(p.x, p.y ?? 0, p.z)); }
+    }
     this.extent = this.worldBox.isEmpty() ? 100 : Math.max(10, this.worldBox.getSize(new THREE.Vector3()).length());
     if (this.worldBox.isEmpty()) { this.center.set(0, 0, 0); }
     else { this.worldBox.getCenter(this.center); }
@@ -492,7 +486,7 @@ export class MapViewport extends ViewportCore {
     });
     touched.forEach(m => { m.instanceMatrix.needsUpdate = true; m.computeBoundingSphere(); });
     this.billboardsDirty = true;
-    this.updateWorldBounds();
+    this.updateWorldBounds(points);
     this.clearHelpers();
     this.buildGridAxes(this.worldBox);
     this.buildPoints(points);
@@ -585,9 +579,8 @@ export class MapViewport extends ViewportCore {
       this.figureTargets.push({ mesh: m, spec });
     };
     for (const chunk of mesh.chunks) { add(chunk, f.character.textureNamespace, undefined, !!mesh.skeleton); }
-    const hand = mesh.skeleton?.findIndex(b => b.name.toLowerCase() === 'rhand') ?? -1;
-    if (f.weapon && hand >= 0) {
-      const grip = world[hand].clone().multiply(weaponMount(f.clip));
+    const grip = f.weapon && mesh.skeleton && heldWeaponMatrix(mesh.skeleton, world, f.clip);
+    if (f.weapon && grip) {
       for (const chunk of f.weapon.mesh.chunks) { add(chunk, f.weapon.textureNamespace, grip); }
     }
     return group;
@@ -1129,6 +1122,7 @@ export class MapViewport extends ViewportCore {
 
   // Selected instances that may move (the world model and sky stay put).
   private movable(): number[] {
+    if (this.selected.size > 1 && [...this.selected].some(i => this.instances[i]?.caNode)) { return []; }
     return [...this.selected].filter(i => isMovable(this.instances[i]));
   }
 
@@ -1214,7 +1208,7 @@ export class MapViewport extends ViewportCore {
     if (this.gizmoDrag) { return; }
     const t = this.toolValue;
     const center = this.selectionCenter();
-    const canMove = this.selectedPoint ? t === 'move' : this.movable().length > 0;
+    const canMove = this.selectedPoint ? t === 'move' && this.points.find(p => p.name === this.selectedPoint)?.canMove !== false : this.movable().length > 0;
     if (this.editableValue && (t === 'move' || t === 'rotate' || t === 'scale') && center && canMove) {
       const ids = this.movable();
       this.pivot.position.copy(this.pivotModeValue === 'active' && ids.length && !this.selectedPoint
@@ -1659,7 +1653,7 @@ export class MapViewport extends ViewportCore {
       const point = h ? this.pointOf(h) : null;
       const i = h && !point ? this.instanceOf(h) : null;
       if (point) { if (!this.lockedLayers.has('points')) { this.selected.clear(); this.selectedPoint = point; } }
-      else if (i !== null && layerOf(this.instances[i]) !== 'world' && this.selectable(i) && !this.hiddenInstances.has(i)) {
+      else if (i !== null && (this.instances[i].caNode || layerOf(this.instances[i]) !== 'world') && this.selectable(i) && !this.hiddenInstances.has(i)) {
         if (subtract) { this.selected.delete(i); } else { this.selected.add(i); }
       }
     }

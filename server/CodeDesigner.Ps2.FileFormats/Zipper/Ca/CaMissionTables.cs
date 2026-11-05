@@ -15,14 +15,17 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
     {
         /// <summary>One start of an actor: an AIMAPS point (mission.rdr) and its heading, 0–7 eighths of a turn clockwise
         /// from north, as SOCOM II's <c>setup</c>.</summary>
-        public sealed record Start(string Point, int Heading);
+        public sealed record Start(string Point, int Heading, int RecordOffset);
 
         /// <summary>
         /// An actor: name, display message key, its type (a character type of the mission's character.rdr, or a vehicle
-        /// or turret of GLOBAL's ai_vehicles / ai_turrets), the u32 at +0x54 (1–3; meaning not known) and its starts.
+        /// or turret of GLOBAL's ai_vehicles / ai_turrets), its object kind at +0x54 and its starts.
         /// Online missions leave the start empty (players spawn at the game's team spawns).
         /// </summary>
-        public sealed record Actor(int Row, string Name, string? Display, uint Type, int Group, List<Start> Starts);
+        public sealed record Actor(int Row, string Name, string? Display, uint Type, int Group, List<Start> Starts)
+        {
+            public string Kind => Group switch { 1 => "character", 2 => "vehicle", 3 => "turret", _ => "other" };
+        }
 
         /// <summary>A character type: hash, its high- and low-detail <c>clib</c> models (root hashes), its display name
         /// (the faction, "DEFENSE FORCE", or the squad mate, "BULLFROG") and its weapons (weapon table hashes).</summary>
@@ -72,7 +75,10 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
                 int n = (int)Math.Min(U32(data, o + 0x58), 8);
                 var starts = new List<Start>();
                 for (int i = 0; i < n; i++)
-                    if (Str(data, o + 0x5C + i * 32, 28) is { } point) starts.Add(new Start(point, (int)U32(data, o + 0x5C + i * 32 + 28)));
+                {
+                    int offset = o + 0x5C + i * 32;
+                    if (Str(data, offset, 28) is { } point) starts.Add(new Start(point, (int)U32(data, offset + 28), offset));
+                }
                 list.Add(new Actor(row, Str(data, o, 32) ?? $"actor{row}", Str(data, o + 0x20, 32), U32(data, o + 0x40), (int)U32(data, o + 0x54), starts));
             }
             return list;

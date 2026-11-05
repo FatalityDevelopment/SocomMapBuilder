@@ -66,7 +66,7 @@ export function AnimationEditorPage() {
           <>
             <span className="me-pkg" title={s.path}>{c.fileName(s.path)}</span>
             {s.game
-              ? <span className="me-badge" title="Edits, saves and animations are not available for this game yet">{s.game} · read-only</span>
+              ? <span className="me-badge">{s.game} · read-only animations</span>
               : <span className={`me-badge${c.dirtyCount() > 0 ? ' me-badge-dirty' : ''}`}>{c.dirtyCount() ? `${c.dirtyCount()} unsaved` : 'saved'} · rev {s.revision}</span>}
             <span className="me-session" title="Asset session id (shared with the other pages)">{s.session}</span>
           </>

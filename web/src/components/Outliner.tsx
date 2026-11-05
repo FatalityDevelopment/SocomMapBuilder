@@ -81,7 +81,7 @@ export function Outliner(props: OutlinerProps) {
               filteredPoints.map(p => (
                 <div key={p.name} className={`me-tree-row mp-model${selectedPoint === p.name ? ' sel' : ''}`}>
                   <span onClick={() => props.pickPoint(p.name)}>{p.name}</span>
-                  <span className="lm-muted">{p.kind}{p.team ? ` · t${p.team}` : ''}</span>
+                  <span className="lm-muted">{p.kind}{p.faction ? ` · ${p.faction}` : p.team ? ` · t${p.team}` : ''}</span>
                 </div>
               ))
             ) : (
