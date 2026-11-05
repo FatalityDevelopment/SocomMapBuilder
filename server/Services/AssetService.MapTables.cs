@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+using CodeDesigner.Ps2.FileFormats.Zipper.Conversion;
 using System.Globalization;
 using System.Text.Json;
 using CodeDesigner.Ps2.FileFormats.Zipper.RDR;
@@ -51,6 +53,92 @@ internal sealed partial class ZipperAssetService
         names.AddRange(new[] { "MESH_" + chartype, chartype });
         foreach (string name in names) if (models.TryGetValue(name, out var hit)) return hit;
         return null;
+    }
+
+    // ------------------------------------------------------------------ loadouts
+
+    // Weapons a figure does not hold in its hand (thrown, placed or carried gear), by zweapon.rdr model name.
+    private static readonly HashSet<string> NotHeld = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "grenade", "HEgrenade", "a_smoke_grenade", "flashbang", "claymore", "PMN_mine", "c4", "detonator", "bleu_chem",
+        "laser_designator", "placeholder", "artillery_shell", "RPGrenade", "footbomb", "NULL",
+    };
+
+    // character.rdr weapon names zweapon.rdr has no record for, and the package model each draws as.
+    private static readonly Dictionary<string, string> LoadoutAliases = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["SR-25"] = "stoner_sr25", ["SA-80 A2"] = "iw80a2", ["SR-1 Gyurza"] = "SP10_gyuraz", ["M16A2"] = "m16a2",
+        ["Dragunov"] = "Dragunov", ["RED SMOKE GRENADE"] = "a_smoke_grenade", ["Satchel"] = "c4",
+    };
+
+    private static readonly ConcurrentDictionary<string, (DateTime Stamp, object Value)> RunFileCache = new(StringComparer.OrdinalIgnoreCase);
+    private static readonly Lazy<string?> DiscRun = new(() => Socom2Templates.FindRunDir(null));
+
+    /// <summary>A RUN file next to the package (its folder or the one above), else on the SOCOM II disc's RUN folder.</summary>
+    private static string? RunFile(AssetSession s, string leaf)
+    {
+        string dir = s.Package.IsZdb ? Path.GetDirectoryName(s.Package.SourcePath) ?? "." : s.Package.SourcePath;
+        var dirs = new List<string?> { dir, Path.GetDirectoryName(dir), DiscRun.Value };
+        return dirs.Where(d => d != null).Select(d => Path.Combine(d!, leaf)).FirstOrDefault(File.Exists);
+    }
+
+    private static T? CachedRunRecord<T>(string? path, string record, Func<byte[], T> parse) where T : class
+    {
+        if (path == null) return null;
+        try
+        {
+            var stamp = File.GetLastWriteTimeUtc(path);
+            string key = path + "|" + record;
+            if (RunFileCache.TryGetValue(key, out var hit) && hit.Stamp == stamp) return hit.Value as T;
+            var node = ZedContainer.FromBytes(File.ReadAllBytes(path)).Nodes.FirstOrDefault(n => n.Name.Equals(record, StringComparison.OrdinalIgnoreCase)
+                || (record == "*.rdr" && n.Name.EndsWith(".rdr", StringComparison.OrdinalIgnoreCase)));
+            if (node == null) return null;
+            var value = parse(node.Data);
+            RunFileCache[key] = (stamp, value);
+            return value;
+        }
+        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException) { return null; }
+    }
+
+    /// <summary>
+    /// A shared READERC.ZAR table (character.rdr, animset.rdr): the map's own copy (READERM.ZAR, or a READERC.ZAR in
+    /// the package) first, else READERC.ZAR beside the package or on the disc; with where it came from.
+    /// </summary>
+    private static (T? Value, string? Source) SharedRecord<T>(AssetSession s, string record, Func<byte[], T> parse) where T : class
+    {
+        try
+        {
+            if (ReaderRecord(s, record) is { } own) return (parse(own.Data), MissionReader);
+            if (s.Package.Entry("READERC.ZAR") is { } packed
+                && ZedContainer.FromBytes(packed.Data).Nodes.FirstOrDefault(n => n.Name.Equals(record, StringComparison.OrdinalIgnoreCase)) is { } rec)
+                return (parse(rec.Data), "READERC.ZAR");
+        }
+        catch (InvalidDataException) { }
+        string? path = RunFile(s, "READERC.ZAR");
+        var disc = CachedRunRecord(path, record, parse);
+        return (disc, disc == null ? null : path);
+    }
+
+    private static (CharacterLoadouts? Loadouts, string? Source) LoadoutsOf(AssetSession s) => SharedRecord(s, "character.rdr", CharacterLoadouts.Parse);
+
+    /// <summary>
+    /// A chartype's default weapons as the package draws them: each name with its model ("archive:name", or null when
+    /// neither zweapon.rdr nor the alias list names a model the package has), and the one a figure holds (the first
+    /// with a model that is not a grenade, mine or other gear), or null.
+    /// </summary>
+    internal static (IReadOnlyList<(string Name, string? Model)> Weapons, string? Held) Loadout(
+        IReadOnlyList<string> names, IReadOnlyDictionary<string, string> models, Func<string, string?> modelOf)
+    {
+        var list = new List<(string, string?)>();
+        string? held = null;
+        foreach (string name in names)
+        {
+            string? modelName = modelOf(name) ?? LoadoutAliases.GetValueOrDefault(name);
+            string? model = modelName != null && models.TryGetValue(modelName, out var hit) ? hit : null;
+            list.Add((name, model));
+            if (held == null && model != null && !NotHeld.Contains(modelName!)) held = model;
+        }
+        return (list, held);
     }
 
     private static ZedNode? ReaderRecord(AssetSession s, string name) =>
@@ -131,8 +219,15 @@ internal sealed partial class ZipperAssetService
 
         var actors = new List<object>();
         Dictionary<string, string>? models = null;
+        string? loadoutSource = null;
         if (ReaderRecord(s, "vehicles.rdr") is { } vehicles)
         {
+            var (loadouts, source) = LoadoutsOf(s);
+            var animSets = SharedRecord(s, "animset.rdr", AnimSets.Parse).Value;
+            loadoutSource = source;
+            var defs = CachedRunRecord(RunFile(s, "ZWEAPON.ZAR"), "*.rdr", WeaponDefs.Parse);
+            var byInternal = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var w in defs?.Weapons ?? new List<WeaponDefs.Weapon>()) if (w.InternalName.Length > 0) byInternal.TryAdd(w.InternalName, w.ModelName);
             var doc = RdrDocument.Parse(vehicles.Data);
             // The rows sit in a wrapper list under the root.
             int[] top = doc.Children(0).ToArray();
@@ -147,11 +242,21 @@ internal sealed partial class ZipperAssetService
                 var known = new HashSet<string> { "name", "display", "character", "setup", "team", "ai_params" };
                 var setup = doc.Field(row, "setup") is int st and >= 0 ? Pairs(doc, st).Select(p => new { point = p.Key, value = doc.ValueOf(p.Value) }).ToArray() : Array.Empty<object>();
                 int ai = doc.Field(row, "ai_params");
+                string? character = Text1(doc, row, "character");
+                models ??= PackageModels(s);
+                var names = loadouts?.WeaponsOf(character);
+                var (weapons, held) = names == null ? ((IReadOnlyList<(string Name, string? Model)>?)null, (string?)null) : Loadout(names, models, n => byInternal.GetValueOrDefault(n));
                 actors.Add(new
                 {
                     row = i, path,
-                    name = Text1(doc, row, "name"), display = Text1(doc, row, "display"), character = Text1(doc, row, "character"),
-                    model = CharacterModel(models ??= PackageModels(s), Text1(doc, row, "character"), CharTypes.Value),
+                    name = Text1(doc, row, "name"), display = Text1(doc, row, "display"), character,
+                    model = CharacterModel(models, character, CharTypes.Value),
+                    // The chartype's default weapons (character.rdr), null when no chartype table was found or the type is not in it.
+                    weapons = weapons?.Select(w => new { name = w.Name, model = w.Model }).ToArray(),
+                    weapon = held,
+                    // The animation set its chartype plays (character.rdr) and that set's Stand clip (animset.rdr): how it idles.
+                    animSet = loadouts?.AnimSetOf(character),
+                    stand = animSets?.Clip(loadouts?.AnimSetOf(character), "Stand"),
                     starts = setup,
                     teams = Vals(doc, row, "team")?.OfType<int>().ToArray() ?? Array.Empty<int>(),
                     flags = Pairs(doc, row).Where(p => !known.Contains(p.Key)).Select(p => new { name = p.Key, values = doc.Values(p.Value) }).ToArray(),
@@ -238,7 +343,7 @@ internal sealed partial class ZipperAssetService
         return new
         {
             revision = s.Revision, hasReader = s.Package.Entry(MissionReader) != null,
-            objectives, actors, mission, world, extents, cams, valves = valveList,
+            objectives, actors, loadoutSource, mission, world, extents, cams, valves = valveList,
             texts = used.ToDictionary(k => k, k => texts[k]),
         };
     }

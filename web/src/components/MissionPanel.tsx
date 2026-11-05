@@ -7,7 +7,7 @@ import { useEffect, useState } from 'react';
 import type { MapTables, TablePath } from '../webview/model-editor/asset-client';
 import { host } from '../shared';
 import { objectiveIconUrl } from '../shared/actionIcons';
-import { isSeal } from '../viewport/actorFigures';
+import { compassOf, weaponLabel, type FigurePlan } from '../viewport/actorFigures';
 
 interface Props {
   tables: MapTables | null;
@@ -20,9 +20,13 @@ interface Props {
   onSelectObjective: (row: number | null) => void;
   /** Frame an objective's location in the 3D view. */
   onShowObjective: (row: number) => void;
-  /** Weapon models ("archive:name") and the stand-in weapon picked per character type for the 3D figures. */
+  /** Weapon models ("archive:name") and the weapon picked per character type for the 3D figures ("none", or missing: the loadout's). */
   weaponModels?: string[];
   actorWeapons?: Record<string, string>;
+  /** How the 3D view draws each actor (where, facing, clip), by actor name. */
+  figures?: FigurePlan[];
+  /** A multiplayer map: its `player` actor is the template for human players. */
+  multiplayer?: boolean;
   onChooseWeapon?: (chartype: string, source: string) => void;
 }
 
@@ -103,21 +107,39 @@ export function MissionPanel(p: Props) {
     <div className="me-card">
       <div className="me-card-title">Actors ({t.actors.length})</div>
       {t.actors.length === 0 && <p className="me-note">No actors (vehicles.rdr).</p>}
-      {p.onChooseWeapon && (() => {
-        const types = [...new Set(t.actors.filter(a => a.model && a.character && !isSeal(a)).map(a => a.character!))].sort();
-        return types.length > 0 && <details className="mb-mission-actor"><summary>Weapons the 3D characters hold</summary>
-          <p className="me-note">View only. No map file says which weapon an AI carries (the game's shared chartype tables do), so pick a stand-in per character type. SEALs hold the weapons the mission's armory enables.</p>
-          <div className="mb-mission-grid">{types.map(type => <label key={type}>{type}
-            <select value={p.actorWeapons?.[type] ?? ''} onChange={e => p.onChooseWeapon!(type, e.target.value)}>
-              <option value="">None</option>
-              {(p.weaponModels ?? []).map(w => <option key={w} value={w}>{w.slice(w.indexOf(':') + 1)}</option>)}
-            </select></label>)}</div>
-        </details>;
-      })()}
-      {t.actors.map(a => <details key={a.row} className="mb-mission-actor">
-        <summary><b>{a.display || a.name}</b> <span className="lm-muted">{a.name}{a.character ? ` · ${a.character}` : ''}{a.model ? ` · ${a.model.slice(a.model.indexOf(':') + 1)}` : ''}</span></summary>
+      {t.actors.length > 0 && <p className="me-note">{t.loadoutSource
+        ? <>Weapons are each character type's own (the game's chartype table, {t.loadoutSource}). That table is shared by every map, so the map cannot change them; a pick below only changes what the 3D character holds here.</>
+        : <>No chartype table (READERC.ZAR beside the package or on the SOCOM II disc) was found, so the 3D characters hold stand-ins: SEALs the armory's weapons, others what you pick.</>}</p>}
+      {t.actors.map(a => {
+        const pick = a.character ? p.actorWeapons?.[a.character] : undefined;
+        const held = pick ? (pick === 'none' ? null : pick) : a.weapon;
+        const own = (a.weapons ?? []).filter(w => w.model);
+        const others = (p.weaponModels ?? []).filter(m => !own.some(w => w.model === m));
+        return <details key={a.row} className="mb-mission-actor">
+        <summary><b>{a.display || a.name}</b> <span className="lm-muted">{a.name}{a.character ? ` · ${a.character}` : ''}{a.model ? ` · ${a.model.slice(a.model.indexOf(':') + 1)}` : ''}</span>
+          {a.model && <span className="lm-muted"> · holds {weaponLabel(held ?? null, a)}{pick ? ' (picked)' : ''}</span>}</summary>
         <dl className="mb-mission-facts">
-          {a.starts.length > 0 && <><dt>Starts at</dt><dd>{a.starts.map(s => `${s.point}${s.value != null ? ` (${s.value})` : ''}`).join(', ')}</dd></>}
+          {a.weapons && <><dt>Weapons</dt><dd>{a.weapons.length ? a.weapons.map(w => w.name).join(', ') : 'none'}</dd></>}
+          {a.model && a.character && p.onChooseWeapon && <><dt>Holds in 3D</dt><dd>
+            <select aria-label={`Weapon ${a.name ?? a.character} holds in 3D`} value={pick ?? ''} onChange={e => p.onChooseWeapon!(a.character!, e.target.value)}>
+              <option value="">{a.weapons ? `Its own: ${weaponLabel(a.weapon, a)}` : 'Stand-in'}</option>
+              <option value="none">Nothing</option>
+              {own.length > 0 && <optgroup label="Its loadout">{own.map(w => <option key={w.model!} value={w.model!}>{w.name}</option>)}</optgroup>}
+              <optgroup label="Other weapons">{others.map(w => <option key={w} value={w}>{w.slice(w.indexOf(':') + 1)}</option>)}</optgroup>
+            </select>{pick && <span className="lm-muted"> for every {a.character}</span>}</dd></>}
+          {a.starts.length > 0 && <><dt>Starts at</dt><dd title="The number after each point is its heading: eighths of a turn clockwise from north">
+            {a.starts.map(s => `${s.point}${s.value != null ? `, faces ${compassOf(Number(s.value))} (${s.value})` : ''}`).join('; ')}
+            {a.starts.length > 1 && <span className="lm-muted"> (alternatives; the 3D view uses the first)</span>}</dd></>}
+          {(() => {
+            const f = p.figures?.find(x => x.actor === (a.name ?? a.character));
+            if (p.multiplayer && a.name?.toLowerCase() === 'player') {
+              return <><dt>In 3D</dt><dd className="lm-muted">Not drawn: on a multiplayer map this is the template for human players, who spawn at the game's team spawns.</dd></>;
+            }
+            return <>
+              {(a.stand || f?.clip) && <><dt>Stands</dt><dd>{f?.clip ?? a.stand}{a.animSet ? <span className="lm-muted"> ({a.animSet})</span> : null}</dd></>}
+              {f?.withTeam && <><dt>In 3D</dt><dd className="lm-muted">Drawn beside the player: the SEAL team starts together, and its own start {f.withTeam} is far from the player's.</dd></>}
+            </>;
+          })()}
           {a.teams.length > 0 && <><dt>Teams</dt><dd>{a.teams.join(', ')}</dd></>}
           {a.flags.length > 0 && <><dt>Flags</dt><dd>{a.flags.map(f => f.values.length === 1 && f.values[0] === 1 ? f.name : `${f.name} ${f.values.join(' ')}`).join(', ')}</dd></>}
         </dl>
@@ -127,7 +149,8 @@ export function MissionPanel(p: Props) {
               onCommit={v => set('vehicles.rdr', [...a.path, 'ai_params', f.name], [v], `Set ${a.name} ${f.name}`)} /> : <span>{String(f.value)}</span>}
           </label>)}
         </fieldset>}
-      </details>)}
+      </details>;
+      })}
     </div>
 
     {t.mission && <div className="me-card">
