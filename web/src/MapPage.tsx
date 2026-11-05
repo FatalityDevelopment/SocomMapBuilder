@@ -323,12 +323,15 @@ export function MapPage() {
 
   useEffect(() => {
     let live = true;
-    if (!status || status.readOnly) { setActionData(null); setTables(null); return; }
+    // Read-only sessions of another game (SOCOM 3 / CA) have mission tables but no actions.rdr.
+    if (!status || (status.readOnly && !status.missions?.length)) { setActionData(null); setTables(null); return; }
     setActionError(''); setTablesError('');
-    client.mapActions().then(r => { if (live) { setActionData(r); } }).catch(e => { if (live) { setActionData(null); setActionError(errText(e)); } });
+    if (status.readOnly) { setActionData(null); } else {
+      client.mapActions().then(r => { if (live) { setActionData(r); } }).catch(e => { if (live) { setActionData(null); setActionError(errText(e)); } });
+    }
     client.mapTables().then(r => { if (live) { setTables(r); } }).catch(e => { if (live) { setTables(null); setTablesError(errText(e)); } });
     return () => { live = false; };
-  }, [status?.session, status?.revision, status?.readOnly]);
+  }, [status?.session, status?.revision, status?.readOnly, status?.mission]);
   useEffect(() => { setSelectedObjective(null); setActionNode(null); }, [status?.session]);
   useEffect(() => { if (selection.length) { setActionNode(null); } }, [selection]);
   useEffect(() => {
@@ -359,7 +362,7 @@ export function MapPage() {
         const armory = (tables.mission?.valves ?? []).filter(v => v.name?.startsWith('Enable') && v.value === 1)
           .map(v => weaponForValve(v.name!, weaponModels)).filter((m): m is string => !!m);
         const plans = planFigures(tables.actors, points, { clips: [...clips.keys()], armory, chosen: actorWeapons,
-          multiplayer: /^mp\d/i.test(status?.mapNamespace ?? '') });
+          multiplayer: /^mp\d/i.test(status?.mission ?? status?.mapNamespace ?? '') });
         if (live) { setFigurePlans(plans); }
         const figures = await Promise.all(plans.map(async plan => {
           const [character, weapon] = await Promise.all([loadModel(plan.model), plan.weapon ? loadModel(plan.weapon) : Promise.resolve(null)]);
@@ -1034,10 +1037,10 @@ export function MapPage() {
             actions={status && !status.readOnly ? <MapActionsPanel key={status.session} data={actionData} error={actionError} onFocusNode={focusNode}
               revision={status.revision} client={client} selected={single?.geoIndex ?? actionNode} busy={busy || loading} edit={edit} path={status.path} model={request?.path === status.path ? request.actionsFor : undefined} /> :
               <div className="me-note">Open an editable SOCOM II map to manage its actions.</div>}
-            mission={status && !status.readOnly ? <MissionPanel tables={tables} error={tablesError} revision={status.revision} busy={busy || loading} edit={edit}
+            mission={status && (!status.readOnly || !!status.missions?.length) ? <MissionPanel tables={tables} readOnly={!!status.readOnly} error={tablesError} revision={status.revision} busy={busy || loading} edit={edit}
               path={status.path} selectedObjective={selectedObjective} onSelectObjective={row => { setSelectedObjective(row); if (row !== null) { viewportRef.current?.frameObjective(row); } }}
               onShowObjective={showObjective} weaponModels={weaponModels} actorWeapons={actorWeapons} onChooseWeapon={chooseActorWeapon} figures={figurePlans}
-              multiplayer={/^mp\d/i.test(status.mapNamespace ?? '')} /> :
+              multiplayer={/^mp\d/i.test(status.mission ?? status.mapNamespace ?? '')} /> :
               <div className="me-note">Open an editable SOCOM II map to see its mission tables.</div>}
             tab={propTab}
             setTab={setPropTab}

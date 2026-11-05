@@ -230,6 +230,8 @@ export interface MapTables {
   mission: {
     description: string | null; satchelTimer: number | null; elevation: { min: number | null; max: number | null } | null;
     ai: Array<{ name: string; value: number | string | null }>; valves: Array<{ index: number; name: string | null; value: number | string | null }>;
+    // SOCOM 3 / CA: the briefing key, the map screen image and the weapons the mission allows (by name).
+    briefing?: string | null; mapImage?: string | null; weapons?: string[];
   } | null;
   world: {
     record: string; metersPerUnit: number | null; defaultMaterial: string | null; nightMission: number | null; nightVision: number[] | null;

@@ -28,6 +28,8 @@ interface Props {
   /** A multiplayer map: its `player` actor is the template for human players. */
   multiplayer?: boolean;
   onChooseWeapon?: (chartype: string, source: string) => void;
+  /** Show the tables without edits (SOCOM 3 / CA sessions). */
+  readOnly?: boolean;
 }
 
 /** A value that commits on Enter or leaving the field, with an inline check. */
@@ -46,11 +48,13 @@ const pretty = (key: string) => key.replace(/_/g, ' ').replace(/([a-z])([A-Z])/g
 
 export function MissionPanel(p: Props) {
   const t = p.tables;
+  const locked = p.busy || !!p.readOnly;
   if (!t || t.revision !== p.revision) { return <div className="me-note">{p.error || 'Reading mission tables…'}</div>; }
   if (!t.hasReader) {
     return <div className="me-card mb-act-empty"><b>This package has no mission reader.</b> Objectives, actors and mission settings live in READERM.ZAR, which mission and multiplayer maps carry.</div>;
   }
   const text = (key: string | null | undefined) => (key && t.texts[key]) || key || '';
+  const canEditText = (key: string) => !p.readOnly && t.texts[key] !== undefined;
   const set = (table: string, path: TablePath, values: Array<number | string>, label: string) =>
     void p.edit(label, { op: 'mapTable', revision: t.revision, table, path, values, label });
   const setText = async (key: string) => {
@@ -66,12 +70,16 @@ export function MissionPanel(p: Props) {
     <div className="me-card">
       <div className="me-card-title">Mission</div>
       {t.mission?.description && t.texts[t.mission.description] && <p className="mb-mission-lead">{t.texts[t.mission.description]}</p>}
+      {t.mission?.briefing && <p className="me-note" title={t.mission.briefing}>{text(t.mission.briefing)}</p>}
+      {p.readOnly && <p className="me-note">Read-only. Text shown is the words in each message key (the game's text is not on the disc as plain strings); valves are named by hash.</p>}
       <p className="me-note">{t.objectives.length} objective(s), {t.actors.length} actor(s), {t.valves.length} valve(s). Flags on the map mark objective locations (View › Objective flags).</p>
     </div>
 
     <div className="me-card">
       <div className="me-card-title">Objectives ({t.objectives.length})</div>
-      {t.objectives.length === 0 && <p className="me-note">This map has no HUD objectives (hudobjectives.rdr).</p>}
+      {t.objectives.length === 0 && <p className="me-note">{p.readOnly
+        ? 'Combined Assault objectives are not decoded yet (CA has no table like SOCOM II\'s hudobjectives.rdr).'
+        : 'This map has no HUD objectives (hudobjectives.rdr).'}</p>}
       <ol className="mb-mission-list">
         {t.objectives.map(o => <li key={o.row} className={o.row === p.selectedObjective ? 'on' : ''}>
           <button type="button" className="mb-mission-item" onClick={() => p.onSelectObjective(o.row === p.selectedObjective ? null : o.row)}>
@@ -82,10 +90,10 @@ export function MissionPanel(p: Props) {
           </button>
         </li>)}
       </ol>
-      {selected && <fieldset className="mb-mission-detail" disabled={p.busy}>
+      {selected && <fieldset className="mb-mission-detail" disabled={locked}>
         <legend>{text(selected.name) || `Objective ${selected.row + 1}`}</legend>
-        {selected.name && <div className="mb-act-row"><span className="lm-muted">{selected.name}</span>{t.texts[selected.name] !== undefined && <button type="button" onClick={() => void setText(selected.name!)}>Edit title</button>}</div>}
-        {selected.descriptions.map(d => <div key={d} className="mb-mission-desc"><span>{text(d)}</span>{t.texts[d] !== undefined && <button type="button" title={d} onClick={() => void setText(d)}>Edit</button>}</div>)}
+        {selected.name && <div className="mb-act-row"><span className="lm-muted">{selected.name}</span>{canEditText(selected.name) && <button type="button" onClick={() => void setText(selected.name!)}>Edit title</button>}</div>}
+        {selected.descriptions.map(d => <div key={d} className="mb-mission-desc"><span>{text(d)}</span>{canEditText(d) && <button type="button" title={d} onClick={() => void setText(d)}>Edit</button>}</div>)}
         {selected.location ? <div className="mb-act-field">Location on the map
           <div className="mb-act-row">
             X <ValueField label="Objective X" value={selected.location[0]} onCommit={v => set('hudobjectives.rdr', [...selected.path, 'LOCATION'], [v, selected.location![1]], 'Move objective')} />
@@ -107,7 +115,9 @@ export function MissionPanel(p: Props) {
     <div className="me-card">
       <div className="me-card-title">Actors ({t.actors.length})</div>
       {t.actors.length === 0 && <p className="me-note">No actors (vehicles.rdr).</p>}
-      {t.actors.length > 0 && <p className="me-note">{t.loadoutSource
+      {t.actors.length > 0 && <p className="me-note">{p.readOnly && t.loadoutSource
+        ? <>Weapons are each character type's own ({t.loadoutSource}).</>
+        : t.loadoutSource
         ? <>Weapons are each character type's own (the game's chartype table, {t.loadoutSource}). That table is shared by every map, so the map cannot change them; a pick below only changes what the 3D character holds here.</>
         : <>No chartype table (READERC.ZAR beside the package or on the SOCOM II disc) was found, so the 3D characters hold stand-ins: SEALs the armory's weapons, others what you pick.</>}</p>}
       {t.actors.map(a => {
@@ -116,7 +126,7 @@ export function MissionPanel(p: Props) {
         const own = (a.weapons ?? []).filter(w => w.model);
         const others = (p.weaponModels ?? []).filter(m => !own.some(w => w.model === m));
         return <details key={a.row} className="mb-mission-actor">
-        <summary><b>{a.display || a.name}</b> <span className="lm-muted">{a.name}{a.character ? ` · ${a.character}` : ''}{a.model ? ` · ${a.model.slice(a.model.indexOf(':') + 1)}` : ''}</span>
+        <summary><b>{text(a.display) || a.name}</b> <span className="lm-muted">{a.name}{a.character ? ` · ${a.character}` : ''}{a.model ? ` · ${a.model.slice(a.model.indexOf(':') + 1)}` : ''}</span>
           {a.model && <span className="lm-muted"> · holds {weaponLabel(held ?? null, a)}{pick ? ' (picked)' : ''}</span>}</summary>
         <dl className="mb-mission-facts">
           {a.weapons && <><dt>Weapons</dt><dd>{a.weapons.length ? a.weapons.map(w => w.name).join(', ') : 'none'}</dd></>}
@@ -143,7 +153,7 @@ export function MissionPanel(p: Props) {
           {a.teams.length > 0 && <><dt>Teams</dt><dd>{a.teams.join(', ')}</dd></>}
           {a.flags.length > 0 && <><dt>Flags</dt><dd>{a.flags.map(f => f.values.length === 1 && f.values[0] === 1 ? f.name : `${f.name} ${f.values.join(' ')}`).join(', ')}</dd></>}
         </dl>
-        {a.ai && a.ai.length > 0 && <fieldset className="mb-mission-grid" disabled={p.busy}><legend>AI</legend>
+        {a.ai && a.ai.length > 0 && <fieldset className="mb-mission-grid" disabled={locked}><legend>AI</legend>
           {a.ai.map(f => <label key={f.name}>{pretty(f.name)}
             {typeof f.value === 'number' ? <ValueField label={`${a.name} ${f.name}`} value={f.value} width={70}
               onCommit={v => set('vehicles.rdr', [...a.path, 'ai_params', f.name], [v], `Set ${a.name} ${f.name}`)} /> : <span>{String(f.value)}</span>}
@@ -155,18 +165,21 @@ export function MissionPanel(p: Props) {
 
     {t.mission && <div className="me-card">
       <div className="me-card-title">Mission settings</div>
-      <fieldset className="mb-mission-grid" disabled={p.busy}>
+      {t.mission.mapImage && <p className="me-note">Map screen: {t.mission.mapImage}</p>}
+      {t.mission.weapons && t.mission.weapons.length > 0 && <details><summary>Weapons the mission allows ({t.mission.weapons.length})</summary>
+        <p className="me-note">{t.mission.weapons.join(', ')}</p></details>}
+      <fieldset className="mb-mission-grid" disabled={locked}>
         {t.mission.satchelTimer != null && <label>Satchel timer (s, -1 off)<ValueField label="Satchel timer" value={t.mission.satchelTimer} width={70} onCommit={v => set('mission.rdr', ['SATCHEL_TIMER'], [v], 'Set satchel timer')} /></label>}
         {t.mission.ai.map(f => <label key={f.name}>{pretty(f.name)}
           {typeof f.value === 'number' ? <ValueField label={f.name} value={f.value} width={70} onCommit={v => set('mission.rdr', ['ai_params', f.name], [v], `Set ${f.name}`)} /> : <span>{String(f.value)}</span>}
         </label>)}
       </fieldset>
-      {weapons.length > 0 && <fieldset className="mb-mission-weapons" disabled={p.busy}><legend>Weapons available</legend>
+      {weapons.length > 0 && <fieldset className="mb-mission-weapons" disabled={locked}><legend>Weapons available</legend>
         {weapons.map(w => <label key={w.index}><input type="checkbox" checked={w.value === 1}
           onChange={e => set('mission.rdr', ['Valves', w.index, 'VALUE'], [e.target.checked ? 1 : 0], `${e.target.checked ? 'Enable' : 'Disable'} ${w.name}`)} />
           {w.name!.replace(/^Enable_?/, '').replace(/^Equip/, '')}</label>)}
       </fieldset>}
-      {otherValves.length > 0 && <details><summary>Other start values ({otherValves.length})</summary><fieldset className="mb-mission-grid" disabled={p.busy}>
+      {otherValves.length > 0 && <details><summary>Other start values ({otherValves.length})</summary><fieldset className="mb-mission-grid" disabled={locked}>
         {otherValves.map(v => <label key={v.index}>{v.name}{typeof v.value === 'number'
           ? <ValueField label={v.name ?? ''} value={v.value} width={70} onCommit={n => set('mission.rdr', ['Valves', v.index, 'VALUE'], [n], `Set ${v.name}`)} /> : <span>{String(v.value)}</span>}</label>)}
       </fieldset></details>}

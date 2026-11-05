@@ -79,7 +79,7 @@ namespace MapBuilder.Server.Services
             reg.Add(c => WithSession(c.AssetSession, "ASSET_HISTORY", s => History(s)), "ASSET_HISTORY");
             RegisterPrefabs(reg);
             reg.Add(c => WithSession(c.AssetSession, "ASSET_MAP_ACTIONS", MapActions), "ASSET_MAP_ACTIONS");
-            reg.Add(c => WithSession(c.AssetSession, "ASSET_MAP_TABLES", MapTables), "ASSET_MAP_TABLES");
+            reg.Add(c => CaRoute(c, "ASSET_MAP_TABLES") ?? WithSession(c.AssetSession, "ASSET_MAP_TABLES", MapTables), "ASSET_MAP_TABLES");
             reg.Add(c => WithSession(c.AssetSession, "ASSET_MAP_HUD", MapHud), "ASSET_MAP_HUD");
             RegisterCharacterPresets(reg);
             RegisterViewer(reg);

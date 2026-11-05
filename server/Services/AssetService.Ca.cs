@@ -67,6 +67,7 @@ namespace MapBuilder.Server.Services
                         "ASSET_TEXTURE" => CaTexture(s, c.AssetName),
                         "ASSET_MAP_SCENE" => CaMapScene(s),
                         "ASSET_MAP_POINTS" => CaPoints(s, c.AssetJson),
+                        "ASSET_MAP_TABLES" => CaTables(s),
                         "ASSET_LIST_ANIMATIONS" => CaListAnimations(s, c.AssetJson),
                         "ASSET_ANIMATION" => CaAnimation(s, c.AssetName),
                         "ASSET_WEAPONS" => CaWeapons(s),
@@ -113,6 +114,91 @@ namespace MapBuilder.Server.Services
         /// The session mission's named points (mission.rdr) in world space; <c>{"mission": "MP414CTR"}</c> selects
         /// another mission of the location first (and keeps it for later calls).
         /// </summary>
+        /// <summary>
+        /// The session mission's tables in ASSET_MAP_TABLES' shape (read-only): actors with their character type, model,
+        /// weapons and starts (vehicles.rdr, character.rdr, GLOBAL's weapon table), the mission header (title, briefing,
+        /// map image, allowed weapons) and its valves. CA has no HUD objective table, world settings or extents here, so
+        /// those are empty; message keys get their own words as text (the game's text is not on the disc as strings).
+        /// </summary>
+        private static object CaTables(CaSession s)
+        {
+            var p = s.Package;
+            if (s.Mission == null || p.MissionResource(s.Mission, "MSNv") is not { } vehiclesRes)
+                return new { revision = 0, hasReader = false, objectives = Array.Empty<object>(), actors = Array.Empty<object>(), loadoutSource = (string?)null,
+                    mission = (object?)null, world = (object?)null, extents = (object?)null, cams = Array.Empty<object>(), valves = Array.Empty<object>(), texts = new Dictionary<string, string>() };
+
+            var actors = CaMissionTables.ParseActors(vehiclesRes.Data);
+            var types = p.MissionResource(s.Mission, "CHAR") is { } charRes ? CaMissionTables.ParseCharacterTypes(charRes.Data) : new List<CaMissionTables.CharacterType>();
+            var header = p.MissionResource(s.Mission, "MISN") is { } misn ? CaMissionTables.ParseHeader(misn.Data) : null;
+            var valveValues = p.MissionResource(s.Mission, "VALV") is { } valv ? CaMissionTables.ParseValves(valv.Data) : new List<(uint Hash, int Value)>();
+            var weaponTable = p.GlobalResource("WEAP")?.Data;
+            var weapons = weaponTable == null ? new Dictionary<uint, CaMissionTables.Weapon>()
+                : CaMissionTables.FindWeapons(weaponTable, types.SelectMany(t => t.Weapons).Concat(header?.Weapons ?? new List<uint>()));
+            byte[]? vehicles = p.GlobalResource("GVEH")?.Data, turrets = p.GlobalResource("GTUR")?.Data;
+            bool Holds(byte[]? table, uint hash) => table != null && table.AsSpan().IndexOf(BitConverter.GetBytes(hash)) >= 0;
+
+            var texts = new Dictionary<string, string>();
+            string? Text(string? key)
+            {
+                if (key != null && key.EndsWith("_MSG", StringComparison.Ordinal)) texts[key] = CaMissionTables.KeyText(key);
+                return key;
+            }
+            string? ModelRef(uint hash, string kind) => p.ModelByHash(hash, kind) is { } m ? $"{CaArchive(m)}:{m.Name}" : null;
+            // Grenades and gear have no display name: their model's name when it is known (not w<hash>), else the
+            // start of their description key, marked as cut off.
+            string WeaponName(uint h)
+            {
+                if (!weapons.TryGetValue(h, out var w)) return $"w{h:x8}";
+                if (w.Display != null) return w.Display;
+                if (w.Model is uint mh && p.ModelByHash(mh, "weapon") is { } m && !System.Text.RegularExpressions.Regex.IsMatch(m.Name, "^w[0-9a-f]{8}$")) return m.Name;
+                return w.Key != null ? CaMissionTables.KeyText(w.Key) + "…" : $"w{h:x8}";
+            }
+
+            var actorRows = actors.Select(a =>
+            {
+                var type = types.FirstOrDefault(t => t.Hash == a.Type);
+                string kind = type != null && type.Model != 0 ? "character" : Holds(vehicles, a.Type) ? "vehicle" : Holds(turrets, a.Type) ? "turret" : "other";
+                var loadout = type?.Weapons.Select(h => new { name = WeaponName(h), model = weapons.TryGetValue(h, out var w) && w.Model is uint mh ? ModelRef(mh, "weapon") : null }).ToList();
+                // The figure holds the first gun the package has (grenades have no display name, items no model).
+                string? held = type?.Weapons.Select(h => weapons.TryGetValue(h, out var w) && w.Kind == "weapon" && w.Display != null && w.Model is uint mh ? ModelRef(mh, "weapon") : null)
+                    .FirstOrDefault(m => m != null);
+                return new
+                {
+                    row = a.Row, path = new object[] { a.Row }, name = a.Name, display = Text(a.Display),
+                    character = type != null ? $"{type.Display ?? kind} {a.Type:x8}" : $"{kind} {a.Type:x8}",
+                    model = type != null && type.Model != 0 ? ModelRef(type.Model, "character") : null,
+                    weapons = loadout, weapon = held, animSet = (string?)null, stand = (string?)null,
+                    starts = a.Starts.Select(st => new { point = st.Point, value = (object)st.Heading }).ToList(),
+                    teams = Array.Empty<int>(),
+                    flags = new[] { new { name = "group", values = new object[] { a.Group } }, new { name = kind, values = Array.Empty<object>() } },
+                    ai = (object?)null,
+                };
+            }).ToList();
+
+            var valves = (header?.Valves ?? new List<uint>()).Select((h, i) => new
+            {
+                index = i, name = $"v{h:x8}",
+                value = valveValues.FirstOrDefault(v => v.Hash == h) is { Hash: not 0 } v ? (object?)v.Value : null,
+            }).ToList();
+            var keys = header?.Strings.Where(x => x.EndsWith("_MSG", StringComparison.Ordinal)).ToList() ?? new List<string>();
+            return new
+            {
+                revision = 0, hasReader = true, objectives = Array.Empty<object>(), actors = actorRows,
+                loadoutSource = types.Count > 0 ? $"{s.Mission} character.rdr" : null,
+                mission = header == null ? null : new
+                {
+                    description = Text(keys.FirstOrDefault()), briefing = Text(keys.Skip(1).FirstOrDefault()),
+                    mapImage = header.Strings.FirstOrDefault(x => x.EndsWith(".raw", StringComparison.OrdinalIgnoreCase)),
+                    satchelTimer = (float?)null, elevation = (object?)null, ai = Array.Empty<object>(),
+                    valves = valves.Select(v => new { v.index, v.name, v.value }).ToList(),
+                    weapons = header.Weapons.Where(h => weapons.TryGetValue(h, out var w) && w.Kind == "weapon").Select(WeaponName).Distinct().ToList(),
+                },
+                world = (object?)null, extents = (object?)null, cams = Array.Empty<object>(),
+                valves = valves.Select(v => new { v.name, id = (int?)v.index, v.value }).ToList(),
+                texts,
+            };
+        }
+
         private static object CaPoints(CaSession s, string? json)
         {
             if (Parse<PointArgs>(json)?.Mission is { Length: > 0 } pick)

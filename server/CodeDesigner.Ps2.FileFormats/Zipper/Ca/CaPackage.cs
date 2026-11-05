@@ -447,6 +447,22 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
             return list;
         }
 
+        /// <summary>A model of <paramref name="kind"/> by its root hash (how character types and weapons name their
+        /// models), or null.</summary>
+        public Model? ModelByHash(uint hash, string kind) => hash == 0 ? null : Models()
+            .FirstOrDefault(m => m.Kind == kind && _libraries[m.LibraryIndex].Lib.ModelHash(m.Offset) == hash);
+
+        /// <summary>A mission's resource of <paramref name="tag"/> (in its own ZDB), or null.</summary>
+        public Resource? MissionResource(string missionId, string tag)
+        {
+            var info = FindMission(missionId) ?? throw new KeyNotFoundException($"No mission {missionId} in this location");
+            return Resources.FirstOrDefault(r => r.Tag == tag && r.File == info.File);
+        }
+
+        /// <summary>A resource of GLOBAL.ZDB (the shared weapon, vehicle and turret tables), or null.</summary>
+        public Resource? GlobalResource(string tag) =>
+            Resources.FirstOrDefault(r => r.Tag == tag && Path.GetFileName(r.File).Equals("GLOBAL.ZDB", StringComparison.OrdinalIgnoreCase));
+
         private static string PointKind(CaMissions.Point p)
         {
             string n = p.Name;
