@@ -41,6 +41,8 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
 
   const [status, setStatusState] = useState<SessionStatus | null>(null);
   const [sceneNs, setSceneNs] = useState('');
+  const hourRef = useRef(12);
+  const [sceneHour, setSceneHour] = useState(12);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [instances, setInstances] = useState<MapInstanceWire[]>([]);
   const [points, setPoints] = useState<MapPointWire[]>([]);
@@ -92,7 +94,7 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
     setProgress('Reading map scene…');
     const warnings: string[] = [];
     const [scene, pts] = await Promise.all([
-      clientRef.current.mapScene(),
+      clientRef.current.mapScene(statusRef.current?.game === 'GTA: San Andreas' ? { hour: hourRef.current } : {}),
       clientRef.current.mapPoints().catch(error => {
         warnings.push(`AIMAPS points could not be loaded: ${errText(error)}`);
         return { points: [] as MapPointWire[], mission: null, teamSpawns: [] };
@@ -102,7 +104,7 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
     setCounts(scene.counts);
     const sources = scene.instances.map(i => i.source).filter((s): s is string => !!s);
     const failed = await loadMapModels(clientRef.current, texturesRef.current, sources, meshCacheRef.current, pixelCacheRef.current,
-      (done, total) => setProgress(`Loading models ${done}/${total}…`));
+      (done, total) => setProgress(`Loading models ${done}/${total}…`), scene.meshBatchSize);
     setProgress('Preparing viewport…');
     instancesRef.current = scene.instances;
     const shownPoints = pts.mission ? [
@@ -170,6 +172,8 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
       setSceneReady(false);
       if (viewportRef.current) { viewportRef.current.editable = false; }
       setStatus(s);
+      hourRef.current = 12;
+      setSceneHour(12);
       setConnectionIssue(null);
       // Once the client switches sessions, old instance indices must never address the new package.
       instancesRef.current = [];
@@ -304,6 +308,16 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
     } finally { setBusyFlag(false); }
   };
 
+  const pickHour = async (hour: number) => {
+    if (busyRef.current || reloadingRef.current || statusRef.current?.game !== 'GTA: San Andreas') { return; }
+    hourRef.current = hour;
+    setSceneHour(hour);
+    setBusyFlag(true);
+    try { await reload(true, false); }
+    catch (error) { say(`Could not load the scene at ${hour}:00: ${errText(error)}`, true); }
+    finally { setBusyFlag(false); }
+  };
+
   // ------------------------------------------------------------------ edits
 
   const edit = useCallback(async (label: string, op: Record<string, unknown>): Promise<Record<string, unknown> | null> => {
@@ -422,7 +436,7 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
   return {
     client: clientRef.current, instancesRef, pointsRef, statusRef,
     status, setStatus, sceneNs, counts, instances, points, shapes, models, setModels, busy, progress, loading, sceneReady,
-    loadWarnings, connectionIssue, message, messageIsError, say,
+    loadWarnings, connectionIssue, message, messageIsError, say, sceneHour, pickHour,
     reload, retryScene, edit, history, saveCopy, saveDisc, exportPack, openDialog,
     loadModel, texturePixels: pixelCacheRef.current, jump,
   };

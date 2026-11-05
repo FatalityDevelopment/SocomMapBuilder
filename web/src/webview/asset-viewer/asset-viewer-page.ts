@@ -565,7 +565,7 @@ export class AssetViewerLogic {
       const meshes = new Map<string, MapModel>();
       const pixels: Record<string, ModelTexturePixels> = {};
       const failed = await loadMapModels(client, textures, scene.instances.map(i => i.source).filter((s): s is string => !!s), meshes, pixels,
-        (done, total) => { if (live()) { this.mapProgress.set(`Loading models ${done}/${total}…`); } });
+        (done, total) => { if (live()) { this.mapProgress.set(`Loading models ${done}/${total}…`); } }, scene.meshBatchSize);
       if (!live()) { return; }
       this.viewportKind.set('map');
       this.stage.set('map');

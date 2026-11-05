@@ -1,3 +1,5 @@
+using System.Numerics;
+
 namespace CodeDesigner.Ps2.FileFormats.Gta;
 
 /// <summary>
@@ -36,7 +38,11 @@ public sealed partial class GtaPackage
     /// <summary>Every placement on the disc (text IPL rows first, then the zones' streamed rows), cached.</summary>
     public IReadOnlyList<Placement> Placements => _placements ??= ReadPlacements();
 
-    public IReadOnlyList<MapArea> MapAreas => _areas ??= Placements.GroupBy(p => p.AreaId, StringComparer.OrdinalIgnoreCase)
+    public IReadOnlyList<MapArea> MapAreas => _areas ??= BuildAreas();
+
+    private List<MapArea> BuildAreas()
+    {
+        var areas = Placements.GroupBy(p => p.AreaId, StringComparer.OrdinalIgnoreCase)
         .Select(g =>
         {
             var first = g.First();
@@ -49,7 +55,12 @@ public sealed partial class GtaPackage
             return new MapArea(g.Key, label, first.IsInterior, g.Count(), g.Count(p => p.Model != null),
                 shown.Min(p => p.Matrix[12]), shown.Min(p => p.Matrix[14]), shown.Max(p => p.Matrix[12]), shown.Max(p => p.Matrix[14]));
         })
-        .OrderBy(a => a.Interior).ThenBy(a => a.Label, StringComparer.OrdinalIgnoreCase).ToList();
+        .ToDictionary(a => a.Id, StringComparer.OrdinalIgnoreCase);
+        // Keep an emptied area selectable so the user can place a replacement or undo.
+        if (_originalAreas != null)
+            foreach (var area in _originalAreas.Values) areas.TryAdd(area.Id, area with { Placements = 0, Resolved = 0 });
+        return areas.Values.OrderBy(a => a.Interior).ThenBy(a => a.Label, StringComparer.OrdinalIgnoreCase).ToList();
+    }
 
     /// <summary>The outdoor area holding the most placements within <paramref name="radius"/> of a game-space point.</summary>
     public MapArea? AreaAt(float gameX, float gameY, float radius = 150)
@@ -133,20 +144,24 @@ public sealed partial class GtaPackage
             }
         result.AddRange(streamed);
 
-        foreach (var p in result)
-            if (p.LodRow >= 0 && textRows.TryGetValue(p.Zone, out var rows) && p.LodRow < rows.Count) rows[p.LodRow].IsLod = true;
+        MarkLods(result);
         return result;
     }
 
-    /// <summary>The LOD placement a placement names (a row of its zone's text IPL), or null.</summary>
+    private void MarkLods(List<Placement> placements, string? zone = null)
+    {
+        var rows = zone == null ? placements : placements.Where(p => p.Zone == zone).ToList();
+        var linked = rows.Where(p => p.LodRow >= 0).Select(p => (p.Zone, p.LodRow)).ToHashSet();
+        foreach (var p in rows) p.IsLod = !_streamFiles.ContainsKey(p.File) && linked.Contains((p.Zone, p.Row));
+    }
+
     public Placement? LodOf(Placement p)
     {
         if (p.LodRow < 0) return null;
-        _lodRows ??= Placements.Where(x => !x.File.Contains("_stream", StringComparison.OrdinalIgnoreCase))
-            .GroupBy(x => x.Zone, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
-        return _lodRows.TryGetValue(p.Zone, out var rows) && p.LodRow < rows.Count ? rows[p.LodRow] : null;
+        _lodRows ??= Placements.Where(x => !_streamFiles.ContainsKey(x.File)).ToDictionary(x => (x.Zone, x.Row));
+        return _lodRows.GetValueOrDefault((p.Zone, p.LodRow));
     }
-    private Dictionary<string, List<Placement>>? _lodRows;
+    private Dictionary<(string Zone, int Row), Placement>? _lodRows;
 
     private static bool TryFloats(string[] c, int from, int count, out float[] values)
     {
@@ -194,32 +209,42 @@ public sealed partial class GtaPackage
 
     // ------------------------------------------------------------------ water
 
-    private List<float[]>? _water;
+    public readonly record struct WaterVertex(Vector3 Position, Vector2 Flow, Vector2 Wave)
+    {
+        internal WaterVertex Lerp(WaterVertex to, float t) => new(Vector3.Lerp(Position, to.Position, t),
+            Vector2.Lerp(Flow, to.Flow, t), Vector2.Lerp(Wave, to.Wave, t));
+    }
+
+    private List<WaterVertex[]>? _water;
+    public IReadOnlyList<WaterVertex[]> WaterSurfaces => _water ??= ReadWater();
 
     /// <summary>
     /// DATA/WATER.DAT: after its "processed" line, one quad (4 vertices) or triangle (3) per line, each vertex
     /// "x y z flowX flowY bigWave smallWave" in game space, then a flag. A polygon comes back as its game-space
     /// corners (x, y, z per vertex) in order round its rim (a quad lists its corners as a 2x2 grid: re-ordered).
     /// </summary>
-    public IReadOnlyList<float[]> WaterPolygons() => _water ??= ReadWater();
+    public IReadOnlyList<float[]> WaterPolygons() => WaterSurfaces.Select(PositionsOf).ToList();
 
-    private List<float[]> ReadWater()
+    private static float[] PositionsOf(WaterVertex[] poly) =>
+        poly.SelectMany(v => new[] { v.Position.X, v.Position.Y, v.Position.Z }).ToArray();
+
+    private List<WaterVertex[]> ReadWater()
     {
-        var result = new List<float[]>();
+        var result = new List<WaterVertex[]>();
         var data = _disc.GetValueOrDefault("DATA/WATER.DAT")?.Read();
         if (data == null) return result;
         foreach (var raw in System.Text.Encoding.ASCII.GetString(data).Split('\n'))
         {
             var v = raw.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
             int corners = v.Length switch { 29 => 4, 22 => 3, _ => 0 };
-            if (corners == 0) continue;
-            var poly = new float[corners * 3];
-            bool ok = true;
-            for (int c = 0; c < corners && ok; c++)
-                for (int k = 0; k < 3 && ok; k++)
-                    ok = float.TryParse(v[c * 7 + k], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out poly[c * 3 + k]);
-            if (!ok) continue;
-            if (corners == 4) poly = new[] { poly[0], poly[1], poly[2], poly[3], poly[4], poly[5], poly[9], poly[10], poly[11], poly[6], poly[7], poly[8] };
+            if (corners == 0 || !TryFloats(v, 0, corners * 7, out var f) || !f.All(float.IsFinite)) continue;
+            var poly = new WaterVertex[corners];
+            for (int i = 0; i < corners; i++)
+            {
+                int j = i * 7;
+                poly[i] = new(new(f[j], f[j + 1], f[j + 2]), new(f[j + 3], f[j + 4]), new(f[j + 5], f[j + 6]));
+            }
+            if (corners == 4) (poly[2], poly[3]) = (poly[3], poly[2]);
             result.Add(poly);
         }
         return result;
@@ -227,27 +252,30 @@ public sealed partial class GtaPackage
 
     /// <summary>A convex polygon (x, y, z per vertex) clipped to the game-space rectangle [minX, maxX] x [minY, maxY]
     /// (Sutherland-Hodgman; z follows linearly). Empty when nothing is left.</summary>
-    public static float[] ClipToRectangle(float[] poly, float minX, float minY, float maxX, float maxY)
+    public static float[] ClipToRectangle(float[] poly, float minX, float minY, float maxX, float maxY) =>
+        PositionsOf(ClipWater(Enumerable.Range(0, poly.Length / 3)
+            .Select(i => new WaterVertex(new(poly[3 * i], poly[3 * i + 1], poly[3 * i + 2]), default, default)).ToArray(),
+            minX, minY, maxX, maxY));
+
+    public static WaterVertex[] ClipWater(WaterVertex[] poly, float minX, float minY, float maxX, float maxY)
     {
-        var pts = new List<(float X, float Y, float Z)>();
-        for (int i = 0; i + 2 < poly.Length; i += 3) pts.Add((poly[i], poly[i + 1], poly[i + 2]));
+        var pts = poly.ToList();
         foreach (var (axis, limit, keepAbove) in new[] { (0, minX, true), (0, maxX, false), (1, minY, true), (1, maxY, false) })
         {
             if (pts.Count == 0) break;
-            var next = new List<(float X, float Y, float Z)>();
-            bool Inside((float X, float Y, float Z) p) => keepAbove ? (axis == 0 ? p.X : p.Y) >= limit : (axis == 0 ? p.X : p.Y) <= limit;
+            var next = new List<WaterVertex>();
             for (int i = 0; i < pts.Count; i++)
             {
                 var a = pts[i];
                 var b = pts[(i + 1) % pts.Count];
-                bool ina = Inside(a), inb = Inside(b);
+                float da = a.Position[axis] - limit, db = b.Position[axis] - limit;
+                bool ina = keepAbove ? da >= 0 : da <= 0, inb = keepAbove ? db >= 0 : db <= 0;
                 if (ina) next.Add(a);
                 if (ina == inb) continue;
-                float da = (axis == 0 ? a.X : a.Y) - limit, db = (axis == 0 ? b.X : b.Y) - limit, t = da / (da - db);
-                next.Add((a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t, a.Z + (b.Z - a.Z) * t));
+                next.Add(a.Lerp(b, da / (da - db)));
             }
             pts = next;
         }
-        return pts.Count < 3 ? Array.Empty<float>() : pts.SelectMany(p => new[] { p.X, p.Y, p.Z }).ToArray();
+        return pts.Count < 3 ? Array.Empty<WaterVertex>() : pts.ToArray();
     }
 }

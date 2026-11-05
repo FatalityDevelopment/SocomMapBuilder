@@ -17,6 +17,7 @@ export interface PlaceSettings { model: ModelSummary | null; prefab: string | nu
 export function useMapEdits(session: ReturnType<typeof useMapSession>, viewportRef: MutableRefObject<MapViewport | null>, selection: number[],
   setTool: (tool: MapTool) => void, setPropTab: (tab: PropTab) => void, placeSettings: PlaceSettings) {
   const { instances, instancesRef, pointsRef, edit, say } = session;
+  const gta = session.status?.game === 'GTA: San Andreas';
   const { model: placeModel, prefab: placePrefab, placeAs } = placeSettings;
   // Copied clutter placements (model + matrix); they paste into this package or another one that has the model.
   const clipboardRef = useRef<Array<{ model: string; matrix: number[] }>>([]);
@@ -53,15 +54,27 @@ export function useMapEdits(session: ReturnType<typeof useMapSession>, viewportR
   const deleteSelection = async () => {
     const sel = selectedInstances();
     if (!sel.length) { return; }
-    const ops = deleteOps(sel);
+    const ops = gta ? sel.map(i => ({ op: 'deleteInstance', instance: i.instance })) : deleteOps(sel);
     viewportRef.current?.clearSelection();
     await edit(`delete ${ops.length === 1 ? sel[0].model : ops.length + ' instances'}`, ops.length === 1 ? ops[0] : { op: 'batch', ops });
+  };
+
+  const selectNewPlacements = (result: unknown) => {
+    const raw = result as { newInstance?: string; results?: Array<{ newInstance?: string }> };
+    const ids = new Set([raw.newInstance, ...(raw.results ?? []).map(r => r.newInstance)]);
+    viewportRef.current?.select(instancesRef.current.flatMap((item, i) => ids.has(item.instance) ? [i] : []));
   };
 
   const duplicateSelection = async () => {
     const sel = selectedInstances();
     if (!sel.length) { return; }
     const list = instancesRef.current;
+    if (gta) {
+      const ops = sel.map(i => ({ op: 'placeInstance', templateInstance: i.instance, model: i.model, archive: i.source?.split(':')[0], matrix: i.matrix }));
+      const result = await edit('duplicate placements', ops.length === 1 ? ops[0] : { op: 'batch', ops });
+      if (result) { selectNewPlacements(result); setTool('move'); }
+      return;
+    }
     const ops = duplicateOps(sel);
     const raw = await edit(`duplicate ${ops.length === 1 ? sel[0].model : ops.length + ' instances'}`, ops.length === 1 ? ops[0] : { op: 'batch', ops }) as
       { newClutterIndex?: number; results?: Array<{ newClutterIndex?: number }> } | null;
@@ -136,6 +149,12 @@ export function useMapEdits(session: ReturnType<typeof useMapSession>, viewportR
       return;
     }
     if (!model) { setPropTab('place'); say('Pick a model or prefab in the Assets panel first.', true); return; }
+    if (gta) {
+      if (!model.canPlace || prefab || session.status?.mission?.startsWith('lod-')) { return; }
+      const result = await edit(`place ${model.name}`, { op: 'placeInstance', model: model.name, archive: model.archive, matrix: transform.matrix });
+      if (result) { selectNewPlacements(result); }
+      return;
+    }
     if (placeAs === 'prop') {
       const raw = await edit(`place prop ${model.name}`, { op: 'placeInstance', model: model.name, matrix: transform.matrix }) as { newGeoIndex?: number } | null;
       if (raw && typeof raw.newGeoIndex === 'number') {

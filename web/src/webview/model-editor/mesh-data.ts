@@ -20,6 +20,7 @@ export interface MeshChunkWire {
   triangleCount: number;
   hasColors: boolean;
   positions: string;
+  waterMotion?: string | null;
   uvs: string;
   normals: string;
   colors: string | null;
@@ -58,6 +59,7 @@ export interface EditorChunk {
   vertexCount: number;
   // Display space (Y up).
   positions: Float32Array;
+  waterMotion?: Float32Array;
   uvs: Float32Array;
   normals: Float32Array;
   // RGBA bytes, 0x80 = 1.0; null when the chunk has no colour block.
@@ -115,6 +117,7 @@ export function decodeMesh(wire: MeshWire): EditorMesh {
         unit: c.unit,
         vertexCount: c.vertexCount,
         positions,
+        waterMotion: c.waterMotion ? floats(c.waterMotion) : undefined,
         uvs: floats(c.uvs).slice(),
         normals,
         colors: c.colors ? base64ToBytes(c.colors) : null,

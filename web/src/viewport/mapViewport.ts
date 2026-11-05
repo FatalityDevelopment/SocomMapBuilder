@@ -123,6 +123,7 @@ export class MapViewport extends ViewportCore {
   private readonly content = new THREE.Group();
   private readonly placementGhost = new THREE.Group();
   private readonly placementMaterial = new THREE.MeshBasicMaterial({ color: 0x66ddbb, transparent: true, opacity: 0.45, depthWrite: false, side: THREE.DoubleSide });
+  private placementLayer: MapLayer = 'clutter';
   private placementOptions: PlacementOptions | null = null;
   private placementSample: PlacementSample = { yaw: 0, scale: 1 };
   private placementSource: EditorMesh | null = null;
@@ -302,7 +303,8 @@ export class MapViewport extends ViewportCore {
     return { ...sample, matrix: placementMatrix(hit.point, surfaceNormal(hit), sample, this.placementOptions.alignSurface).toArray() };
   }
 
-  setPlacementOptions(options: PlacementOptions): void {
+  setPlacementOptions(options: PlacementOptions, layer: MapLayer = 'clutter'): void {
+    this.placementLayer = layer;
     this.placementOptions = options;
     this.placementSample = samplePlacement(options);
     this.updatePlacementGhost();
@@ -310,7 +312,7 @@ export class MapViewport extends ViewportCore {
 
   private canPlace(): boolean {
     return this.toolValue === 'place' && this.editableValue && !!this.placementSource && !!this.placementOptions
-      && !this.lockedLayers.has('clutter') && !this.hiddenLayers.has('clutter');
+      && !this.lockedLayers.has(this.placementLayer) && !this.hiddenLayers.has(this.placementLayer);
   }
 
   private updatePlacementGhost(): void {
@@ -411,9 +413,10 @@ export class MapViewport extends ViewportCore {
         const texture = chunk.texture ? `${ns ?? ''}:${chunk.texture}`.toLowerCase() : null;
         const translucentEffect = !!texture && translucentTextures.has(texture)
           && (chunk.materialBlend ?? textures[texture].alphaBlend ?? false);
-        const spec: MaterialSpec = { texture, materialBlend: chunk.materialBlend, colors: chunk.colors, translucentEffect, frontOnly };
+        const spec: MaterialSpec = { texture, materialBlend: chunk.materialBlend, colors: chunk.colors,
+          waterMotion: chunk.waterMotion, translucentEffect: translucentEffect || !!chunk.waterMotion, frontOnly };
         const mesh = new THREE.InstancedMesh(geometry, this.materialFor(spec), idx.length);
-        if (translucentEffect) { mesh.renderOrder = 1; }
+        if (spec.translucentEffect) { mesh.renderOrder = 1; }
         idx.forEach((instIndex, slot) => {
           mesh.setMatrixAt(slot, this.display[instIndex]);
           this.slots[instIndex].push({ mesh, slot });

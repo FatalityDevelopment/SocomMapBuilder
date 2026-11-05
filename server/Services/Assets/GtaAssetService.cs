@@ -76,6 +76,7 @@ namespace MapBuilder.Server.Services.Assets
                         "ASSET_LIST_MODELS" => ListModels(s, c.AssetJson),
                         "ASSET_DESCRIBE_MODEL" => Describe(s, c.AssetName, c.AssetArchive),
                         "ASSET_MODEL_MESH" => Mesh(s, c.AssetName, c.AssetArchive, AssetJson.Parse<AssetJson.MeshArgs>(c.AssetJson)?.Arrays ?? true),
+                        "ASSET_MODEL_MESH_BATCH" => MeshBatch(s, c.AssetJson),
                         "ASSET_EDIT" => Edit(s, c.AssetJson),
                         "ASSET_UNDO" => UndoRedo(s, true),
                         "ASSET_REDO" => UndoRedo(s, false),
@@ -100,11 +101,38 @@ namespace MapBuilder.Server.Services.Assets
                 }
                 return AssetJson.Ok(command, result);
             }
-            catch (Exception ex) when (ex is ArgumentException or KeyNotFoundException or InvalidOperationException or InvalidDataException or NotSupportedException
-                or IOException or UnauthorizedAccessException or System.Text.Json.JsonException or FormatException or OverflowException)
+            catch (Exception ex) when (IsAssetError(ex))
             {
                 return Responses.Error($"{command}: {ex.Message}");
             }
+        }
+
+        private static bool IsAssetError(Exception ex) => ex is ArgumentException or KeyNotFoundException or InvalidOperationException
+            or InvalidDataException or NotSupportedException or IOException or UnauthorizedAccessException or System.Text.Json.JsonException or FormatException or OverflowException;
+
+        private const int MeshBatchSize = 16;
+        private sealed record MeshBatchArgs(string?[]? Sources);
+        private sealed record MeshResult(string? Source, object? Mesh, string? Error);
+
+        private static MeshResult[] MeshBatch(Session s, string? json)
+        {
+            var sources = AssetJson.Parse<MeshBatchArgs>(json)?.Sources;
+            if (sources == null || sources.Length > MeshBatchSize)
+                throw new ArgumentException($"Supply a sources array of at most {MeshBatchSize} models.");
+            return sources.Select(source =>
+            {
+                try
+                {
+                    int cut = source?.IndexOf(':') ?? -1;
+                    if (source == null || cut < 1 || cut == source.Length - 1)
+                        throw new ArgumentException("A model source must be archive:name.");
+                    return new MeshResult(source, Mesh(s, source[(cut + 1)..], source[..cut], true), null);
+                }
+                catch (Exception ex) when (IsAssetError(ex))
+                {
+                    return new MeshResult(source, null, ex.Message);
+                }
+            }).ToArray();
         }
 
         private static object Status(Session s)
@@ -134,7 +162,7 @@ namespace MapBuilder.Server.Services.Assets
                 .Where(m => (f.Kind == null || m.Kind.Equals(f.Kind, StringComparison.OrdinalIgnoreCase))
                     && (f.Query == null || m.Name.Contains(f.Query, StringComparison.OrdinalIgnoreCase))
                     && (f.Archive == null || m.Archive.Equals(f.Archive, StringComparison.OrdinalIgnoreCase)))
-                .Select(m => new { archive = m.Archive, name = m.Name, kind = m.Kind, @namespace = m.Txd, size = 0, visualCount = 1 })
+                .Select(m => new { archive = m.Archive, name = m.Name, kind = m.Kind, @namespace = m.Txd, size = 0, visualCount = 1, canPlace = GtaPackage.CanPlace(m) })
                 .ToList();
         }
 
