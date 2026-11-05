@@ -75,7 +75,9 @@ namespace MapBuilder.Server.Services
             reg.Add(c => WithSession(c.AssetSession, "ASSET_CHARACTER_PACK", s => CharacterPackOf(s, c.AssetJson)), "ASSET_CHARACTER_PACK");
             reg.Add(c => WithSession(c.AssetSession, "ASSET_CHARACTER_CHECK", s => CharacterCheckOf(s, c.AssetJson)), "ASSET_CHARACTER_CHECK");
             reg.Add(c => WithSession(c.AssetSession, "ASSET_UV_LAYOUT", s => UvLayout(s, c.AssetJson)), "ASSET_UV_LAYOUT");
-            reg.Add(c => CaRoute(c, "ASSET_SAVE") ?? WithSession(c.AssetSession, "ASSET_SAVE", s => Save(s, c.AssetJson)), "ASSET_SAVE");
+            // Any game's save can go into a copy of its disc image (outputPath *.iso): DiscSave runs the game's own save.
+            Func<CommandMessage, string> save = c => CaRoute(c, "ASSET_SAVE") ?? WithSession(c.AssetSession, "ASSET_SAVE", s => Save(s, c.AssetJson));
+            reg.Add(c => DiscSave(c, save) ?? save(c), "ASSET_SAVE");
             reg.Add(c => CaRoute(c, "ASSET_HISTORY") ?? WithSession(c.AssetSession, "ASSET_HISTORY", s => History(s)), "ASSET_HISTORY");
             RegisterPrefabs(reg);
             reg.Add(c => WithSession(c.AssetSession, "ASSET_MAP_ACTIONS", MapActions), "ASSET_MAP_ACTIONS");

@@ -113,6 +113,7 @@ export class AnimationEditorPageLogic {
         { label: 'Open package…', shortcut: 'Ctrl+O', action: () => this.pickPackage() },
         { separator: true, label: '' },
         { label: 'Save copy…', shortcut: 'Ctrl+S', action: () => void this.saveZdbCopy(), disabled: () => !this.dirtyCount() },
+        { label: 'Save to disc image…', action: () => void this.saveDisc(), disabled: () => !this.dirtyCount() },
         { label: 'Export memory-card pack…', action: () => void this.exportPack(), disabled: () => !!this.status()?.game || !this.dirtyCount() },
       ],
     },
@@ -561,17 +562,25 @@ export class AnimationEditorPageLogic {
     if (path) { await this.save({ mode: 'zdb', outputPath: path }); }
   }
 
+  // The edited files written into a copy of the disc image.
+  async saveDisc(): Promise<void> {
+    const s = this.status();
+    if (!s || !this.dirtyCount()) { return; }
+    const picked = await host.pickDiscCopy(s);
+    if (picked) { await this.save({ mode: 'zdb', ...picked }); }
+  }
+
   async exportPack(): Promise<void> {
     const picked = await host.pickSavePath('pack', 'MANIM');
     if (!picked.packName) { return; }
     await this.save({ mode: 'pack', packName: picked.packName, outputPath: picked.path ?? undefined });
   }
 
-  private async save(args: { mode: 'zdb' | 'pack'; outputPath?: string; packName?: string }): Promise<void> {
+  private async save(args: { mode: 'zdb' | 'pack'; outputPath?: string; packName?: string; sourceIso?: string }): Promise<void> {
     this.busy.set(true);
     try {
       const r = await this.client.save(args);
-      this.say(`Wrote ${r.written.join(', ')} (${r.leaves.join(', ')})`);
+      this.say(`Wrote ${r.written.join(', ')} (${r.leaves.join(', ')})${r.warnings?.length ? '. ' + r.warnings.join(' ') : ''}`);
     } catch (err) {
       this.say(`Save failed: ${errText(err)}`, true);
     } finally {

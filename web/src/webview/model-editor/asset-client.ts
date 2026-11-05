@@ -379,7 +379,9 @@ export class AssetClient {
 
   redo(): Promise<EditResult> { return this.call('ASSET_REDO'); }
 
-  save(args: { mode: 'zdb' | 'pack' | 'dff' | 'img'; outputPath?: string; packName?: string; folderCard?: string; archive?: string; model?: string }): Promise<{ written: string[]; leaves: string[]; revision?: number }> {
+  // outputPath *.iso: the save goes into a copy of the disc image (sourceIso, or the session's own .ISO).
+  save(args: { mode: 'zdb' | 'pack' | 'dff' | 'img'; outputPath?: string; packName?: string; folderCard?: string; archive?: string; model?: string; sourceIso?: string }):
+    Promise<{ written: string[]; leaves: string[]; revision?: number; patched?: Array<{ discPath: string; moved: boolean }>; warnings?: string[] }> {
     return this.withJson('ASSET_SAVE', args);
   }
 

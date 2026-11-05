@@ -368,13 +368,14 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
 
   // ------------------------------------------------------------------ save
 
-  const save = async (args: { mode: 'zdb' | 'pack'; outputPath?: string; packName?: string }) => {
+  const save = async (args: { mode: 'zdb' | 'pack'; outputPath?: string; packName?: string; sourceIso?: string }) => {
     if (!clientRef.current.session || busyRef.current || reloadingRef.current > 0) { return; }
     setBusyFlag(true);
     try {
       const r = await clientRef.current.save(args);
       savedRevisionRef.current = r.revision ?? statusRef.current?.revision ?? null;
-      say(`Wrote ${r.written.join(', ')} (${r.leaves.join(', ')})`);
+      const patched = r.patched ? `: ${r.patched.map(p => p.discPath + (p.moved ? ' (moved to the end)' : '')).join(', ')}` : '';
+      say(`Wrote ${r.written.join(', ')} (${r.leaves.join(', ')})${patched}${r.warnings?.length ? '. ' + r.warnings.join(' ') : ''}`);
     } catch (err) {
       say(`Save failed: ${errText(err)}`, true);
     } finally {
@@ -387,6 +388,14 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
     if (!s || !s.dirty.length) { return; }
     const path = await host.pickPackageCopy(s);
     if (path) { await save({ mode: 'zdb', outputPath: path }); }
+  };
+
+  // The edited files written into a copy of the disc image (any game).
+  const saveDisc = async () => {
+    const s = statusRef.current;
+    if (!s || !s.dirty.length) { return; }
+    const picked = await host.pickDiscCopy(s);
+    if (picked) { await save({ mode: 'zdb', ...picked }); }
   };
 
   const exportPack = async () => {
@@ -412,7 +421,7 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
     client: clientRef.current, instancesRef, pointsRef, statusRef,
     status, setStatus, sceneNs, counts, instances, points, shapes, models, setModels, busy, progress, loading, sceneReady,
     loadWarnings, connectionIssue, message, messageIsError, say,
-    reload, retryScene, edit, history, saveCopy, exportPack, openDialog,
+    reload, retryScene, edit, history, saveCopy, saveDisc, exportPack, openDialog,
     loadModel, texturePixels: pixelCacheRef.current, jump,
   };
 }

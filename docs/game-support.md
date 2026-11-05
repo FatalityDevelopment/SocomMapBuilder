@@ -69,6 +69,12 @@ Open the disc image (`Star Wars - Battlefront (USA).iso`) or a loose `.LVL` in t
 
 The terrain's blended texture layers, editing and conversion to SOCOM II are planned. The PS2 position quantisation, bone-space vertices and the terrain and world layouts follow research by the [openbf](https://github.com/sprucey149/openbf) project (MIT).
 
+## Saving to a disc image
+
+Every editor has **Save to disc image…** (the Asset Viewer: **Save changes to disc image…**). It runs the game's usual save, then writes a copy of the game's disc image with the saved files put in place: SOCOM II and SOCOM 1 packages, Combined Assault archives, GTA: San Andreas IMG archives (a model edit saves its whole IMG) and Battlefront levels. Pick the `.ISO` the package came from when it was opened from a drive or a folder; a session opened from an `.ISO` uses that image.
+
+A file that still fits its sectors is written in place. A file that grew moves to the end of the image and the disc's directory points to it, so the copy can be larger than the original; past 4.7 GB it no longer fits a single-layer DVD but still runs in an emulator. The copy needs the image's size free on the target drive. Games that look files up by name (through the ISO 9660 directory) find the moved file; a game that reads fixed sector numbers from its own table would not, and none of the supported games is known to.
+
 ## Not included
 
 This repository does not include game assets, or the CodeDesigner runtime source used to inject map items and launch new maps.

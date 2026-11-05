@@ -141,6 +141,7 @@ export class AssetViewerLogic {
       { label: 'Redo', action: () => void this.redo(), shortcut: 'Ctrl+Y', disabled: () => !this.editStatus()?.canRedo },
       { label: '', separator: true },
       { label: 'Save changes…', action: () => void this.saveEdits(), shortcut: 'Ctrl+S', disabled: () => !this.editStatus()?.dirty.length },
+      { label: 'Save changes to disc image…', action: () => void this.saveEdits(true), disabled: () => !this.editStatus()?.dirty.length },
       { label: 'Replace picture from image…', action: () => void this.replaceImage(), disabled: () => !this.canReplaceImage() },
       { label: 'Palette colours from image…', action: () => void this.paletteFromImage(), disabled: () => !this.canEditPalette() },
       // Packages with unsaved edits elsewhere: going there makes their edits the ones Undo / Save act on.
@@ -797,11 +798,22 @@ export class AssetViewerLogic {
     } catch (err) { this.say(errText(err), true); }
   }
 
-  /** Writes the changed files: a package to a .ZDB you choose (over itself keeps a .bak), loose files into a folder. */
-  async saveEdits(): Promise<void> {
+  /** Writes the changed files: a package to a .ZDB you choose (over itself keeps a .bak), loose files into a folder,
+   *  or (toDisc) all of them into a copy of the disc image they came from. */
+  async saveEdits(toDisc = false): Promise<void> {
     const session = this.editSession();
     const st = this.editStatus();
     if (!session || !st?.dirty.length) { return; }
+    if (toDisc) {
+      const picked = await host.pickDiscCopy(st);
+      if (!picked) { return; }
+      try {
+        const { client } = this.clientFor(session);
+        const r = await client.save({ mode: 'zdb', ...picked });
+        this.say(`Saved ${r.leaves.join(', ')} into ${r.written.join(', ')}${r.warnings?.length ? '. ' + r.warnings.join(' ') : ''}`);
+      } catch (err) { this.say(`Save: ${errText(err)}`, true); }
+      return;
+    }
     const folder = st.path.replace(/[\\/][^\\/]*$/, '');
     const target = st.isZdb
       ? await host.browse({ mode: 'save', title: `Save ${fileName(st.path)}`, filters: [{ label: 'Package', extensions: ['zdb', 'cdb'] }], start: folder, fileName: fileName(st.path), key: 'save', submitLabel: 'Save' })

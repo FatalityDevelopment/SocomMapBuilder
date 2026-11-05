@@ -42,17 +42,60 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Conversion
             RunDir = runDir;
         }
 
-        /// <summary>The first <c>X:/RUN</c> (or <paramref name="hint"/>) holding SOCOM II's MP52.ZDB and MOTION_P.ZAR.</summary>
+        /// <summary>The template files, from SOCOM II's RUN folder.</summary>
+        public static readonly string[] TemplateFiles = { "MP52.ZDB", "M53.ZDB", "MP61.ZDB", "MOTION_P.ZAR" };
+
+        /// <summary>
+        /// The first <c>X:/RUN</c> (or <paramref name="hint"/>) holding SOCOM II's MP52.ZDB and MOTION_P.ZAR. A SOCOM II
+        /// disc image works too (the hint, else an .ISO in a drive's root): its template files are copied once into a
+        /// cache folder, which is returned.
+        /// </summary>
         public static string? FindRunDir(string? hint = null)
         {
             var candidates = new List<string>();
-            if (!string.IsNullOrEmpty(hint)) { candidates.Add(hint); candidates.Add(Path.Combine(hint, "RUN")); }
+            if (!string.IsNullOrEmpty(hint) && !hint.EndsWith(".iso", StringComparison.OrdinalIgnoreCase)) { candidates.Add(hint); candidates.Add(Path.Combine(hint, "RUN")); }
+            var roots = new List<string>();
             foreach (var d in DriveInfo.GetDrives())
             {
-                try { if (d.IsReady) candidates.Add(Path.Combine(d.RootDirectory.FullName, "RUN")); }
+                try { if (d.IsReady) { candidates.Add(Path.Combine(d.RootDirectory.FullName, "RUN")); roots.Add(d.RootDirectory.FullName); } }
                 catch (IOException) { }
             }
-            return candidates.FirstOrDefault(c => File.Exists(Path.Combine(c, "MP52.ZDB")) && File.Exists(Path.Combine(c, "MOTION_P.ZAR")));
+            string? folder = candidates.FirstOrDefault(c => File.Exists(Path.Combine(c, "MP52.ZDB")) && File.Exists(Path.Combine(c, "MOTION_P.ZAR")));
+            if (folder != null) return folder;
+            if (!string.IsNullOrEmpty(hint) && hint.EndsWith(".iso", StringComparison.OrdinalIgnoreCase)) return RunFromIso(hint);
+            foreach (string root in roots)
+            {
+                IEnumerable<string> isos;
+                try { isos = Directory.EnumerateFiles(root, "*.iso").ToList(); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
+                foreach (string iso in isos)
+                    if (RunFromIso(iso) is { } run) return run;
+            }
+            return null;
+        }
+
+        /// <summary>A SOCOM II disc image's template files in a cache folder (copied on first use); null when the image
+        /// is not SOCOM II.</summary>
+        public static string? RunFromIso(string iso)
+        {
+            try
+            {
+                var files = Gta.Iso9660.Files(iso);
+                if (!files.ContainsKey("RUN/MP52.ZDB") || !files.ContainsKey("RUN/MOTION_P.ZAR")) return null;
+                var info = new FileInfo(iso);
+                string cache = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MapBuilder", "socom2-run",
+                    $"{Path.GetFileNameWithoutExtension(iso)}-{info.Length:x}");
+                Directory.CreateDirectory(cache);
+                foreach (string name in TemplateFiles)
+                {
+                    string target = Path.Combine(cache, name);
+                    if (File.Exists(target) || !files.TryGetValue("RUN/" + name, out var span)) continue;
+                    File.WriteAllBytes(target + ".tmp", span.Read());
+                    File.Move(target + ".tmp", target, true);
+                }
+                return cache;
+            }
+            catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or EndOfStreamException) { return null; }
         }
 
         private ZipperPackage Package(string zdb)

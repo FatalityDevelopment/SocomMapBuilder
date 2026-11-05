@@ -857,16 +857,20 @@ namespace MapBuilder.Server.Services
             AddSync("assets_save", "Save",
                 "Write a session's changed archives. mode=zdb writes the package to outputPath (default: over the source, keeping a one-time " +
                 ".bak); mode=pack writes a memory-card pack <NAME>.CDB (packName starts with 'm', at most 7 characters) to outputPath and, with " +
-                "folderCard (a PCSX2 folder memory card), installs it. Prefer a copy (outputPath) over the retail file, and save only when the " +
-                "user asks. Risk: writes disk.",
+                "folderCard (a PCSX2 folder memory card), installs it. For any game, an outputPath ending .iso writes a copy of the disc image " +
+                "with the saved files patched in (sourceIso: the image the package came from, unless the session is an .ISO; a file that grows " +
+                "moves to the end of the image). Prefer a copy (outputPath) over the retail file, and save only when the user asks. Risk: writes disk.",
                 false, Schema(new[] { "session" }, session, E("mode", "zdb (default), pack, GTA model copy (dff), or GTA archive copy (img).", "zdb", "pack", "dff", "img"), P("outputPath", "string", "Output file, or folder for a pack or CA location. GTA requires a separate DFF or IMG file."),
                     P("archive", "string", "GTA source archive from assets_list_models."), P("model", "string", "GTA model to save in dff mode."),
                     P("packName", "string", "pack: the name, e.g. mfrst."), P("folderCard", "string", "pack: optional PCSX2 folder memory card to install into."),
-                    P("archiveDir", "string", "pack from an unpacked folder: the files' folder in game, e.g. RUN\\MP\\M51 (default RUN\\MP\\<FOLDER>).")),
+                    P("archiveDir", "string", "pack from an unpacked folder: the files' folder in game, e.g. RUN\\MP\\M51 (default RUN\\MP\\<FOLDER>)."),
+                    P("sourceIso", "string", "outputPath *.iso: the disc image the package came from (default: the session's own .ISO)."),
+                    P("discPaths", "object", "outputPath *.iso: {fileName: disc path} for a file found in several places on the disc.")),
                 a => FromCommand(new CommandMessage
                 {
                     Command = "ASSET_SAVE", AssetSession = Session(a),
-                    AssetJson = JsonSerializer.Serialize(new { mode = Str(a, "mode") ?? "zdb", outputPath = Str(a, "outputPath"), archive = Str(a, "archive"), model = Str(a, "model"), packName = Str(a, "packName"), folderCard = Str(a, "folderCard"), archiveDir = Str(a, "archiveDir") }, Json),
+                    AssetJson = JsonSerializer.Serialize(new { mode = Str(a, "mode") ?? "zdb", outputPath = Str(a, "outputPath"), archive = Str(a, "archive"), model = Str(a, "model"), packName = Str(a, "packName"), folderCard = Str(a, "folderCard"), archiveDir = Str(a, "archiveDir"),
+                        sourceIso = Str(a, "sourceIso"), discPaths = a.TryGetProperty("discPaths", out var dp) && dp.ValueKind == JsonValueKind.Object ? dp.Clone() : (JsonElement?)null }, Json),
                 }, d => d.TryGetProperty("written", out var w) ? "wrote " + string.Join(", ", w.EnumerateArray().Select(x => Path.GetFileName(x.GetString()))) : null!));
 
             AddSync("mapbuilder_command", "Run command",

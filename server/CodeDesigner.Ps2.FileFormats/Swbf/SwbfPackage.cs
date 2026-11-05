@@ -247,38 +247,6 @@ namespace CodeDesigner.Ps2.FileFormats.Swbf
             File.Move(temp, path, true);
         }
 
-        /// <summary>A copy of the disc image with the edited levels written over their own bytes (an edit never changes
-        /// a level's size, so every file keeps its place).</summary>
-        public void WriteDisc(string path)
-        {
-            if (!IsDisc) throw new InvalidOperationException("Only a disc session saves a disc image");
-            if (Path.GetFullPath(path).Equals(SourcePath, StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("Save the disc to a new file, not over the original");
-            string temp = path + ".tmp";
-            var drive = new DriveInfo(Path.GetPathRoot(Path.GetFullPath(path))!);
-            long need = new FileInfo(SourcePath).Length;
-            if (drive.IsReady && drive.AvailableFreeSpace < need)
-                throw new IOException($"The disc copy needs {need / (1 << 20):N0} MB; {drive.Name} has {drive.AvailableFreeSpace / (1 << 20):N0} MB free. Save the edited levels to a folder instead.");
-            try
-            {
-                File.Copy(SourcePath, temp, true);
-                using (var f = new FileStream(temp, FileMode.Open, FileAccess.Write))
-                    foreach (int level in DirtyLevels())
-                    {
-                        var span = _levels[level].Span;
-                        var data = LevelBytes(level);
-                        if (data.Length != span.Length) throw new InvalidOperationException($"{_levels[level].Name} changed size");
-                        f.Position = span.Offset;
-                        f.Write(data);
-                    }
-                File.Move(temp, path, true);
-            }
-            catch
-            {
-                try { File.Delete(temp); } catch (IOException) { }
-                throw;
-            }
-        }
-
         public byte[] LevelBytes(int level)
         {
             lock (_edited)
