@@ -13,6 +13,7 @@ import { analyzeScene } from './viewport/mapAnalysis';
 import { ThumbnailRenderer, type ThumbPart } from './viewport/thumbnails';
 import { AssetBrowser, ASSET_DRAG_TYPE, type AssetDrag } from './components/AssetBrowser';
 import { LIGHTINGS, type Lighting, type Shading, type ViewPreset } from './webview/zipper-core/viewport-core';
+import { pathDetail, regionDetail } from './viewport/mapShapes';
 import { LAYERS, errText, layerOf, missionLabel, movable, pointKindCounts, problemTarget, type ModelGroup } from './mapModel';
 
 import { MenuBar, type Menu } from './components/MenuBar';
@@ -53,7 +54,7 @@ export function MapPage() {
     if (!keepCamera) { setFlySpeedState(Math.round(vp.flySpeed)); }
     syncSelection();
   }, () => { setPlaceModel(null); setPlacePrefab(null); setSelection([]); setSelectedPoint(null); thumbsRef.current?.clear(); });
-  const { client, instancesRef, statusRef, status, setStatus, sceneNs, counts, instances, points, models, setModels,
+  const { client, instancesRef, statusRef, status, setStatus, sceneNs, counts, instances, points, shapes, models, setModels,
     busy, progress, loading, loadWarnings, connectionIssue, message, messageIsError, say,
     retryScene, edit, history, saveCopy, exportPack, openDialog, loadModel, texturePixels, jump, sceneReady, reload } = mapSession;
   const ca = status?.game === 'SOCOM 3 / Combined Assault';
@@ -624,7 +625,20 @@ export function MapPage() {
     for (const inst of instances) { const l = layerOf(inst); out.set(l, (out.get(l) ?? 0) + 1); }
     return out;
   }, [instances]);
-  const layerCount = (layer: MapLayer) => layerCounts.get(layer) ?? 0;
+  const layerCount = (layer: MapLayer) => layer === 'paths' ? shapes.paths.length : layer === 'regions' ? shapes.regions.length : layerCounts.get(layer) ?? 0;
+  // Paths and regions are listed only on maps that have them (Battlefront).
+  const layers = useMemo(() => LAYERS.filter(l => (l.id !== 'paths' || shapes.paths.length > 0) && (l.id !== 'regions' || shapes.regions.length > 0)), [shapes]);
+  const shapeRows = useMemo(() => ({
+    paths: shapes.paths.map(p => ({ name: p.name, detail: pathDetail(p) })),
+    regions: shapes.regions.map(r => ({ name: r.name, detail: regionDetail(r) })),
+  }), [shapes]);
+  const pickShape = (layer: 'paths' | 'regions', name: string) => {
+    const vp = viewportRef.current;
+    if (!vp) { return; }
+    if (vp.isLayerHidden(layer)) { toggleLayer(layer); }
+    vp.frameShape(layer, name);
+    say(`${name}: ${layer === 'paths' ? pathDetail(shapes.paths.find(p => p.name === name)!) : regionDetail(shapes.regions.find(r => r.name === name)!)}`);
+  };
   // Read after the viewport builds the scene (it runs before the instances state lands).
   const skyInWorld = useMemo(() => viewportRef.current?.skyInWorld() ?? [], [instances]);
   const selectionSummary = useMemo(() => {
@@ -698,7 +712,7 @@ export function MapPage() {
         { label: 'Right', shortcut: SHORTCUTS.right.label, action: () => view('right') },
         { label: 'Orthographic', shortcut: SHORTCUTS.ortho.label, action: toggleOrtho, checked: () => ortho },
         { separator: true, label: '' },
-        ...LAYERS.map(l => ({ label: l.label, action: () => toggleLayer(l.id), checked: () => !hidden.layers.has(l.id) })),
+        ...layers.map(l => ({ label: l.label, action: () => toggleLayer(l.id), checked: () => !hidden.layers.has(l.id) })),
         { separator: true, label: '' },
         { label: 'Back faces', action: toggleBackfaces, checked: () => backfaces },
         { label: 'Action icons', action: toggleActionMarkers, checked: () => actionMarkersOn },
@@ -1034,7 +1048,9 @@ export function MapPage() {
           <Outliner
             query={query}
             setQuery={setQuery}
-            layers={LAYERS}
+            layers={layers}
+            shapeRows={shapeRows}
+            pickShape={pickShape}
             points={points}
             filteredPoints={filteredPoints}
             selectedPoint={selectedPoint}

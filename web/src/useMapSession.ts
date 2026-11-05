@@ -2,7 +2,7 @@
 // statusRef mirror the state for callbacks that outlive a render; savedRevisionRef marks the last open or save.
 
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react';
-import { AssetClient, type MapInstanceWire, type MapPointWire, type ModelSummary, type SessionStatus } from './webview/model-editor/asset-client';
+import { AssetClient, type MapInstanceWire, type MapPathWire, type MapPointWire, type MapRegionWire, type ModelSummary, type SessionStatus } from './webview/model-editor/asset-client';
 import { TextureCache } from './webview/model-editor/model-loader';
 import { loadMapModels } from './webview/zipper-core/map-models';
 import type { ModelTexturePixels } from './webview/zipper-core/texture-pixels';
@@ -39,6 +39,8 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [instances, setInstances] = useState<MapInstanceWire[]>([]);
   const [points, setPoints] = useState<MapPointWire[]>([]);
+  // Battlefront paths and regions (view only).
+  const [shapes, setShapes] = useState<{ paths: MapPathWire[]; regions: MapRegionWire[] }>({ paths: [], regions: [] });
   const [models, setModels] = useState<ModelSummary[]>([]);
   const [busy, setBusy] = useState(false);
   const [progress, setProgress] = useState('');
@@ -107,6 +109,9 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
     setInstances(scene.instances);
     setPoints(shownPoints);
     vp.setScene(scene.instances, meshCacheRef.current, pixelCacheRef.current, shownPoints, keepCamera);
+    const nextShapes = { paths: scene.paths ?? [], regions: scene.regions ?? [] };
+    vp.setShapes(nextShapes.paths, nextShapes.regions);
+    setShapes(nextShapes);
     onLoadedRef.current(vp, keepCamera);
     if (!keepCamera) {
       const kinds = Object.entries(scene.counts).map(([kind, count]) => `${count} ${kind}`).join(', ');
@@ -172,6 +177,8 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
       viewportRef.current?.setPlacementMesh(null);
       viewportRef.current?.clearSelection();
       viewportRef.current?.setScene([], new Map(), {}, [], true);
+      viewportRef.current?.setShapes([], []);
+      setShapes({ paths: [], regions: [] });
       onOpenedRef.current();
       setLoadWarnings([]);
       savedRevisionRef.current = s.revision;
@@ -400,7 +407,7 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
 
   return {
     client: clientRef.current, instancesRef, pointsRef, statusRef,
-    status, setStatus, sceneNs, counts, instances, points, models, setModels, busy, progress, loading, sceneReady,
+    status, setStatus, sceneNs, counts, instances, points, shapes, models, setModels, busy, progress, loading, sceneReady,
     loadWarnings, connectionIssue, message, messageIsError, say,
     reload, retryScene, edit, history, saveCopy, exportPack, openDialog,
     loadModel, texturePixels: pixelCacheRef.current, jump,

@@ -150,6 +150,54 @@ public sealed class SwbfTests : IDisposable
     }
 
     [Fact]
+    public void World_PropKeysAreFnv1aOfTheirNames() => Assert.Equal(0x447C6DB0u, SwbfWorld.Fnv1a("ControlZone"));
+
+    [Fact]
+    public void Paths_ReadNodesAndBoundaryKind()
+    {
+        var pnts = F32(1, 2, 3, 1, 0, 0, 0, 4, 5, 6, 1, 0, 0, 0);
+        var root = Ucfb.Root(Chunk("ucfb", Chunk("PATH",
+            Chunk("path", Chunk("NAME", Str("edge")), Chunk("INFO", U16(2, 2, 3)), Chunk("PNTS", pnts)))));
+        var path = Assert.Single(SwbfWorld.ParsePaths(root.Children.Single()));
+        Assert.Equal(("edge", 2), (path.Name, path.Kind));
+        Assert.Equal(new float[] { 1, 2, 3, 4, 5, 6 }, path.Positions);
+    }
+
+    /// <summary>Every command post names a spawn path and a capture region that exist, and its spawn path starts near it.</summary>
+    [Fact]
+    public void Retail_CommandPostsLinkTheirPathsAndRegions()
+    {
+        if (Disc() is not { } pkg) return;
+        var problems = new List<string>();
+        int posts = 0;
+        foreach (var w in pkg.Worlds.GroupBy(x => x.Archive).Select(g => g.First()))
+        {
+            var world = pkg.ReadWorld(w);
+            var paths = pkg.PathsOf(w.Archive).GroupBy(p => p.Name, StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+            var regions = world.Regions.Select(r => r.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var cp in world.Instances.Where(i => SwbfWorld.PropOf(i, "CaptureRegion") != null))
+            {
+                posts++;
+                string label = $"{w.Archive} {cp.Name}";
+                if (SwbfWorld.PropOf(cp, "SpawnPath") is { } sp)
+                {
+                    if (!paths.TryGetValue(sp, out var path)) problems.Add($"{label}: no path {sp}");
+                    else if (path.Positions.Length >= 3)
+                    {
+                        float dx = path.Positions[0] - cp.Matrix[12], dz = path.Positions[2] - cp.Matrix[14];
+                        if (MathF.Sqrt(dx * dx + dz * dz) > 80) problems.Add($"{label}: {sp} starts {MathF.Sqrt(dx * dx + dz * dz):F0} m away");
+                    }
+                }
+                if (!regions.Contains(SwbfWorld.PropOf(cp, "CaptureRegion")!)) problems.Add($"{label}: no region {SwbfWorld.PropOf(cp, "CaptureRegion")}");
+            }
+        }
+        _out.WriteLine($"{posts} command posts; {problems.Count} problems");
+        foreach (var p in problems.Take(30)) _out.WriteLine(p);
+        Assert.True(posts > 50);
+        Assert.True(problems.Count <= posts / 10, "Command posts should link their spawn paths and capture regions");
+    }
+
+    [Fact]
     public void Retail_MapsResolveTerrainAndInstances()
     {
         if (Disc() is not { } pkg) return;

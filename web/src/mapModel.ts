@@ -9,6 +9,9 @@ export const LAYERS: Array<{ id: MapLayer; label: string }> = [
   { id: 'clutter', label: 'Clutter' },
   { id: 'sky', label: 'Sky' },
   { id: 'points', label: 'Points' },
+  // Star Wars: Battlefront only (listed when the map has them).
+  { id: 'paths', label: 'Paths' },
+  { id: 'regions', label: 'Regions' },
 ];
 
 export interface ModelGroup { source: string; model: string; indices: number[] }
@@ -87,7 +90,8 @@ export function fileName(p: string): string { return p.split(/[\\/]/).pop() ?? p
 export function errText(err: unknown): string { return err instanceof Error ? err.message : String(err); }
 
 export function pointColor(kind: string): number {
-  return kind === 'start' ? 0x46a758 : kind === 'waypoint' ? 0x3e8bff : kind === 'marker' ? 0xe0a030 : 0xb4b4b4;
+  return kind === 'start' ? 0x46a758 : kind === 'waypoint' ? 0x3e8bff : kind === 'marker' ? 0xe0a030
+    : kind === 'command post' ? 0xffd23e : kind === 'vehicle spawn' ? 0xd070ff : 0xb4b4b4;
 }
 
 const MISSION_KINDS: Record<string, string> = { SP: 'campaign', MP: 'online', IA: 'instant action', TR: 'training' };

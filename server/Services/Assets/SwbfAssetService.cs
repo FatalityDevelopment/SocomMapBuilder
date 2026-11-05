@@ -158,7 +158,84 @@ namespace MapBuilder.Server.Services.Assets
                 var world = s.Package.WorldsIn(pick).FirstOrDefault() ?? throw new KeyNotFoundException($"No map in {pick}");
                 if (!world.Archive.Equals(s.Map, StringComparison.OrdinalIgnoreCase)) { s.Map = world.Archive; s.Revision++; }
             }
-            return new { mission = s.Map, points = Array.Empty<object>(), teamSpawns = Array.Empty<object>() };
+            return new { mission = s.Map, points = s.Map == null ? new List<object>() : MapPoints(s), teamSpawns = Array.Empty<object>() };
+        }
+
+        private static bool IsCommandPost(SwbfWorld.Record r) =>
+            r.Type.Contains("controlzone", StringComparison.OrdinalIgnoreCase) || r.Type.Contains("commandpost", StringComparison.OrdinalIgnoreCase)
+            || SwbfWorld.PropOf(r, "CaptureRegion") != null;
+
+        private static bool IsVehicleSpawn(SwbfWorld.Record r) => r.Type.Contains("vehicle_spawn", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// The map's points (view only): its command posts (team 1 or 2 at the start, 0 neutral; Label names them) and
+        /// vehicle spawns, named by the command post they belong to. A point's y is its own height.
+        /// </summary>
+        private static List<object> MapPoints(Session s)
+        {
+            var list = new List<object>();
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            string Unique(string name) { string n = name; for (int k = 2; !names.Add(n); k++) n = $"{name} {k}"; return n; }
+            object Point(string name, string kind, int team, float[] m) => new
+            {
+                name, team, kind, x = m[12], y = (float?)m[13], z = m[14], cellX = 0, cellZ = 0, island = (string?)null, editable = false, canMove = false,
+            };
+            foreach (var w in s.Package.WorldsIn(s.Map!))
+            {
+                var data = s.Package.ReadWorld(w);
+                foreach (var r in data.Instances.Where(IsCommandPost))
+                {
+                    string label = SwbfWorld.PropOf(r, "Label") is { Length: > 0 } l ? l : r.Name;
+                    list.Add(Point(Unique(label.Length > 0 ? label : "command post"), "command post", int.TryParse(SwbfWorld.PropOf(r, "Team"), out int t) ? t : 0, r.Matrix));
+                }
+                foreach (var r in data.Instances.Where(IsVehicleSpawn))
+                {
+                    // The spawn's command post (its ControlZone) names it.
+                    string? post = SwbfWorld.PropOf(r, "ControlZone");
+                    list.Add(Point(Unique($"vehicles {post ?? r.Name}".Trim()), "vehicle spawn", int.TryParse(SwbfWorld.PropOf(r, "Team"), out int t) ? t : 0, r.Matrix));
+                }
+            }
+            return list;
+        }
+
+        /// <summary>The map's paths: a command post's SpawnPath is "spawn", INFO kind 2 is the map's boundary (a closed
+        /// loop), the rest are AI paths.</summary>
+        private static List<object> MapPaths(Session s, List<SwbfWorld.Record> posts)
+        {
+            var spawnOf = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var cp in posts)
+                if (SwbfWorld.PropOf(cp, "SpawnPath") is { Length: > 0 } sp) spawnOf.TryAdd(sp, SwbfWorld.PropOf(cp, "Label") ?? cp.Name);
+            var list = new List<object>();
+            foreach (var p in s.Package.PathsOf(s.Map!))
+            {
+                string kind = p.Kind == 2 ? "boundary" : spawnOf.ContainsKey(p.Name) ? "spawn" : "path";
+                var nodes = new List<float[]>();
+                for (int i = 0; i + 2 < p.Positions.Length; i += 3) nodes.Add(new[] { p.Positions[i], p.Positions[i + 1], p.Positions[i + 2] });
+                list.Add(new { name = p.Name, kind, closed = kind == "boundary", nodes, commandPost = spawnOf.GetValueOrDefault(p.Name) });
+            }
+            return list;
+        }
+
+        /// <summary>The map's regions: a command post's capture and control regions (by its CaptureRegion / ControlRegion
+        /// names) and the rest. Sound-stream regions (ambient sound spheres, some hundreds of metres across) are left out.</summary>
+        private static List<object> MapRegions(List<SwbfWorld.Record> regions, List<SwbfWorld.Record> posts)
+        {
+            var role = new Dictionary<string, (string Role, string Post)>(StringComparer.OrdinalIgnoreCase);
+            foreach (var cp in posts)
+            {
+                string label = SwbfWorld.PropOf(cp, "Label") ?? cp.Name;
+                if (SwbfWorld.PropOf(cp, "CaptureRegion") is { Length: > 0 } cap) role.TryAdd(cap, ("capture", label));
+                if (SwbfWorld.PropOf(cp, "ControlRegion") is { Length: > 0 } con) role.TryAdd(con, ("control", label));
+            }
+            var list = new List<object>();
+            foreach (var r in regions)
+            {
+                if (r.Name.StartsWith("soundstream", StringComparison.OrdinalIgnoreCase) || r.Name.StartsWith("soundspace", StringComparison.OrdinalIgnoreCase)) continue;
+                var (kind, post) = role.TryGetValue(r.Name, out var hit) ? hit : (r.Name.Contains("capture", StringComparison.OrdinalIgnoreCase) ? "capture"
+                    : r.Name.Contains("control", StringComparison.OrdinalIgnoreCase) ? "control" : "region", (string?)null);
+                list.Add(new { name = r.Name, shape = r.Type.ToLowerInvariant(), role = kind, matrix = r.Matrix, size = r.Size ?? new[] { 1f, 1f, 1f }, commandPost = post });
+            }
+            return list;
         }
 
         private static readonly float[] Identity = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
@@ -181,12 +258,16 @@ namespace MapBuilder.Server.Services.Assets
             };
             var placed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             int notDrawn = 0, props = 0, terrains = 0;
+            var posts = new List<SwbfWorld.Record>();
+            var regions = new List<SwbfWorld.Record>();
             float mapHalf = 0;
             string? worldName = null;
             foreach (var w in pkg.WorldsIn(s.Map))
             {
                 worldName ??= w.Name;
                 var data = pkg.ReadWorld(w);
+                posts.AddRange(data.Instances.Where(IsCommandPost));
+                regions.AddRange(data.Regions);
                 if (data.Terrain != null && pkg.Terrain(data.Terrain, w.Archive) is { } t && placed.Add(SwbfPackage.TerrainPrefix + t.Name))
                 {
                     terrains++;
@@ -222,6 +303,8 @@ namespace MapBuilder.Server.Services.Assets
                 sceneNamespace = worldName ?? s.Map,
                 counts = new Dictionary<string, int> { ["terrain"] = terrains, ["prop"] = props, ["sky"] = skies, ["not drawn"] = notDrawn },
                 returned = instances.Count, instances, game = Game,
+                paths = MapPaths(s, posts),
+                regions = MapRegions(regions, posts),
             };
         }
 

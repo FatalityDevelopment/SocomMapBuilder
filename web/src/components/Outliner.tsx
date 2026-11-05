@@ -27,6 +27,9 @@ interface OutlinerProps {
   pickGroup: (g: ModelGroup, shift: boolean) => void;
   pickInstance: (i: number, shift: boolean) => void;
   pickPoint: (name: string) => void;
+  // Battlefront paths and regions: one row each, a click frames it.
+  shapeRows?: { paths: Array<{ name: string; detail: string }>; regions: Array<{ name: string; detail: string }> };
+  pickShape?: (layer: 'paths' | 'regions', name: string) => void;
 }
 
 const PAGE_ROWS = 300;
@@ -61,7 +64,7 @@ export function Outliner(props: OutlinerProps) {
               <button className="me-eye" onClick={() => props.toggleLayer(layer.id)} title={props.isLayerHidden(layer.id) ? 'Show' : 'Hide'}>
                 {props.isLayerHidden(layer.id) ? '◌' : '●'}
               </button>
-              {layer.id !== 'world' && layer.id !== 'sky' && (
+              {layer.id !== 'world' && layer.id !== 'sky' && layer.id !== 'paths' && layer.id !== 'regions' && (
                 <button className={`me-eye${props.isLayerLocked(layer.id) ? ' on' : ''}`} onClick={() => props.toggleLock(layer.id)}
                   title={props.isLayerLocked(layer.id) ? 'Unlock (clicks and box drags select it again)' : 'Lock (clicks and box drags skip it)'}>
                   {props.isLayerLocked(layer.id) ? '🔒' : '🔓'}
@@ -77,7 +80,15 @@ export function Outliner(props: OutlinerProps) {
                 <span className="lm-muted">in world model</span>
               </div>
             ))}
-            {isOpen('L:' + layer.id) && (layer.id === 'points' ? (
+            {isOpen('L:' + layer.id) && (layer.id === 'paths' || layer.id === 'regions') && (props.shapeRows?.[layer.id] ?? [])
+              .filter(r => !query || r.name.toLowerCase().includes(query.toLowerCase()))
+              .map(r => (
+                <div key={r.name} className="me-tree-row mp-model">
+                  <span onClick={() => props.pickShape?.(layer.id as 'paths' | 'regions', r.name)}>{r.name}</span>
+                  <span className="lm-muted">{r.detail}</span>
+                </div>
+              ))}
+            {isOpen('L:' + layer.id) && layer.id !== 'paths' && layer.id !== 'regions' && (layer.id === 'points' ? (
               filteredPoints.map(p => (
                 <div key={p.name} className={`me-tree-row mp-model${selectedPoint === p.name ? ' sel' : ''}`}>
                   <span onClick={() => props.pickPoint(p.name)}>{p.name}</span>

@@ -154,7 +154,16 @@ export interface MapSceneResult {
   counts: Record<string, number>;
   returned: number;
   instances: MapInstanceWire[];
+  // Star Wars: Battlefront: AI and spawn paths (world positions) and regions (a shape placed by a matrix).
+  paths?: MapPathWire[];
+  regions?: MapRegionWire[];
 }
+
+/** kind: spawn (a command post's spawn path), boundary (the map's edge, a closed loop) or path. */
+export interface MapPathWire { name: string; kind: string; closed: boolean; nodes: number[][]; commandPost?: string | null }
+/** shape: box (size = half extents), sphere (size[0] = radius) or cylinder (radii size[0] / size[2], half height
+ *  size[1]); role: capture, control, sound or region; matrix as the instances' (translation in 12..14). */
+export interface MapRegionWire { name: string; shape: string; role: string; matrix: number[]; size: number[]; commandPost?: string | null }
 
 // y: the floor of the point's cell in the AI grid (null where the grid has no cell).
 export interface MapPointWire {
