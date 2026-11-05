@@ -23,8 +23,10 @@ import { MapActionsPanel } from './components/MapActionsPanel';
 import { MissionPanel } from './components/MissionPanel';
 import { actionMarkers } from './viewport/actionMarkers';
 import { planFigures, weaponForValve } from './viewport/actorFigures';
+import { Minimap } from './components/Minimap';
+import { actionBlipsFrom, minimapBlips, squareAround, type ImagePlacement } from './viewport/minimap';
 import type { PoseClip } from './webview/zipper-core/skinning';
-import type { MapActions, MapTables } from './webview/model-editor/asset-client';
+import type { MapActions, MapHud, MapTables } from './webview/model-editor/asset-client';
 import { ViewportView } from './components/ViewportView';
 import { NumField } from './components/NumField';
 import { activePage, host, openRequest } from './shared';
@@ -135,6 +137,11 @@ export function MapPage() {
   const [actionMarkersOn, setActionMarkersOn] = useState(initialPreferences.actionMarkers);
   const [objectiveMarkersOn, setObjectiveMarkersOn] = useState(initialPreferences.objectiveMarkers);
   const [figuresOn, setFiguresOn] = useState(initialPreferences.actorFigures);
+  // The HUD minimap: the game's radar art and tactical map (ASSET_MAP_HUD), and a top-down render for maps without one.
+  const [minimapOn, setMinimapOn] = useState(initialPreferences.minimap);
+  const [minimapRange, setMinimapRange] = useState(initialPreferences.minimapRange);
+  const [hud, setHud] = useState<MapHud | null>(null);
+  const [topDown, setTopDown] = useState<{ url: string; placement: ImagePlacement } | null>(null);
   // Stand-in weapons for non-SEAL character types (view only; this viewer's browser): chartype -> "archive:name".
   const [actorWeapons, setActorWeapons] = useState<Record<string, string>>(() => {
     try { return JSON.parse(localStorage.getItem('mapbuilder.actorWeapons') ?? '{}') as Record<string, string>; } catch { return {}; }
@@ -362,6 +369,34 @@ export function MapPage() {
     setObjectiveMarkersOn(next);
     if (viewportRef.current) { viewportRef.current.showObjectiveMarkers = next; }
   };
+  const toggleMinimap = () => setMinimapOn(on => !on);
+  useEffect(() => {
+    let live = true;
+    setHud(null);
+    if (!minimapOn || !status?.session) { return; }
+    client.mapHud().then(h => { if (live) { setHud(h); } }).catch(() => { if (live) { setHud(null); } });
+    return () => { live = false; };
+  }, [minimapOn, status?.session]);
+  // The top-down picture: redrawn a moment after the scene settles (edits, layers), while the minimap is open.
+  useEffect(() => {
+    setTopDown(null);
+    if (!minimapOn || !sceneReady) { return; }
+    const timer = window.setTimeout(() => {
+      const vp = viewportRef.current;
+      const box = vp?.sceneExtent();
+      if (!vp || !box) { return; }
+      const placement = squareAround(box.minX, box.maxX, box.minZ, box.maxZ);
+      const url = vp.renderTopDown(placement, 1024);
+      if (url) { setTopDown({ url, placement }); }
+    }, 1200);
+    return () => window.clearTimeout(timer);
+  }, [minimapOn, sceneReady, instances, hidden, shading, lighting]);
+  const minimapView = useCallback(() => viewportRef.current?.viewHeading() ?? null, []);
+  const blips = useMemo(() => !minimapOn ? [] : minimapBlips({
+    points, actors: tables?.actors, objectives: tables?.objectives, texts: tables?.texts,
+    actions: actionData ? actionBlipsFrom(actionMarkers(actionData, instances), instances) : [],
+  }), [minimapOn, points, tables, actionData, instances]);
+
   // Select a placed node's prop (the node itself or the first placement drawn under it) and frame it.
   const focusNode = (geoIndex: number) => {
     const list = instancesRef.current;
@@ -623,6 +658,7 @@ export function MapPage() {
         { label: 'Action icons', action: toggleActionMarkers, checked: () => actionMarkersOn },
         { label: 'Objective flags', action: toggleObjectiveMarkers, checked: () => objectiveMarkersOn },
         { label: 'Characters at start points', action: toggleFigures, checked: () => figuresOn },
+        { label: 'Minimap', shortcut: SHORTCUTS.minimap.label, action: toggleMinimap, checked: () => minimapOn },
         { separator: true, label: '' },
         { label: 'Walk mode', shortcut: SHORTCUTS.walk.label, action: toggleWalk, checked: () => walking, disabled: () => !status },
         { label: 'Measure', shortcut: SHORTCUTS.toolMeasure.label, action: () => setTool('measure'), disabled: () => !status },
@@ -682,6 +718,7 @@ export function MapPage() {
     isolate: () => { if (!selection.length) { return false; } isolateSelection(); },
     unhide: unhideAll,
     walk: toggleWalk,
+    minimap: toggleMinimap,
     shading: cycleShading,
     escape: () => {
       setOpenMenu(null);
@@ -775,10 +812,11 @@ export function MapPage() {
     writeEditorPreferences({ shading, lighting, grid, snap, snapMove, snapRotate, snapScale, gizmoLocal, ortho, backfaces,
       placeYaw, placeScale, randomYaw, randomScale, minPlaceScale, maxPlaceScale, alignSurface,
       snapTarget, pivotMode, placeAs, brushRadius, brushSpacing, brushDensity, brushSlope, brushErase,
-      actionMarkers: actionMarkersOn, objectiveMarkers: objectiveMarkersOn, actorFigures: figuresOn });
+      actionMarkers: actionMarkersOn, objectiveMarkers: objectiveMarkersOn, actorFigures: figuresOn,
+      minimap: minimapOn, minimapRange });
   }, [shading, lighting, grid, snap, snapMove, snapRotate, snapScale, gizmoLocal, ortho, backfaces,
     placeYaw, placeScale, randomYaw, randomScale, minPlaceScale, maxPlaceScale, alignSurface,
-    snapTarget, pivotMode, placeAs, brushRadius, brushSpacing, brushDensity, brushSlope, brushErase, actionMarkersOn, objectiveMarkersOn, figuresOn]);
+    snapTarget, pivotMode, placeAs, brushRadius, brushSpacing, brushDensity, brushSlope, brushErase, actionMarkersOn, objectiveMarkersOn, figuresOn, minimapOn, minimapRange]);
   // ------------------------------------------------------------------ AI (MCP)
 
   // ui_view on this page: shading, lighting, camera preset, framing.
@@ -935,6 +973,8 @@ export function MapPage() {
             onRetry={() => void retryScene()}
             stats={renderSettings.showStats ? viewportStats : null}
           />
+          {minimapOn && status && <Minimap hud={hud} blips={blips} view={minimapView} topDown={topDown} range={minimapRange} onRange={setMinimapRange}
+            onJump={(x, z) => viewportRef.current?.jumpTo(x, z)} onClose={() => setMinimapOn(false)} />}
         </section>
 
         <aside className="me-side">

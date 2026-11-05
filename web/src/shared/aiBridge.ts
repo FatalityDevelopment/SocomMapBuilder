@@ -173,7 +173,18 @@ async function screenshot(maxSize: number): Promise<{ png: string; page: PageId;
   const c = document.createElement('canvas');
   c.width = Math.max(1, Math.round(img.width * k));
   c.height = Math.max(1, Math.round(img.height * k));
-  c.getContext('2d')!.drawImage(img, 0, 0, c.width, c.height);
+  const g = c.getContext('2d')!;
+  g.drawImage(img, 0, 0, c.width, c.height);
+  // Canvas overlays drawn over the 3D view (the Map Builder's minimap), where they sit on screen.
+  const view = [...document.querySelectorAll<HTMLCanvasElement>('.me-viewport canvas')].find(v => v.offsetParent !== null);
+  if (view) {
+    const at = view.getBoundingClientRect();
+    const sx = c.width / Math.max(1, at.width), sy = c.height / Math.max(1, at.height);
+    for (const overlay of document.querySelectorAll<HTMLCanvasElement>('.mp-minimap canvas')) {
+      const r = overlay.getBoundingClientRect();
+      if (overlay.offsetParent !== null && r.width > 0) { g.drawImage(overlay, (r.left - at.left) * sx, (r.top - at.top) * sy, r.width * sx, r.height * sy); }
+    }
+  }
   return { png: c.toDataURL('image/png').replace(/^data:image\/png;base64,/, ''), page: activePage(), width: c.width, height: c.height };
 }
 

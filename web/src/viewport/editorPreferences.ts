@@ -34,6 +34,9 @@ export interface EditorPreferences {
   objectiveMarkers: boolean;
   // Actors drawn as characters at their start points (View menu).
   actorFigures: boolean;
+  // The HUD minimap in the viewport's corner (View menu, N) and its range: world units from centre to rim.
+  minimap: boolean;
+  minimapRange: number;
 }
 export const EDITOR_PREFERENCES_KEY = 'socom.map.editorPreferences.v1';
 export const DEFAULT_EDITOR_PREFERENCES: EditorPreferences = {
@@ -42,7 +45,7 @@ export const DEFAULT_EDITOR_PREFERENCES: EditorPreferences = {
   placeYaw: 0, placeScale: 1, randomYaw: false, randomScale: false, minPlaceScale: 0.8, maxPlaceScale: 1.2, alignSurface: false,
   snapTarget: 'increment', pivotMode: 'center', placeAs: 'clutter',
   brushRadius: 20, brushSpacing: 5, brushDensity: 8, brushSlope: 35, brushErase: false,
-  actionMarkers: true, objectiveMarkers: true, actorFigures: true,
+  actionMarkers: true, objectiveMarkers: true, actorFigures: true, minimap: false, minimapRange: 1200,
 };
 export function normalizeEditorPreferences(value: unknown): EditorPreferences {
   const input = value && typeof value === 'object' ? value as Record<string, unknown> : {};

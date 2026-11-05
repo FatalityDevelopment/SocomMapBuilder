@@ -29,4 +29,11 @@ describe('editor preferences', () => {
     expect(readEditorPreferences({ getItem: () => { throw new Error('denied'); } })).toEqual(DEFAULT_EDITOR_PREFERENCES);
     expect(() => writeEditorPreferences(preferences, { setItem: () => { throw new Error('full'); } })).not.toThrow();
   });
+  it('keeps the minimap switch and its range', () => {
+    expect(DEFAULT_EDITOR_PREFERENCES.minimap).toBe(false);
+    const p = normalizeEditorPreferences({ minimap: true, minimapRange: 2700 });
+    expect(p.minimap).toBe(true);
+    expect(p.minimapRange).toBe(2700);
+    expect(normalizeEditorPreferences({ minimap: 'yes', minimapRange: -5 })).toMatchObject({ minimap: false, minimapRange: 1200 });
+  });
 });
