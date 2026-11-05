@@ -220,6 +220,8 @@ internal sealed partial class ZipperAssetService
         var actors = new List<object>();
         Dictionary<string, string>? models = null;
         string? loadoutSource = null;
+        var characterTypes = CharacterTypesBeside(s);
+        var weaponDefs = characterTypes == null ? null : WeaponDefsOf(s);
         if (ReaderRecord(s, "vehicles.rdr") is { } vehicles)
         {
             var (loadouts, source) = LoadoutsOf(s);
@@ -250,7 +252,9 @@ internal sealed partial class ZipperAssetService
                 {
                     row = i, path,
                     name = Text1(doc, row, "name"), display = Text1(doc, row, "display"), character,
-                    model = CharacterModel(models, character, CharTypes.Value),
+                    model = CharacterModel(models, character, CharTypes.Value)
+                        ?? CharacterModel(models, characterTypes?.Resolve(character)?.Model, CharTypes.Value),
+                    chartype = ActorCharacter(characterTypes, weaponDefs, character),
                     // The chartype's default weapons (character.rdr), null when no chartype table was found or the type is not in it.
                     weapons = weapons?.Select(w => new { name = w.Name, model = w.Model }).ToArray(),
                     weapon = held,
@@ -344,6 +348,8 @@ internal sealed partial class ZipperAssetService
         {
             revision = s.Revision, hasReader = s.Package.Entry(MissionReader) != null,
             objectives, actors, loadoutSource, mission, world, extents, cams, valves = valveList,
+            hasCharacterTypes = characterTypes != null,
+            textureScroll = MapTextureScroll(s), mapImages = MapScreenImages(s),
             texts = used.ToDictionary(k => k, k => texts[k]),
         };
     }
