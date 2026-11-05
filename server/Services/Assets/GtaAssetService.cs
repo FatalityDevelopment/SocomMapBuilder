@@ -21,6 +21,8 @@ namespace MapBuilder.Server.Services.Assets
             public int Revision { get; set; }
             /// <summary>The Map Builder area drawn (a <see cref="GtaPackage.MapArea"/> id); null until the map is first read.</summary>
             public string? Area { get; set; }
+            /// <summary>The low-detail overview areas (whole cities, the countryside, the map), built once.</summary>
+            public IReadOnlyList<GtaPackage.MapArea>? Overviews { get; set; }
             public Dictionary<GtaPackage.Model, byte[]> Originals { get; } = new();
             public HashSet<GtaPackage.Model> Dirty { get; } = new();
             public Stack<Step> Undo { get; } = new();
@@ -142,6 +144,11 @@ namespace MapBuilder.Server.Services.Assets
 
         private static object Mesh(Session s, string? name, string? archive, bool arrays)
         {
+            if (WaterArchive.Equals(archive, StringComparison.OrdinalIgnoreCase) && name != null && name.StartsWith(WaterPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                var water = WaterMesh(s, name[WaterPrefix.Length..]) ?? throw new KeyNotFoundException($"No water for {name}");
+                return AssetJson.Mesh(water, WaterArchive, name, Game, arrays, null, s.Revision);
+            }
             var m = Find(s, name, archive);
             object? locators = m.Kind == "weapon" ? new[] { new { name = "mount", matrix = WeaponMount } } : null;
             return AssetJson.Mesh(s.Package.BuildMesh(m), m.Archive, m.Name, Game, arrays, locators, s.Revision);

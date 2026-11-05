@@ -147,6 +147,9 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
                         "objs" or "tobj" or "anim" => "prop", _ => null,
                     };
                     if (kind != null) definitions.TryAdd(cols[1], (kind, cols[2], id));
+                    // A timed object (tobj) ends with the hours it shows from and to (night-lit windows: 21, 6).
+                    if (section == "tobj" && cols.Length >= 6 && int.TryParse(cols[^2], out int on) && int.TryParse(cols[^1], out int off))
+                        _timedHours.TryAdd(cols[1], (on, off));
                     if (section == "cars" && cols.Length > 13) RegisterWheelSizes(cols);
                 }
 
