@@ -9,7 +9,7 @@ SOCOM U.S. Navy SEALs II is the primary target. Combined Assault also supports s
 | **SOCOM 3** | Compatible asset archives | Map edits verified on the Combined Assault disc only | Compatible models to SOCOM II |
 | **Grand Theft Auto: San Andreas (PS2)** | Mounted disc, ISO, IMG or DFF; the map by area | Frame positions, geometry transforms and material properties; move and turn map placements. Save DFF, IMG or IPL copies, or a patched `.ISO`. | Models and selected character clips to SOCOM II |
 | **Star Wars: Battlefront** | `.ISO` or a `.LVL`: models, textures and maps | Move and turn props, command posts and vehicle spawns. Save `.LVL` copies or a patched `.ISO`. | Soldiers, weapons, vehicles and props to SOCOM II |
-| **SOCOM: Fireteam Bravo 2 (PSP)** | A map folder or any ZDB in it: the world, props, characters (bind pose), weapons and textures | Read-only | — |
+| **SOCOM: Fireteam Bravo 2 (PSP)** | A map folder or any ZDB in it: the world, props, characters (bind pose), weapons, textures, missions and points | Move placed props, vehicles and trees; move and rename points; actor starts. Save ZDB copies or a patched disc image | Characters (skinned), weapons and placed props to SOCOM II |
 | **SOCOM: Fireteam Bravo / Fireteam Bravo 3** | Not tested | — | — |
 
 ## SOCOM II
@@ -85,7 +85,7 @@ The terrain's blended texture layers, map edits that change sizes (adding or del
 
 ## SOCOM: Fireteam Bravo 2 (PSP)
 
-Open a map folder from the UMD, such as `K:\PSP_GAME\USRDIR\RUN\FORT_MP`, or any `.ZDB` in it. The Map Builder draws the island's terrain, buildings and placed props, textured, with the sky in the **Sky** layer. Pick a game mode or campaign mission from **Mission** to show its named points (starts, bomb and sabotage places, doors, extraction) and, in the Mission tab, its actors with their character model, loadout and starts; actors stand at their starts holding their first gun when its model is known. The Model Editor lists the island's props, the characters in their bind pose and the weapons from `RUN\GLOBAL.ZDB`. Everything is read-only; mission text, objectives, animations, editing and conversion are not done yet. [File layouts](formats/psp.md)
+Open a map folder from the UMD, such as `K:\PSP_GAME\USRDIR\RUN\FORT_MP`, or any `.ZDB` in it. The Map Builder draws the island's terrain, buildings and placed props, textured, with the sky in the **Sky** layer. Pick a game mode or campaign mission from **Mission** to show its named points (starts, bomb and sabotage places, doors, extraction) and, in the Mission tab, its actors with their character model, loadout and starts; actors stand at their starts holding their first gun when its model is known. The Model Editor lists the island's props, the characters (skinned, in their bind pose), the props the island places (trees, rocks, vehicles) and the weapons from `RUN\GLOBAL.ZDB`. Move placed props, vehicles and trees with the gizmo or the Item fields, and move or rename points; **File › Save copy** writes the edited ZDBs into a folder at their places under `RUN` (`FORT_MP\ISLAND_F.ZDB`). The terrain and buildings are not movable. **Export to SOCOM II** in the Model Editor turns a character (skinned, retargeted onto SOCOM II's), a weapon (with its muzzle and shell points) or a placed prop such as a tree or a truck into a memory-card pack. Mission text, objectives and animations are not done yet, and nothing edited or converted has been tried in game. [File layouts](formats/psp.md)
 
 ## Saving to a disc image
 

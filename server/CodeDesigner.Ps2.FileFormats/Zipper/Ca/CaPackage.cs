@@ -98,6 +98,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
             void Add(string file)
             {
                 using var zdb = ZdbArchive.FromBytes(File.ReadAllBytes(file));
+                int fileIndex = pkg._pspFiles.Count;
+                pkg._pspFiles.Add(file);
                 for (int i = 0; i < zdb.EntryCount; i++)
                 {
                     var e = zdb.GetEntry(i);
@@ -105,6 +107,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
                     // The copies differ only in a header word, so match tag, name and size.
                     string key = $"{e.Tag}|{e.FullPath}|{e.Data.Length}";
                     if (e.Tag is "ASST" or "ISLE" && !seen.Add(key)) continue;
+                    pkg._entryLocations.Add(pkg.Resources.Count, (fileIndex, i));
                     pkg.Resources.Add(new Resource(Path.GetFileName(file), e.FullPath, e.Tag, e.ResourceVersion, e.Data));
                 }
             }
@@ -197,6 +200,27 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
             if (replacements.Keys.Any(i => Resources[i].Tag == "ISLE")) IndexLibraries();
         }
 
+        // Fireteam Bravo 2: the ZDB files the package was read from (an entry location's Outer indexes this list).
+        private readonly List<string> _pspFiles = new();
+
+        /// <summary>
+        /// Fireteam Bravo 2: a copy of every ZDB with an edited resource, keyed by its path under <c>RUN</c>
+        /// (<c>FORT_MP\ISLAND_F.ZDB</c>). Each is re-read from disk and only its edited entries are replaced; same-size
+        /// edits keep the file's layout byte for byte apart from them and their checksums.
+        /// </summary>
+        public Dictionary<string, byte[]> BuildPspCopies(IEnumerable<int> dirty)
+        {
+            var copies = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+            foreach (var file in dirty.GroupBy(i => _entryLocations[i].Outer))
+            {
+                string path = _pspFiles[file.Key];
+                using var zdb = ZdbArchive.FromBytes(File.ReadAllBytes(path));
+                foreach (int index in file) zdb.ReplaceEntryData(_entryLocations[index].Inner, Resources[index].Data);
+                copies[Path.Combine(Path.GetFileName(Path.GetDirectoryName(path)) ?? "", Path.GetFileName(path))] = zdb.ToBytes();
+            }
+            return copies;
+        }
+
         /// <summary>Build a complete copy from the opened bytes, rewriting only the edited v6 entries.</summary>
         public byte[] BuildCopy(IEnumerable<int> dirty)
         {
@@ -245,6 +269,14 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
                         : $"{Path.GetFileNameWithoutExtension(res.Name.Replace(NestedSuffix, ""))}_{lib.ModelHash(models[i]):x8}";
                     list.Add(new Model($"{file}|{res.Name}|{i}", name, kind, file, res.Name, li, models[i], sizes[i]));
                 }
+                // Fireteam Bravo 2 islands place most props (trees, rocks, vehicles) as mesh objects, not models: each
+                // object an instance places is listed as a prop (Nodes -1, Offset the object).
+                if (IsPsp && res.Tag == "ISLE")
+                {
+                    string island = Path.GetFileNameWithoutExtension(res.Name);
+                    foreach (int obj in lib.Instances().Select(x => x.Object).Where(o => o > 0).Distinct().Order())
+                        list.Add(new Model($"{file}|{res.Name}|{ObjectName(obj)}", $"{island}_{ObjectName(obj)}", "prop", file, res.Name, li, obj, -1));
+                }
             }
             return _models = list;
         }
@@ -273,7 +305,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         /// <summary>One placed mesh object of a world: the node's world transform and the object. A scatter instance's
         /// pieces have <paramref name="NodeOffset"/> -1 (they are not nodes and cannot be moved as one).</summary>
         public sealed record Placement(string World, uint NodeHash, int LibraryIndex, int Object, float[] Matrix,
-            string Instance, int NodeOffset, float[] ParentWorld);
+            string Instance, int NodeOffset, float[] ParentWorld, int InstanceRecord = -1);
 
         private readonly Dictionary<(int Lib, int Obj), ModelMesh> _objectMeshes = new();
 
@@ -372,7 +404,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
                         // A Fireteam Bravo 2 instance places one static object; the sun cards stand above 1,000 units.
                         if (Enumerable.Range(0, 3).Any(k => inst.Matrix[12 + k] < min[k] - ParkedMargin || inst.Matrix[12 + k] > max[k] + ParkedMargin)) continue;
                         list.Add(new Placement(inst.Matrix[13] > SkyHeight ? SkyWorld : w.Name, lib.U32(inst.Offset + 0x50), w.LibraryIndex, inst.Object, inst.Matrix,
-                            $"{w.Name}/inst_{inst.Offset:x}", -1, inst.Matrix));
+                            $"{w.Name}/inst_{inst.Offset:x}", -1, Matrix4.Identity(), inst.Offset));
                         continue;
                     }
                     if (inst.Model == w.Offset) continue;
@@ -412,7 +444,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         {
             var used = placed.Where(p => p.LibraryIndex == w.LibraryIndex).Select(p => p.Object).ToHashSet();
             foreach (var m in Models().Where(m => m.LibraryIndex == w.LibraryIndex))
-                foreach (var n in lib.Nodes(m.Offset)) used.UnionWith(n.Objects);
+                if (m.Nodes >= 0) foreach (var n in lib.Nodes(m.Offset)) used.UnionWith(n.Objects);
             var free = lib.Objects.Where(o => !used.Contains(o) && lib.IsStaticObject(o))
                 .Select(o => (Obj: o, Mesh: ObjectMesh(w.LibraryIndex, o))).Where(x => x.Mesh.Chunks.Count > 0).ToList();
             bool Encloses(ModelMesh a, ModelMesh b) =>
@@ -493,8 +525,15 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         public ModelMesh BuildMesh(Model model)
         {
             var lib = _libraries[model.LibraryIndex].Lib;
-            // Fireteam Bravo 2 characters are drawn in their bind pose (their skin is not read yet).
-            if (model.Kind == "character" && !IsPsp) return BuildCharacter(model, lib, BoneName);
+            if (model.Nodes < 0)
+            {
+                // A Fireteam Bravo 2 placed object, in its own space.
+                var single = new ModelMesh { Archive = model.File, Name = model.Name };
+                single.Chunks.AddRange(lib.Chunks(model.Offset, Matrix4.Identity(), ObjectName(model.Offset), 0));
+                single.Recompute();
+                return single;
+            }
+            if (model.Kind == "character") return IsPsp ? BuildPspCharacter(model, lib, BoneName) : BuildCharacter(model, lib, BoneName);
             var mesh = new ModelMesh { Archive = model.File, Name = model.Name };
             var nodes = lib.Nodes(model.Offset);
             var skip = model.Kind is "prop" or "weapon" ? LodSkip(model.LibraryIndex, lib, nodes) : new HashSet<int>();
@@ -512,7 +551,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         /// texture of at most 16x16, bounds >= 50% of the most detailed node's on every axis). Node offsets.
         /// </summary>
         /// <summary>Node offsets of a prop / vehicle / weapon's LOD copies and hull (empty for other kinds).</summary>
-        public HashSet<int> SkippedNodes(Model model) => model.Kind is "prop" or "weapon"
+        public HashSet<int> SkippedNodes(Model model) => model.Nodes >= 0 && model.Kind is "prop" or "weapon"
             ? LodSkip(model.LibraryIndex, _libraries[model.LibraryIndex].Lib, _libraries[model.LibraryIndex].Lib.Nodes(model.Offset))
             : new HashSet<int>();
 
@@ -577,6 +616,23 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
                     if (size <= 0 || obj + 0x80 + size > lib.Data.Length) continue;
                     groups.AddRange(CharacterMesh.DecodeCa(lib.Data, obj, obj + 0x80 + size, 1, nodes.Count - 1, CaLibrary.TextureName));
                 }
+            return ModelMesh.FromGroups(model.File, model.Name, skeleton, groups);
+        }
+
+        /// <summary>
+        /// A Fireteam Bravo 2 character: the skeleton as CA's (its node hashes are CA's bone names: hips, spinelo,
+        /// leftElbow ...), and every skinned object of its nodes as weighted groups (<see cref="PspGe.Skinned"/>).
+        /// </summary>
+        private static ModelMesh BuildPspCharacter(Model model, CaLibrary lib, Func<uint, string> boneName)
+        {
+            var nodes = lib.Nodes(model.Offset);
+            var skeleton = CharacterSkeleton.FromBones(nodes.Select((n, i) => new CharacterSkeleton.Bone(
+                boneName(n.Hash), i, n.Parent, i, n.Local, n.World)));
+            var worlds = nodes.Select(n => n.World).ToList();
+            var groups = new List<SkinnedMesh.Group>();
+            foreach (var node in nodes)
+                foreach (int obj in node.Objects)
+                    groups.AddRange(PspGe.Skinned(lib, obj, worlds));
             return ModelMesh.FromGroups(model.File, model.Name, skeleton, groups);
         }
 

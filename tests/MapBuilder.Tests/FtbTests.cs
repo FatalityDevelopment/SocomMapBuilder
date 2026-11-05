@@ -211,6 +211,20 @@ public sealed class FtbTests
         Assert.Equal(("item", "GRENADE: M67"), (w[0xB6A2F3FB].Kind, w[0xB6A2F3FB].Display));
     }
 
+    [Fact]
+    public void A_saved_map_zdb_finds_its_own_place_on_the_umd()
+    {
+        // Two maps hold an ISLAND_F.ZDB; the save's FORT_MP folder picks the right one.
+        var entries = new Dictionary<string, CodeDesigner.Ps2.FileFormats.Iso.IsoPatcher.Entry>
+        {
+            ["PSP_GAME/USRDIR/RUN/FORT_MP/ISLAND_F.ZDB"] = new("PSP_GAME/USRDIR/RUN/FORT_MP/ISLAND_F.ZDB", 1, 1, new()),
+            ["PSP_GAME/USRDIR/RUN/FORT_SP/ISLAND_F.ZDB"] = new("PSP_GAME/USRDIR/RUN/FORT_SP/ISLAND_F.ZDB", 2, 1, new()),
+        };
+        string scratch = Path.Combine(Path.GetTempPath(), "ftb2-scratch");
+        Assert.Equal("PSP_GAME/USRDIR/RUN/FORT_MP/ISLAND_F.ZDB", MapBuilder.Server.Services.ZipperAssetService.DiscPathOf(
+            Path.Combine(scratch, "FORT_MP", "ISLAND_F.ZDB"), scratch, Path.Combine("K:", "PSP_GAME", "USRDIR", "RUN", "FORT_MP"), entries, null));
+    }
+
     // ------------------------------------------------------------------ retail
 
     private static string? Disc => Environment.GetEnvironmentVariable("MAPBUILDER_FTB2_DISC") is { Length: > 0 } d
@@ -266,5 +280,50 @@ public sealed class FtbTests
         Assert.Equal("M4A1", guns[type.Weapons[0]].Display);
         var ak = pkg.Models().First(m => m.Name == "ak47");
         Assert.True(pkg.BuildMesh(ak).Chunks.Count > 0);
+    }
+
+    [Fact]
+    public void Retail_characters_are_skinned_to_their_bones_and_placed_objects_are_props()
+    {
+        if (Disc is not string run) return;
+        var pkg = CaPackage.Open(Path.Combine(run, "VILLAGE_SP2"));
+        var character = pkg.Models().First(m => m.Kind == "character");
+        var skinned = pkg.BuildMesh(character);
+        Assert.NotNull(skinned.Skeleton);
+        Assert.Contains(skinned.Skeleton!.Bones, b => b.Name == "leftElbow");
+        // Posed in bind, the skinned mesh is where the unskinned batches put it.
+        var lib = pkg.Libraries[character.LibraryIndex].Lib;
+        var obj = lib.Nodes(character.Offset).SelectMany(n => n.Objects).First();
+        var flat = PspGe.Chunks(lib, obj, CodeDesigner.Ps2.FileFormats.Assets.Matrix4.Identity(), "x", 0)[0];
+        var first = skinned.Chunks[0];
+        for (int i = 0; i < 9; i++) Assert.Equal(flat.Positions[i], first.Positions[i], 2);
+        Assert.Contains(first.SkinBones!, b => b > 3);
+
+        // The truck is a placed object, listed and built as a prop.
+        var truck = pkg.Models().Single(m => m.Name == "island_village_SP2_obj_ff2c0");
+        Assert.Equal("prop", truck.Kind);
+        Assert.InRange(pkg.BuildMesh(truck).Chunks.Sum(c => c.Triangles.Length / 3), 700, 750);
+    }
+
+    [Fact]
+    public void Retail_instance_and_point_moves_write_only_their_bytes()
+    {
+        if (Disc is not string run) return;
+        var pkg = CaPackage.Open(Path.Combine(run, "FORT_MP"));
+        var tree = pkg.MapScene().First(p => p.InstanceRecord >= 0 && p.World != CaPackage.SkyWorld);
+        var (resource, data) = CaWorldEdits.Move(pkg, tree.Instance, m => { m[12] += 25; return m; });
+        var replace = new Dictionary<int, byte[]> { [pkg.Resources.IndexOf(resource)] = data };
+        foreach (var (r, b) in CaMissionEdits.Point(pkg, "DEM", "seal_tent", null, new[] { 1413.45f, -14.47f, 2057.93f }))
+            replace[pkg.Resources.IndexOf(r)] = b;
+        pkg.ReplaceResources(replace);
+        Assert.Contains(pkg.MapScene(), p => p.Instance == tree.Instance && p.Matrix[12] == tree.Matrix[12] + 25);
+
+        var copies = pkg.BuildPspCopies(replace.Keys);
+        Assert.Equal(new[] { Path.Combine("FORT_MP", "DEM.ZDB"), Path.Combine("FORT_MP", "ISLAND_F.ZDB") }, copies.Keys.Order());
+        var original = File.ReadAllBytes(Path.Combine(run, "FORT_MP", "ISLAND_F.ZDB"));
+        var copy = copies[Path.Combine("FORT_MP", "ISLAND_F.ZDB")];
+        Assert.Equal(original.Length, copy.Length);
+        // The ISLE checksum word and the instance's x translation; nothing else.
+        Assert.InRange(Enumerable.Range(0, copy.Length).Count(i => copy[i] != original[i]), 2, 8);
     }
 }
