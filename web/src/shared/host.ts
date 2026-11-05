@@ -91,7 +91,7 @@ export function modalOpen(): boolean {
 
 export const PACKAGE_FILTERS: FileFilter[] = [
   { label: 'SOCOM packages and archives', extensions: ['zdb', 'cdb', 'zar', 'zed'] },
-  { label: 'GTA: San Andreas disc or IMG', extensions: ['iso', 'img'] },
+  { label: 'GTA: San Andreas discs, archives and models', extensions: ['iso', 'img', 'dff'] },
   { label: 'Star Wars: Battlefront disc or level', extensions: ['iso', 'lvl'] },
 ];
 

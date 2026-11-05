@@ -39,6 +39,7 @@ function BrowserDialog({ request }: { request: BrowseRequest }) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
+  const navigation = useRef(0);
   const rootRef = useRef<HTMLDivElement>(null);
 
   // Keys (Escape, arrows, Enter) reach the dialog from the start, unless a field took focus.
@@ -47,9 +48,11 @@ function BrowserDialog({ request }: { request: BrowseRequest }) {
   }, []);
 
   const navigate = useCallback(async (path: string, select?: string) => {
+    const generation = ++navigation.current;
     setLoading(true);
     try {
       const l = await command<Listing>('FS_LIST', { InputPath: path });
+      if (generation !== navigation.current) { return; }
       setListing(l);
       setPathText(l.path);
       setError(null);
@@ -57,9 +60,9 @@ function BrowserDialog({ request }: { request: BrowseRequest }) {
       setSelected(pick);
       listRef.current?.scrollTo({ top: 0 });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (generation === navigation.current) { setError(err instanceof Error ? err.message : String(err)); }
     } finally {
-      setLoading(false);
+      if (generation === navigation.current) { setLoading(false); }
     }
   }, []);
 
@@ -93,6 +96,7 @@ function BrowserDialog({ request }: { request: BrowseRequest }) {
       request.resolve(target);
       return;
     }
+    if (!entry && request.allowFolder) { request.resolve(listing.path); return; }
     if (!entry) { setError('Select a file.'); return; }
     if (entry.dir && !request.allowFolder) { void navigate(entry.path); return; }
     request.resolve(entry.path);
@@ -123,7 +127,7 @@ function BrowserDialog({ request }: { request: BrowseRequest }) {
   };
 
   const submitLabel = request.submitLabel ?? (request.mode === 'save' ? 'Save' : request.mode === 'folder' ? 'Select folder' : 'Open');
-  const openFolderLabel = request.mode === 'open' && request.allowFolder && selected?.dir;
+  const openFolderLabel = request.mode === 'open' && request.allowFolder && (!selected || selected.dir);
 
   return (
     <div className="mb-backdrop" onPointerDown={e => { if (e.target === e.currentTarget) { cancel(); } }}>
@@ -201,7 +205,7 @@ function BrowserDialog({ request }: { request: BrowseRequest }) {
             </label>
           ) : (
             <div className="mb-fb-chosen" title={selected?.path ?? listing?.path}>
-              {request.mode === 'folder' ? (selected?.dir ? selected.path : listing?.path) : selected ? selected.path : 'No file selected'}
+              {request.mode === 'folder' ? (selected?.dir ? selected.path : listing?.path) : selected?.path ?? (request.allowFolder ? listing?.path : 'No file selected')}
             </div>
           )}
           {request.mode !== 'folder' && (
@@ -214,7 +218,7 @@ function BrowserDialog({ request }: { request: BrowseRequest }) {
         <div className="me-actions mb-fb-actions">
           <button type="button" className="lm-tool-btn" onClick={cancel}>Cancel</button>
           <button type="button" className="lm-tool-btn mb-fb-primary"
-            disabled={request.mode === 'open' && !selected}
+            disabled={loading || !listing || (request.mode === 'open' && !request.allowFolder && !selected)}
             onClick={() => choose()}>{openFolderLabel ? 'Open folder' : submitLabel}</button>
         </div>
       </div>

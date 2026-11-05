@@ -7,7 +7,7 @@ SOCOM U.S. Navy SEALs II is the primary target. Combined Assault also supports s
 | **SOCOM U.S. Navy SEALs II** | Packages (`.ZDB`, `.CDB`), loose `.ZED` / `.ZAR`, unpacked folders, the disc | Maps, models, textures, palettes, animations, mission tables and disc records | To SOCOM 3 / Combined Assault |
 | **SOCOM: Combined Assault** | Location archives by name, missions, world, actors, loadouts and named objective areas | Points, actor starts and headings, valve start values, allowed weapon slots and world placements. Save to a copy. | Models to SOCOM II |
 | **SOCOM 3** | Compatible asset archives | Map edits verified on the Combined Assault disc only | Compatible models to SOCOM II |
-| **Grand Theft Auto: San Andreas** | `.ISO` or `.IMG`, read-only | — | Models to SOCOM II (partial) |
+| **Grand Theft Auto: San Andreas (PS2)** | Mounted disc, ISO, IMG or DFF | Frame positions, geometry transforms and material properties. Save DFF or IMG copies. | Models and selected character clips to SOCOM II |
 | **Star Wars: Battlefront** | `.ISO` or a `.LVL`, read-only: models and textures | — | — |
 | **SOCOM: Fireteam Bravo** | Not tested | — | — |
 
@@ -43,13 +43,19 @@ Undo and redo work across missions in the same archive. **Save copy** writes the
 
 The world includes each island's scatter props (rocks, trees, crates), and water and terrain blend layers draw translucent as the game's GS state sets them ([Combined Assault worlds](formats/ca-worlds.md)). Scatter props cannot be moved yet.
 
-## Grand Theft Auto: San Andreas (partial)
+## Grand Theft Auto: San Andreas (PS2)
 
-Character and prop models open and convert, along with some vehicles. Support is incomplete, so treat exports as experimental and check the results in your target workflow.
+In the **Model Editor**, choose **File → Open package**, select the mounted GTA disc and click **Open folder**. You can also open its ISO, a single IMG archive or a loose DFF. Opening the disc gives the editor access to the game's model definitions, texture dictionaries, vehicle paint schemes, clothing and animation banks. Filter the model list by name or kind. The archive label distinguishes models with the same name, such as the Coach bus and CJ's coach jacket.
 
-<img src="screenshots/gta-character.png" alt="CJ from GTA: San Andreas open read-only in the Model Editor" width="850">
+In the **Item** tab, select a frame to change its position relative to its parent, or select a geometry to scale and offset its vertices. The fields use GTA coordinates, with Z up. For a missing texture, use **Missing textures** to select its material. Pick an image from **Available textures** to preview it, or enter a native texture name of up to 31 printable ASCII characters. **Apply material** writes that name and the RGBA channels. Choose an individual clothing model to edit CJ's outfit pieces. The **UV Editor** can move, flip, rotate and snap primary UV coordinates on sections with stored UVs. Each edit supports undo and redo. For clothing files containing multiple body-shape clumps, the editor displays and edits the first clump.
 
-*CJ from `PLAYER.IMG`, open read-only in the Model Editor with **Export to SOCOM II** in the header.*
+**File → Save model as DFF** writes the selected model. **File → Save edited IMG archive** writes a full copy of the selected model's archive with all its edited entries. Fixed-size edits use the existing IMG entry when it has its own sector range. A longer texture name can grow a DFF. If its entry outgrows its slot or shares sectors with another entry, the writer appends the edited DFF and updates its directory record in the copy. A DFF stores references to textures. Keep the relevant TXDs alongside a loose model, or reopen the IMG in a copy of the original disc layout for its full dependency set.
+
+**Export to SOCOM II** builds a memory-card pack from the current model including its session edits. Choose **File → Export with options** to include animation clips for a character. Automatic pack names include the source archive and model, so the Coach bus and the coach jacket export separately. If an automatic output name is occupied, the exporter selects another one. The resulting pack can be reopened in the editor. In-game verification of the new native edits and conversion changes is pending.
+
+On the US PS2 disc (SLUS-20946), the editor produces geometry for all 15,208 source DFFs and the assembled CJ preview. All 32,555 texture records decode. The loader uses declared texture dictionaries, their parents, placement links to higher-detail models, and exact raster names. When it searches across archives it requires all candidates to agree on the pixels and keeps the player clothing separate. Of the original 219 unresolved material references, 47 now resolve. The remaining 172 appear in the editor for manual repair.
+
+<img src="screenshots/gta-character.png" alt="CJ from PLAYER.IMG in the Model Editor" width="850">
 
 ## Star Wars: Battlefront (read-only)
 

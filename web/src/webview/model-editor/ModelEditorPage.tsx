@@ -7,6 +7,8 @@ import { CommandPalette } from '../../shared/CommandPalette';
 import { HistoryList } from '../../shared/HistoryList';
 import { commandsFromMenus } from '../../shared/commands';
 import { ModelEditorPageLogic } from './model-editor-page';
+import { GtaModelPanel } from './GtaModelPanel';
+import type { ModelSummary } from './asset-client';
 import { LIGHTINGS } from '../zipper-core/viewport-core';
 
 // The Model Editor's view: CodeDesigner's Angular template in JSX over the same logic class.
@@ -53,13 +55,13 @@ export function ModelEditorPage() {
 
   return (
     <div className="me-app has-header" onPointerDown={e => c.closeMenusOutside(e.nativeEvent)}>
-      <PageHeader icon="library" title="Model Editor" subtitle="Meshes, textures and vertex colours of SOCOM II models" />
-      {c.paletteOpen() && <CommandPalette commands={commandsFromMenus(c.menus)} onClose={() => c.paletteOpen.set(false)} />}
+      <PageHeader icon="library" title="Model Editor" subtitle={c.gta() ? 'GTA: San Andreas models' : 'Meshes, textures and vertex colours of SOCOM II models'} />
+      {c.paletteOpen() && <CommandPalette commands={commandsFromMenus(c.visibleMenus())} onClose={() => c.paletteOpen.set(false)} />}
       {/* Menu bar */}
       <div className="me-menubar">
         <span className="me-brand"><Icon name="library" size={14} /> Model Editor</span>
         {s && d && !s.game && !s.readOnly && s.mapNamespace && <button className="lm-tool-btn" onClick={() => host.openMapActions(s.path, d.name)}>Placement actions…</button>}
-        {c.menus.map(menu => (
+        {c.visibleMenus().map(menu => (
           <div key={menu.id} className={`me-menu${c.openMenu() === menu.id ? ' open' : ''}`}>
             <button className="me-menu-btn" onClick={() => c.toggleMenu(menu.id)} onMouseEnter={() => c.hoverMenu(menu.id)}>{menu.label}</button>
             {c.openMenu() === menu.id && (
@@ -79,7 +81,7 @@ export function ModelEditorPage() {
         {s && (
           <>
             <span className="me-pkg" title={s.path}>{c.fileName(s.path)}</span>
-            {s.game && <span className="me-badge">{s.game} · read-only models</span>}
+            {s.game && <span className="me-badge">{s.game}{c.gta() ? (c.dirtyCount() ? ' · ' + c.dirtyCount() + ' edited' : '') : ' · read-only models'}</span>}
             {target
               ? <button className="lm-tool-btn me-export-btn" disabled={c.busy()} onClick={() => void c.quickExport()}
                   title={`Convert ${c.current()?.name ?? ''} into a ${target} package and open it (Ctrl+E). File › Export with options… picks animations / names.`}>Export to {target}…</button>
@@ -181,16 +183,11 @@ export function ModelEditorPage() {
               ))}
             </div>
             <div className="me-list">
-              {!s && <div className="me-empty">File › Open package… to load a .ZDB, a .CDB pack, a loose .ZED, a GTA: San Andreas .ISO / .IMG, or a Star Wars: Battlefront .ISO / .LVL.</div>}
+              {!s && <div className="me-empty">File › Open package… to load a SOCOM package or a GTA: San Andreas disc folder, ISO, IMG or DFF, or a Star Wars: Battlefront .ISO / .LVL.</div>}
               {c.groups().map(group => (
                 <div key={group.kind}>
                   <div className="me-group-title">{c.kindLabel(group.kind)} <span className="lm-muted">{group.models.length}</span></div>
-                  {group.models.map(model => (
-                    <button key={model.archive + ':' + model.name} type="button" className={`me-row${c.isCurrent(model) ? ' active' : ''}`} onClick={() => void c.select(model)} title={model.archive}>
-                      <span className="me-row-name">{model.name}</span>
-                      <span className="me-row-meta">{model.visualCount} vis</span>
-                    </button>
-                  ))}
+                  <ModelRows key={[s?.session, c.query(), group.kind].join(':')} models={group.models} editor={c} />
                 </div>
               ))}
             </div>
@@ -200,7 +197,7 @@ export function ModelEditorPage() {
         {/* Tool shelf */}
         <nav className="me-tools">
           {!c.showAssets() && <button className="me-tool" onClick={() => c.showAssets.set(true)} title="Show assets"><Icon name="library" size={16} /></button>}
-          {c.tools.map(t => (
+          {c.tools.filter(t => !c.gta() || t.id === 'select').map(t => (
             <button key={t.id} className={`me-tool${c.tool() === t.id ? ' on' : ''}`} onClick={() => c.setTool(t.id)} title={`${t.label} (${t.key})`}>
               <span className="me-tool-glyph">{t.glyph}</span>
             </button>
@@ -230,10 +227,10 @@ export function ModelEditorPage() {
               {c.bottomTab() === 'uv' && c.showBottom() && (
                 <>
                   <span className="lm-muted">{c.uvCount()} UV selected</span>
-                  <button className="lm-row-btn" onClick={() => c.uvOp('flipU')} title="Mirror selected UVs horizontally">Flip U</button>
-                  <button className="lm-row-btn" onClick={() => c.uvOp('flipV')} title="Mirror selected UVs vertically">Flip V</button>
-                  <button className="lm-row-btn" onClick={() => c.uvOp('rot90')} title="Rotate selected UVs 90°">Rotate 90°</button>
-                  <label className="me-toggle"><input type="checkbox" onChange={e => c.uvSnap(e.target.checked)} /> Pixel snap</label>
+                  <button className="lm-row-btn" disabled={!c.canEditUvs() || c.busy() || !c.uvCount()} onClick={() => c.uvOp('flipU')} title="Mirror selected UVs horizontally">Flip U</button>
+                  <button className="lm-row-btn" disabled={!c.canEditUvs() || c.busy() || !c.uvCount()} onClick={() => c.uvOp('flipV')} title="Mirror selected UVs vertically">Flip V</button>
+                  <button className="lm-row-btn" disabled={!c.canEditUvs() || c.busy() || !c.uvCount()} onClick={() => c.uvOp('rot90')} title="Rotate selected UVs 90°">Rotate 90°</button>
+                  <label className="me-toggle"><input type="checkbox" disabled={!c.canEditUvs()} onChange={e => c.uvSnap(e.target.checked)} /> Pixel snap</label>
                   <button className="lm-row-btn" onClick={() => c.uvFrame()}>Frame</button>
                 </>
               )}
@@ -242,7 +239,7 @@ export function ModelEditorPage() {
             <div className="me-bottom-body" hidden={!c.showBottom()}>
               <div className="me-uv" hidden={c.bottomTab() !== 'uv'}>
                 <canvas ref={uvCanvasRef} />
-                {!c.uvChunks().length && <div className="me-vp-center">Select chunks, faces or vertices to edit their UVs.</div>}
+                {!c.uvChunks().length && <div className="me-vp-center">Select chunks, faces or vertices to see their UVs.</div>}
               </div>
               <div className="me-log" hidden={c.bottomTab() !== 'log'}>
                 {c.logLines().map((line, i) => <div key={i} className={line.error ? 'err' : ''}>{line.text}</div>)}
@@ -287,12 +284,17 @@ export function ModelEditorPage() {
 
           <div className="me-props">
             <div className="me-tabs">
-              {c.propTabs.map(t => (
+              {c.propTabs.filter(t => !c.gta() || ['item', 'texture', 'model'].includes(t.id)).map(t => (
                 <button key={t.id} className={`me-tab${c.propTab() === t.id ? ' active' : ''}`} onClick={() => c.propTab.set(t.id)} title={t.label}>{t.label}</button>
               ))}
             </div>
             <div className="me-tab-body">
-              {c.propTab() === 'item' && (
+              {c.gta() && c.propTab() === 'item' && (d?.gta
+                ? <GtaModelPanel key={d.archive + '/' + d.name} info={d.gta} missing={c.missingTextures()} busy={c.busy() || c.loading()}
+                    edit={(op, label) => void c.editGta(op, label)} preview={name => c.previewGtaTexture(name)} />
+                : <div className="me-empty">{d ? 'Select a clothing DFF from PLAYER.IMG to edit a part of CJ.' : 'Select a model.'}</div>)}
+              {c.gta() && c.propTab() === 'item' && m?.skeleton && <PosePanel c={c} />}
+              {!c.gta() && c.propTab() === 'item' && (
                 <>
                   <div className="me-card">
                     <div className="me-card-title">Selection</div>
@@ -417,7 +419,7 @@ export function ModelEditorPage() {
                   </>
                 ) : <div className="me-empty">Select chunks to see their material.</div>
               )}
-              {c.propTab() === 'texture' && (
+              {!c.gta() && c.propTab() === 'texture' && (
                 <div className="me-card">
                   <div className="me-card-title">Add textures</div>
                   <div className="me-actions">
@@ -439,7 +441,7 @@ export function ModelEditorPage() {
                       </div>
                     </div>
                     <div className="me-actions">
-                      <button className="lm-tool-btn" disabled={c.busy() || !t.found} onClick={() => void c.replaceTexture(t)}>Replace from image…</button>
+                      {!c.gta() && <button className="lm-tool-btn" disabled={c.busy() || !t.found} onClick={() => void c.replaceTexture(t)}>Replace from image…</button>}
                       <button className="lm-tool-btn" disabled={!t.found} onClick={() => void c.exportTexture(t)}>Export PNG…</button>
                     </div>
                   </div>
@@ -507,17 +509,7 @@ export function ModelEditorPage() {
                     </div>
                     <div className="lm-muted me-note">Blue: the bone does not move the vertex; red: it moves it fully. Radius and Strength are the brush's above. A vertex takes weight only from bones its draw group already lists for it (most blend 2–3); one stroke is one undo.</div>
                   </div>
-                  <div className="me-card">
-                    <div className="me-card-title">Pose</div>
-                    <label className="me-field">Clip
-                      <select value={c.poseClip()} onChange={e => void c.setPoseClip(e.target.value)}>
-                        <option value="">Bind pose</option>
-                        {c.poseClips().map(clip => <option key={clip.source + ':' + clip.name} value={clip.name}>{clip.name}</option>)}
-                      </select>
-                    </label>
-                    {c.poseClip() && <label className="me-field">Time <input type="range" min="0" max={c.poseDuration()} step={Math.max(0.01, c.poseDuration() / 100)} value={c.poseTime()} onChange={e => c.setPoseTime(e.target.value)} /> <span>{c.poseTime().toFixed(2)} s</span></label>}
-                    <div className="lm-muted me-note">See gear and seams bend while you work: paint weights on a bent elbow, then check again in the bind pose. Move, rotate and scale wait for the bind pose.</div>
-                  </div>
+                  <PosePanel c={c} />
                 </>
               )}
               {c.propTab() === 'model' && (
@@ -532,14 +524,14 @@ export function ModelEditorPage() {
                           <dt>Archive</dt><dd className="lm-mono">{d.archive}</dd>
                           <dt>Visuals</dt><dd>{d.visuals.length}</dd>
                           <dt>Textures</dt><dd>{d.textures.length} ({d.textureNamespace ?? '?'})</dd>
-                          {m?.skeleton && <><dt>Skeleton</dt><dd>{m.skeleton.length} bones, skinned (geometry is view-only for now)</dd></>}
+                          {m?.skeleton && <><dt>Skeleton</dt><dd>{m.skeleton.length} bones, skinned</dd></>}
                           {d.geo && <><dt>GEO</dt><dd className="lm-mono">{d.geoArchive} › {d.geo.name}</dd><dt>Units</dt><dd>{d.geo.positionUnit} {d.geo.vparamsFlags}</dd></>}
                         </dl>
                       </div>
                       {c.missingTextures().length > 0 && <div className="me-card me-warn">Missing textures: {c.missingTextures().join(', ')}</div>}
                     </>
                   )}
-                  {m?.skeleton && (
+                  {m?.skeleton && !s?.game && (
                     <div className="me-card">
                       <div className="me-card-title">Character presets</div>
                       {c.characterPresets().length === 0 && <div className="lm-muted me-note">No presets found.</div>}
@@ -574,7 +566,38 @@ export function ModelEditorPage() {
   );
 }
 
-// A number input committed on blur / Enter, like Angular's (change) binding.
+function PosePanel({ c }: { c: ModelEditorPageLogic }) {
+  return (
+    <div className="me-card">
+      <div className="me-card-title">Pose</div>
+      <label className="me-field">Clip
+        <select value={c.poseClip()} onChange={e => void c.setPoseClip(e.target.value)}>
+          <option value="">Bind pose</option>
+          {c.poseClips().map(clip => <option key={clip.source + ':' + clip.name} value={c.poseKey(clip)}>{c.gta() ? clip.source + " / " + clip.name : clip.name}</option>)}
+        </select>
+      </label>
+      {c.poseClip() && <label className="me-field">Time <input type="range" min="0" max={c.poseDuration()} step={Math.max(0.01, c.poseDuration() / 100)} value={c.poseTime()} onChange={e => c.setPoseTime(e.target.value)} /> <span>{c.poseTime().toFixed(2)} s</span></label>}
+    </div>
+  );
+}
+
+function ModelRows({ models, editor }: { models: ModelSummary[]; editor: ModelEditorPageLogic }) {
+  const [page, setPage] = useState(0);
+  const size = editor.gta() ? 80 : models.length;
+  const start = Math.min(page, Math.floor((models.length - 1) / size)) * size;
+  return <>
+    {models.slice(start, start + size).map(m => <button key={m.archive + ':' + m.name} type="button"
+      className={`me-row${editor.isCurrent(m) ? ' active' : ''}`} onClick={() => void editor.select(m)} title={m.archive}>
+      <span className="me-row-name">{m.name}</span><span className="me-row-meta">{editor.gta() ? m.archive : m.visualCount + ' vis'}</span>
+    </button>)}
+    {models.length > size && <div className="me-actions">
+      <button className="lm-row-btn" disabled={start === 0} onClick={() => setPage(start / size - 1)}>Previous</button>
+      <span>{start + 1}–{Math.min(start + size, models.length)}</span>
+      <button className="lm-row-btn" disabled={start + size >= models.length} onClick={() => setPage(start / size + 1)}>Next</button>
+    </div>}
+  </>;
+}
+
 function NumInput({ value, onCommit, step, min, disabled, title, small }: { value: string | number; onCommit: (v: string) => void; step?: string; min?: string; disabled?: boolean; title?: string; small?: boolean }) {
   const [text, setText] = useState(String(value));
   useEffect(() => setText(String(value)), [value]);

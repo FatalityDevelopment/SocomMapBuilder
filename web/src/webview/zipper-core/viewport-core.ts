@@ -291,7 +291,7 @@ export abstract class ViewportCore {
     const shading = this.shadingValue;
     const t = spec.texture ? this.textureFor(spec.texture) : null;
     const vertexAlpha = !!spec.colors && spec.colors.some((v, i) => i % 4 === 3 && v < 128);
-    const blended = !!t && (spec.materialBlend ?? t.pixels.alphaBlend ?? false) && (!!t.pixels.hasTransparency || vertexAlpha);
+    const blended = (spec.materialBlend ?? t?.pixels.alphaBlend ?? false) && (!!t?.pixels.hasTransparency || vertexAlpha);
     // Scene-lit: characters always (the game lights them), everything in studio, and baked chunks that carry no colours.
     const lit = shading === 'textured' && (!!spec.lit || this.lighting === 'studio' || (this.lighting === 'baked' && !spec.colors));
     const side = this.backfaces && !spec.frontOnly ? THREE.DoubleSide : THREE.FrontSide;

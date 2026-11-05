@@ -83,6 +83,17 @@ namespace MapBuilder.Server.Services
 
         internal static readonly Spec[] All =
         {
+            new("gtaFrame", "Move a native GTA DFF frame in its parent coordinate system (Z up).",
+                new[] { "archive", "model", "revision", "frame", "position" }, new[] { Archive, Model, Int("revision", "Session revision.", 0), Int("frame", "DFF frame index.", 0), Vec("position", 3, "Parent-local position.") }),
+            new("gtaMaterial", "Change a native GTA DFF material's RGBA color or texture reference.",
+                new[] { "archive", "model", "revision", "geometry", "material" }, new[] { Archive, Model, Int("revision", "Session revision.", 0), Int("geometry", "Geometry index.", 0),
+                    Int("material", "Material index.", 0), Vec("color", 4, "RGBA, integers from 0 to 255."), F("texture", "string", "New texture name (1–31 printable ASCII characters).") }),
+            new("gtaUv", "Edit primary texture coordinates of a native GTA DFF. Coordinates use editor UV space (V up).",
+                new[] { "archive", "model", "revision", "chunks" }, new[] { Archive, Model, Int("revision", "Session revision.", 0),
+                    Arr("chunks", "object", "Meshes from assets_model_mesh: [{geometryOffset, vertices:[{i,uv:[u,v]}]}]. A negative geometryOffset means the mesh has no editable UVs.") }),
+            new("gtaGeometry", "Scale and offset a native GTA DFF geometry in local GTA coordinates.",
+                new[] { "archive", "model", "revision", "geometry", "factors", "offset" }, new[] { Archive, Model, Int("revision", "Session revision.", 0), Int("geometry", "Geometry index.", 0),
+                    Vec("factors", 3, "Positive scale factors."), Vec("offset", 3, "Local XYZ offset, Z up.") }),
             new("moveClutter", "Move a clutter placement.", new[] { "clutterIndex" }, With(Placement, Int("clutterIndex", "From assets_map_scene.", 0))),
             new("addClutter", "Add a clutter placement (answers newClutterIndex).", new[] { "model" }, With(Placement, F("model", "string", "A package model."))),
             new("deleteClutter", "Remove a clutter placement.", new[] { "clutterIndex" }, new[] { Int("clutterIndex", "From assets_map_scene.", 0) }),
