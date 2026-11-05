@@ -170,13 +170,17 @@ namespace MapBuilder.Server.Services
                     mission = (object?)null, world = (object?)null, extents = (object?)null, cams = Array.Empty<object>(), valves = Array.Empty<object>(), texts = new Dictionary<string, string>() };
 
             var actors = p.MissionResource(s.Mission, "MSNv") is { } vehiclesRes ? CaMissionTables.ParseActors(vehiclesRes.Data, p.IsPsp) : new List<CaMissionTables.Actor>();
-            // Fireteam Bravo 2's character.rdr and mission header are laid out differently and are not read yet.
-            var types = !p.IsPsp && p.MissionResource(s.Mission, "CHAR") is { } charRes ? CaMissionTables.ParseCharacterTypes(charRes.Data) : new List<CaMissionTables.CharacterType>();
+            // Fireteam Bravo 2's mission header is laid out differently and is not read yet.
+            var types = p.MissionResource(s.Mission, "CHAR") is { } charRes
+                ? p.IsPsp ? CaMissionTables.ParsePspCharacterTypes(charRes.Data) : CaMissionTables.ParseCharacterTypes(charRes.Data)
+                : new List<CaMissionTables.CharacterType>();
             var header = !p.IsPsp && p.MissionResource(s.Mission, "MISN") is { } misn ? CaMissionTables.ParseHeader(misn.Data) : null;
             var valveValues = p.MissionResource(s.Mission, "VALV") is { } valv ? CaMissionTables.ParseValves(valv.Data) : new List<(uint Hash, int Value)>();
             var weaponTable = p.GlobalResource("WEAP")?.Data;
+            var wanted = types.SelectMany(t => t.Weapons).Concat(header?.Weapons ?? new List<uint>());
             var weapons = weaponTable == null ? new Dictionary<uint, CaMissionTables.Weapon>()
-                : CaMissionTables.FindWeapons(weaponTable, types.SelectMany(t => t.Weapons).Concat(header?.Weapons ?? new List<uint>()));
+                : p.IsPsp ? CaMissionTables.FindPspWeapons(weaponTable, wanted, p.WeaponModelHashes())
+                : CaMissionTables.FindWeapons(weaponTable, wanted);
 
             var texts = new Dictionary<string, string>();
             string? Text(string? key)

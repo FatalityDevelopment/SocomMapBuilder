@@ -65,13 +65,13 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         /// char[32], type hash (+0x40), group (+0x54), start count (+0x58), starts from +0x5C (32 bytes: point char[28],
         /// heading u32).
         /// </summary>
-        /// <remarks>Fireteam Bravo 2 (<paramref name="psp"/>): 0x1BC-byte records without the display key: type hash
-        /// +0x20, group +0x30, start count +0x34, starts from +0x38. Its player actor leaves the start's name empty
+        /// <remarks>Fireteam Bravo 2 (<paramref name="psp"/>): 0x1BC-byte records without the display key: character type (a character.rdr record hash; +0x20 is another hash)
+        /// +0x24, group +0x30, start count +0x34, starts from +0x38. Its player actor leaves the start's name empty
         /// (a position follows instead), which is not read.</remarks>
         public static List<Actor> ParseActors(byte[] data, bool psp = false)
         {
             int size = psp ? PspActorSize : ActorSize;
-            int hash = psp ? 0x20 : 0x40, group = psp ? 0x30 : 0x54, count = psp ? 0x34 : 0x58, first = psp ? 0x38 : 0x5C;
+            int hash = psp ? 0x24 : 0x40, group = psp ? 0x30 : 0x54, count = psp ? 0x34 : 0x58, first = psp ? 0x38 : 0x5C;
             int b = (int)U32(data, 0), e = (int)U32(data, 4);
             if (b < 8 || e > data.Length || e < b || (e - b) % size != 0) throw new InvalidDataException("vehicles.rdr: bad actor table");
             var list = new List<Actor>();
@@ -112,6 +112,63 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
             }
             return list;
         }
+
+        /// <summary>
+        /// Fireteam Bravo 2's character.rdr: +0x24 / +0x28 a list of record offsets. A record (0x4D4 bytes): hash (what an
+        /// actor's +0x24 names), the <c>clib</c> model's root hash (+0x04), and from +0x2C0 vectors of 20 bytes as in CA
+        /// (a stale pointer, then begin, end, capacity, size); the one at +0x2FC (begin +0x300) is the loadout, the
+        /// weapon table hashes of its slots. No display name is stored.
+        /// </summary>
+        public static List<CharacterType> ParsePspCharacterTypes(byte[] data)
+        {
+            int lb = (int)U32(data, 0x24), le = (int)U32(data, 0x28);
+            if (le < lb || (le - lb) % 4 != 0) throw new InvalidDataException("character.rdr: bad record list");
+            var list = new List<CharacterType>();
+            foreach (uint off in U32s(data, lb, (le - lb) / 4))
+            {
+                int o = (int)off;
+                if (o + 0x308 > data.Length) throw new InvalidDataException($"character.rdr: record at 0x{o:X} is outside the table");
+                int vb = (int)U32(data, o + 0x300), ve = (int)U32(data, o + 0x304);
+                var weapons = ve > vb && ve <= data.Length && (ve - vb) % 4 == 0 && ve - vb <= 64 ? U32s(data, vb, (ve - vb) / 4) : new List<uint>();
+                list.Add(new CharacterType(U32(data, o), U32(data, o + 4), 0, null, weapons));
+            }
+            return list;
+        }
+
+        private static readonly Regex Loct = new(@"_LOCT\(""([^""]{1,60})""\s*(_\d+_\w+?_MSG)", RegexOptions.Compiled);
+
+        /// <summary>
+        /// Fireteam Bravo 2's weapon table entries for <paramref name="hashes"/> (CRC32 of the weapon's name, e.g.
+        /// <c>M4A1</c>). An entry starts with its hash and, at +0x04, the offset of its strings, whose first (+0x0C) is the
+        /// UI message key. The display name is the text the table's leftover source gives that key
+        /// (<c>_LOCT("SNIPER RIFLE: M40A1" _30659_…)</c>) when it is there, else the model's name when it is known
+        /// (<c>M4A1</c>). <paramref name="models"/> maps weapon model root hashes to names: an entry that holds one in its
+        /// first 0x80 bytes uses that model (guns, grenades and attachments all have one). The key's category says
+        /// whether it is a gun (<c>weapon</c>) or an <c>item</c>.
+        /// </summary>
+        public static Dictionary<uint, Weapon> FindPspWeapons(byte[] table, IEnumerable<uint> hashes, IReadOnlyDictionary<uint, string> models)
+        {
+            var want = hashes.Where(h => h != 0).ToHashSet();
+            var display = new Dictionary<string, string>();
+            foreach (Match m in Loct.Matches(Encoding.Latin1.GetString(table))) display.TryAdd(m.Groups[2].Value, m.Groups[1].Value);
+            var found = new Dictionary<uint, Weapon>();
+            for (int o = 0; o + 0x80 <= table.Length && found.Count < want.Count; o += 4)
+            {
+                uint h = BitConverter.ToUInt32(table, o);
+                if (!want.Contains(h) || found.ContainsKey(h)) continue;
+                int strings = (int)BitConverter.ToUInt32(table, o + 4);
+                if (strings <= 0 || strings >= o || Str(table, strings + 0x0C, 64) is not { } key || !MessageKey.IsMatch(key)) continue;
+                uint? model = null;
+                for (int k = 8; k < 0x80 && model == null; k += 4)
+                    if (models.ContainsKey(BitConverter.ToUInt32(table, o + k))) model = BitConverter.ToUInt32(table, o + k);
+                string? name = display.GetValueOrDefault(key)
+                    ?? (model is uint mh && !Regex.IsMatch(models[mh], "^w[0-9a-f]{8}$") ? models[mh].ToUpperInvariant() : null);
+                found[h] = new Weapon(h, PspGun.IsMatch(key) ? "weapon" : "item", name, key, model);
+            }
+            return found;
+        }
+
+        private static readonly Regex PspGun = new(@"^_\d+_(ASSAULTRIFLE|SNIPERRIFLE|SMG|SHOTGUN|MACHINEGUN|PISTOL|LAUNCHER)", RegexOptions.Compiled);
 
         private static readonly Regex MessageKey = new(@"^_\d+_\w*_MSG$", RegexOptions.Compiled);
 
