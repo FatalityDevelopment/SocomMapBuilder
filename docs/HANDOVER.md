@@ -15,6 +15,7 @@ The aim is to add to SOCOM II's Map Builder and Model Editor the tools Unity and
 | 3: Textures and performance | `bakeOcclusion`, texture paint (T), simplified low-detail gear (`MeshDecimate`, `lowDetail`), character presets (`applyCharacterPreset`, `characters_*` MCP tools) | **#15** | open, mergeable |
 | Ignore `models/` | `.gitignore` | **#16** | open |
 | 4: Workflow polish | see below | `claude/wave4` | **pushed, no PR yet** |
+| Minimap | the game's HUD radar (HUD2 art) over the tactical map (`MM<nn>`) or a top-down render; View › Minimap (N); `ASSET_MAP_HUD`; [hud format doc](formats/hud.md) | `claude/minimap` | local, not committed |
 | Map actions and mission tables | action icons in 3D, friendlier Actions panel, Mission tab (objectives, actors, mission settings, weapons) from READERM.ZAR, [map-tables format doc](formats/map-tables.md) | `claude/actions-rdr` | local, not committed |
 
 ## Wave 4: where it stands (`claude/wave4`, built on `claude/wave3`)

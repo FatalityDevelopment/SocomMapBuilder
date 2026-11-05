@@ -72,6 +72,7 @@ Inspect the assembled level with its world model, props, clutter, sky, textures,
 - **Hide / isolate / show all** (H, Shift+H, Alt+H) changes only the view: hidden props and clutter are not drawn and cannot be picked. A badge in the status bar counts them; click it to show them again.
 - **Measure** (M): click two points to see the distance in units and in metres (about 10.5 units to a metre).
 - **Walk mode** (Shift+F, or View menu): walk the map at eye height with W A S D (Shift runs); the eye stays 16 units above the ground under it. Escape stops.
+- **Minimap** (N, or View menu): SOCOM II's own HUD radar in the corner of the 3D view, turning with the view as the game's does. It uses the game's art from the map package (`RUN\COMMON\HUD2_TXR.ZED`: the compass disc, view cone, objective star, extraction X, nav letters C to Z, Able / Bravo, friendly and threat blips) over the map's own tactical map (`RUN\UI\MM<nn>_TXR.ZED`, placed in the world by hand in `server/data/tacmaps.json`; M51 so far) or, for other maps, a top-down render. It shows the view's centre (the walker in walk mode) and the camera, actors at their start points, spare start points, nav points, objectives and action props; objectives and nav points beyond the rim stay on its edge. The wheel zooms, a click moves the view there, and the button under it switches between the tactical map and the top-down render. [Format notes](docs/formats/hud.md).
 - **Camera bookmarks** (View › Bookmark this view…): save a view by name and jump back to it later; they are kept per package in your browser.
 - **Autosave**: every 3 minutes, a recovery copy of each session with unsaved edits goes to `%LOCALAPPDATA%\MapBuilder\autosave\<package>.autosave.ZDB` (set `MAPBUILDER_AUTOSAVE` for another folder, `MAPBUILDER_AUTOSAVE_MINUTES` for another interval, 0 to turn it off). The session itself stays unsaved.
 - Loading warnings stay visible with a **Retry map loading** action. A failed package switch clears the old map, and scene-loading failures block editing until a reload succeeds.
@@ -237,6 +238,7 @@ The same tab offers experimental climb and ladder surfaces and links to the map'
 | Hide / isolate / show all | H / Shift+H / Alt+H |
 | Measure | M (click two points) |
 | Walk mode | Shift+F; W A S D walk, Shift runs, Esc stops |
+| Minimap | N (wheel zooms, click moves the view) |
 | Asset Viewer | Double-click / Enter opens · Backspace up · Alt+Left / Right back / forward · arrows move · Space plays a clip |
 
 ## How it fits together
