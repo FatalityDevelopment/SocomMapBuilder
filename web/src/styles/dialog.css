@@ -62,6 +62,7 @@
 .mb-fb-row:hover { background: var(--vscode-list-hoverBackground, #2a2d2e); }
 .mb-fb-row.sel { background: var(--vscode-list-activeSelectionBackground, #04395e); }
 .mb-fb-name { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mb-fb-title-tag { opacity: 0.7; font-size: 0.92em; }
 .mb-fb-ico-dir { color: #dcb67a; display: inline-flex; }
 .mb-fb-ico-file { color: var(--vscode-descriptionForeground, #9d9d9d); display: inline-flex; }
 .mb-fb-meta { color: var(--vscode-descriptionForeground, #9d9d9d); white-space: nowrap; text-align: right; font-variant-numeric: tabular-nums; }

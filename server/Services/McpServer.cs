@@ -740,8 +740,12 @@ namespace MapBuilder.Server.Services
                     d => $"{d.GetProperty("undo").GetArrayLength()} undo, {d.GetProperty("redo").GetArrayLength()} redo"));
 
             AddSync("assets_map_points", "Read map points",
-                "The AIMAPS spawn and waypoint points (name, team, kind, x, z, grid cell) and the AI grid's bounds. Risk: read-only.",
-                true, Schema(new[] { "session" }, session), a => FromCommand(new CommandMessage { Command = "ASSET_MAP_POINTS", AssetSession = Session(a) },
+                "The AIMAPS spawn and waypoint points (name, team, kind, x, z, grid cell) and the AI grid's bounds. SOCOM 3 / CA: the " +
+                "points of one mission of the location (mission.rdr; kinds start, waypoint, marker, spectator, other), with its zone and " +
+                "island; `mission` (an id from assets_status `missions`, e.g. MP414CTR) switches the session to that mission. Risk: read-only.",
+                true, Schema(new[] { "session" }, session, P("mission", "string", "SOCOM 3 / CA only: the mission whose points to read (kept for later calls).")),
+                a => FromCommand(new CommandMessage { Command = "ASSET_MAP_POINTS", AssetSession = Session(a),
+                    AssetJson = JsonSerializer.Serialize(new { mission = Str(a, "mission") }, Json) },
                     d => d.TryGetProperty("points", out var p) ? $"{p.GetArrayLength()} point(s)" : null!));
 
             AddSync("assets_map_tables", "Read mission tables",

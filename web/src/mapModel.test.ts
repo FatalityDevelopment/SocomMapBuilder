@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { MapInstanceWire } from './webview/model-editor/asset-client';
-import { addedClutter, deleteOps, duplicateOps, groupInstancesByLayer, isSkyChunk, layerOf, movable, pickDuplicates, placementOp, pointKindCounts, problemTarget, scaleOf, sortProblems, yawOf } from './mapModel';
+import { addedClutter, deleteOps, duplicateOps, groupInstancesByLayer, isSkyChunk, layerOf, missionLabel, movable, pickDuplicates, placementOp, pointColor, pointKindCounts, problemTarget, scaleOf, sortProblems, yawOf } from './mapModel';
 
 // Column-major, translation in 12..14 (as GEO and clutter store it): yaw about Y, uniform scale.
 function matrix(yawDeg: number, scale: number, x = 0, y = 0, z = 0): number[] {
@@ -158,5 +158,17 @@ describe('map problems', () => {
   it('lists errors first and keeps the order within a severity', () => {
     const p = (severity: 'error' | 'warning' | 'info', message: string) => ({ severity, code: 'x', message });
     expect(sortProblems([p('info', 'a'), p('error', 'b'), p('warning', 'c'), p('error', 'd')]).map(x => x.message)).toEqual(['b', 'd', 'c', 'a']);
+  });
+});
+
+describe('SOCOM 3 / CA missions', () => {
+  it('labels a mission by kind and mode', () => {
+    expect(missionLabel({ id: 'MP414CTR', kind: 'MP', mode: 'CTR' })).toBe('MP414CTR · online CTR');
+    expect(missionLabel({ id: 'SP414', kind: 'SP', mode: '' })).toBe('SP414 · campaign');
+    expect(missionLabel({ id: 'DEFAULT', kind: 'other', mode: '' })).toBe('DEFAULT');
+  });
+
+  it('gives map markers their own colour', () => {
+    expect(pointColor('marker')).not.toBe(pointColor('other'));
   });
 });

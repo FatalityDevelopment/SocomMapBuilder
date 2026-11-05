@@ -5,7 +5,7 @@ SOCOM U.S. Navy SEALs II is the primary target and the only game Map Builder edi
 | Game | Open | Edit | Convert |
 |---|---|---|---|
 | **SOCOM U.S. Navy SEALs II** | Packages (`.ZDB`, `.CDB`), loose `.ZED` / `.ZAR`, unpacked folders, the disc | Maps, models, textures, palettes, animations, mission tables and disc records | To SOCOM 3 / Combined Assault |
-| **SOCOM 3** and **SOCOM: Combined Assault** | Archives, read-only | — | Combined Assault models to SOCOM II |
+| **SOCOM 3** and **SOCOM: Combined Assault** | Archives, read-only; Combined Assault maps by location name, with each mission's points | — | Combined Assault models to SOCOM II |
 | **Grand Theft Auto: San Andreas** | `.ISO` or `.IMG`, read-only | — | Models to SOCOM II (partial) |
 | **SOCOM: Fireteam Bravo** | Not tested | — | — |
 
@@ -30,6 +30,10 @@ Map, model and animation edits round-trip through save and reopen. Imported mode
 <img src="screenshots/ca_char.png" alt="A Combined Assault character asset in game" width="850">
 
 *A character asset from Combined Assault.*
+
+## SOCOM: Combined Assault (read-only)
+
+Each location is one archive on the disc, `RUN\<hash>.ZAR`. The file browser shows the location's name next to it (`055146D2.ZAR  POLAND_RURAL`). You can also open a location or one of its missions by name: `G:\RUN\WHARF` or `G:\RUN\WHARF\SP422.ZDB`. The Map Builder draws the location's world and the selected mission's points: squad starts and AI spawns, AI nav points, the markers named on the map screen, and doors and objective places. Pick another mission from **Mission** in the toolbar. Teams and mission tables are not read yet, and nothing can be edited or saved. Layouts: [Combined Assault missions](formats/ca-missions.md).
 
 ## Grand Theft Auto: San Andreas (partial)
 

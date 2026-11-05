@@ -366,5 +366,96 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
                     if (lib.U32(rec + 0x4C) == hash && lib.DecodeTexture(rec) is { } t) return t;
             return null;
         }
+
+        // ------------------------------------------------------------------ location and missions
+
+        /// <summary>
+        /// The location folder the archive holds (<c>POLAND_RURAL</c> for <c>RUN\POLAND_RURAL\…</c>), from its entries'
+        /// paths; a location archive is named by the CRC32 of <c>RUN\&lt;LOCATION&gt;</c> (<see cref="ArchiveName"/>).
+        /// Null for a single ZDB.
+        /// </summary>
+        public string? Location => Resources
+            .Select(r => r.File.Replace('/', '\\').Split('\\', StringSplitOptions.RemoveEmptyEntries))
+            .Where(p => p.Length >= 3 && p[0].Equals("RUN", StringComparison.OrdinalIgnoreCase))
+            .Select(p => p[1].ToUpperInvariant())
+            .GroupBy(l => l).OrderByDescending(g => g.Count()).Select(g => g.Key).FirstOrDefault();
+
+        /// <summary>The file name of a location's archive: CRC32 of <c>RUN\&lt;LOCATION&gt;</c> in hex, plus .ZAR.</summary>
+        public static string ArchiveName(string location) => $"{CaNames.Crc32(@"RUN\" + location.ToUpperInvariant()):X8}.ZAR";
+
+        /// <summary>A mission of the location: id (its ZDB's name, <c>MP414CTR</c>), the file, its kind (SP campaign,
+        /// MP online, IA instant action, TR training, or other) and game mode (the letters after the number).</summary>
+        public sealed record MissionInfo(string Id, string File, string Kind, string Mode);
+
+        private List<MissionInfo>? _missions;
+
+        /// <summary>The missions with AI data (a <c>mission.rdr</c>), campaign first, then by id.</summary>
+        public List<MissionInfo> Missions()
+        {
+            if (_missions != null) return _missions;
+            int Rank(string kind) => kind switch { "SP" => 0, "IA" => 1, "MP" => 2, "TR" => 3, _ => 4 };
+            return _missions = Resources.Where(r => r.Tag == "AIMm")
+                .Select(r =>
+                {
+                    string id = Path.GetFileNameWithoutExtension(r.File.Replace('\\', '/')).ToUpperInvariant();
+                    var m = System.Text.RegularExpressions.Regex.Match(id, @"^(SP|MP|IA|TR)\d+([A-Z]*)$");
+                    return new MissionInfo(id, r.File, m.Success ? m.Groups[1].Value : "other", m.Success ? m.Groups[2].Value : "");
+                })
+                .GroupBy(m => m.Id).Select(g => g.First())
+                .OrderBy(m => Rank(m.Kind)).ThenBy(m => m.Id, StringComparer.Ordinal).ToList();
+        }
+
+        /// <summary>A mission by id (case-insensitive) or null.</summary>
+        public MissionInfo? FindMission(string id) => Missions().FirstOrDefault(m => m.Id.Equals(id, StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>A mission's named point placed in the world: X / Z on its zone's grid, Y its own height.</summary>
+        public sealed record MissionPoint(string Name, string Kind, int Zone, string? Island, int CellX, int CellZ, float X, float Y, float Z);
+
+        /// <summary>
+        /// The named points of a mission (mission.rdr) in world space. Each zone belongs to one island of the mission and
+        /// is that island's AIMi grid section number (zone − the island's first zone). Kinds: <c>start</c> (s_ spawn
+        /// points and squad starts), <c>waypoint</c> (n_ AI nav points), <c>marker</c> (named on the map screen),
+        /// <c>spectator</c>, else <c>other</c> (doors, action and objective places).
+        /// </summary>
+        public List<MissionPoint> MissionPoints(string missionId)
+        {
+            var info = FindMission(missionId) ?? throw new KeyNotFoundException($"No mission {missionId} in this location");
+            var res = Resources.First(r => r.Tag == "AIMm" && r.File == info.File);
+            var mission = CaMissions.ParseMission(res.Data);
+            var grids = new Dictionary<uint, (string Name, List<CaMissions.Grid> Grids)>();
+            foreach (var r in Resources.Where(r => r.Tag == "AIMi"))
+                try { var ai = CaMissions.ParseIslandAi(r.Data); grids.TryAdd(ai.Island, (Path.GetFileNameWithoutExtension(r.Name), ai.Grids)); }
+                catch (InvalidDataException) { }
+            var list = new List<MissionPoint>();
+            foreach (var zone in mission.Zones)
+            {
+                var island = mission.Islands.FirstOrDefault(i => zone.Index >= i.FirstZone && zone.Index < i.FirstZone + i.ZoneCount);
+                CaMissions.Grid? grid = null;
+                string? islandName = null;
+                if (island != null && grids.TryGetValue(island.Hash, out var g))
+                {
+                    islandName = g.Name;
+                    int section = zone.Index - island.FirstZone;
+                    if (section < g.Grids.Count) grid = g.Grids[section];
+                }
+                foreach (var p in zone.Points)
+                {
+                    var (x, z) = CaMissions.Position(p, zone, grid);
+                    list.Add(new MissionPoint(p.Name, PointKind(p), zone.Index, islandName, p.CellX, p.CellZ, x, p.Y, z));
+                }
+            }
+            return list;
+        }
+
+        private static string PointKind(CaMissions.Point p)
+        {
+            string n = p.Name;
+            if (p.Marker) return "marker";
+            if (n.Equals("spectator", StringComparison.OrdinalIgnoreCase)) return "spectator";
+            if (n.StartsWith("s_", StringComparison.OrdinalIgnoreCase) || n.EndsWith("_Start", StringComparison.OrdinalIgnoreCase)
+                || System.Text.RegularExpressions.Regex.IsMatch(n, @"^(able|bravo)\d+$", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) return "start";
+            if (n.StartsWith("n_", StringComparison.OrdinalIgnoreCase)) return "waypoint";
+            return "other";
+        }
     }
 }
