@@ -25,6 +25,9 @@ public sealed class Socom1DiscMapTests : IDisposable
         return zed.ToBytes();
     }
 
+    /// <summary>A path written with backslashes, in this platform's separators (CI runs on Linux).</summary>
+    private static string P(string path) => path.Replace('\\', Path.DirectorySeparatorChar);
+
     private void Put(string relative, byte[] data)
     {
         string path = Path.Combine(_root, relative);
@@ -36,7 +39,7 @@ public sealed class Socom1DiscMapTests : IDisposable
     private string BuildDisc()
     {
         var four = new byte[4];
-        Put(@"RUN\MP\MP9\MP9.ZED", Zed(
+        Put(P(@"RUN\MP\MP9\MP9.ZED"), Zed(
             ("MetersPerUnit", four, 0),
             ("assetlibs", Array.Empty<byte>(), 4),
             ("//mp/mp9/clib", four, 0),
@@ -44,15 +47,15 @@ public sealed class Socom1DiscMapTests : IDisposable
             ("//mp/mp9/missing", four, 0),
             ("//mp/mp9/assetlib/mp9", four, 0),
             ("world_tree", Array.Empty<byte>(), 0)));
-        Put(@"RUN\MP\MP9\CLUTTER.ZAR", Zed(("Clutter", four, 0)));
-        Put(@"RUN\MP\MP9\ASSETLIB\MP9\MP9_MDL.ZED", Zed(("models", Array.Empty<byte>(), 0)));
-        Put(@"RUN\MP\MP9\ASSETLIB\MP9\MODELS.ZAR", Zed(("worldmodel", four, 0)));
-        Put(@"RUN\MP\MP9\ASSETLIB\MP9\MP9_TXR.ZED", Zed(("textures", Array.Empty<byte>(), 0)));
-        Put(@"RUN\MP\MP9\CLIB\CLIB_MDL.ZED", Zed(("models", Array.Empty<byte>(), 0)));
-        Put(@"RUN\MP\MP9\CLIB\MODELS.ZAR", Zed(("MESH_seal", four, 0)));
-        Put(@"RUN\COMMON\ASSETLIB\WEAPONS\WEAP_MDL.ZED", Zed(("models", Array.Empty<byte>(), 0)));
-        Put(@"RUN\COMMON\ASSETLIB\WEAPONS\MODELS.ZAR", Zed(("m4a1", four, 0)));
-        return Path.Combine(_root, @"RUN\MP\MP9");
+        Put(P(@"RUN\MP\MP9\CLUTTER.ZAR"), Zed(("Clutter", four, 0)));
+        Put(P(@"RUN\MP\MP9\ASSETLIB\MP9\MP9_MDL.ZED"), Zed(("models", Array.Empty<byte>(), 0)));
+        Put(P(@"RUN\MP\MP9\ASSETLIB\MP9\MODELS.ZAR"), Zed(("worldmodel", four, 0)));
+        Put(P(@"RUN\MP\MP9\ASSETLIB\MP9\MP9_TXR.ZED"), Zed(("textures", Array.Empty<byte>(), 0)));
+        Put(P(@"RUN\MP\MP9\CLIB\CLIB_MDL.ZED"), Zed(("models", Array.Empty<byte>(), 0)));
+        Put(P(@"RUN\MP\MP9\CLIB\MODELS.ZAR"), Zed(("MESH_seal", four, 0)));
+        Put(P(@"RUN\COMMON\ASSETLIB\WEAPONS\WEAP_MDL.ZED"), Zed(("models", Array.Empty<byte>(), 0)));
+        Put(P(@"RUN\COMMON\ASSETLIB\WEAPONS\MODELS.ZAR"), Zed(("m4a1", four, 0)));
+        return Path.Combine(_root, P(@"RUN\MP\MP9"));
     }
 
     [Fact]
@@ -62,11 +65,11 @@ public sealed class Socom1DiscMapTests : IDisposable
 
         Assert.True(pkg.IsSocom1DiscMap);
         Assert.Equal("mp9", pkg.MapNamespace);
-        Assert.EndsWith(@"ASSETLIB\MP9\MP9_MDL.ZED", pkg.Entry("MP9_GEO.ZED")!.Path);
-        Assert.EndsWith(@"ASSETLIB\MP9\MODELS.ZAR", pkg.Entry("MP9_MDL.ZED")!.Path);
-        Assert.EndsWith(@"CLIB\MODELS.ZAR", pkg.Entry("CLIB_MDL.ZED")!.Path);
-        Assert.EndsWith(@"CLIB\CLIB_MDL.ZED", pkg.Entry("CLIB_GEO.ZED")!.Path);
-        Assert.EndsWith(@"COMMON\ASSETLIB\WEAPONS\MODELS.ZAR", pkg.Entry("WEAP_MDL.ZED")!.Path);
+        Assert.EndsWith(P(@"ASSETLIB\MP9\MP9_MDL.ZED"), pkg.Entry("MP9_GEO.ZED")!.Path);
+        Assert.EndsWith(P(@"ASSETLIB\MP9\MODELS.ZAR"), pkg.Entry("MP9_MDL.ZED")!.Path);
+        Assert.EndsWith(P(@"CLIB\MODELS.ZAR"), pkg.Entry("CLIB_MDL.ZED")!.Path);
+        Assert.EndsWith(P(@"CLIB\CLIB_MDL.ZED"), pkg.Entry("CLIB_GEO.ZED")!.Path);
+        Assert.EndsWith(P(@"COMMON\ASSETLIB\WEAPONS\MODELS.ZAR"), pkg.Entry("WEAP_MDL.ZED")!.Path);
         Assert.Equal("geo", pkg.Entry("MP9_GEO.ZED")!.Kind);
         Assert.NotNull(pkg.Entry("CLUTTER.ZAR"));
         Assert.NotNull(pkg.Entry("MP9.ZED"));
@@ -88,8 +91,8 @@ public sealed class Socom1DiscMapTests : IDisposable
     public void A_socom2_loose_folder_is_not_taken_for_a_socom1_map()
     {
         var four = new byte[4];
-        Put(@"M51\M51.ZED", Zed(("assetlibs", Array.Empty<byte>(), 1), ("//sp/m51/flib", four, 0)));
-        Put(@"M51\M51_GEO.ZED", Zed(("models", Array.Empty<byte>(), 0)));
+        Put(P(@"M51\M51.ZED"), Zed(("assetlibs", Array.Empty<byte>(), 1), ("//sp/m51/flib", four, 0)));
+        Put(P(@"M51\M51_GEO.ZED"), Zed(("models", Array.Empty<byte>(), 0)));
         var pkg = ZipperPackage.Open(Path.Combine(_root, "M51"));
         Assert.False(pkg.IsSocom1DiscMap);
         Assert.NotNull(pkg.Entry("M51_GEO.ZED"));
@@ -99,12 +102,12 @@ public sealed class Socom1DiscMapTests : IDisposable
     public void Blank_files_from_a_damaged_disc_copy_are_named_not_misread()
     {
         string map = BuildDisc();
-        Put(@"RUN\MP\MP9\CLIB\MODELS.ZAR", new byte[4096]);
+        Put(P(@"RUN\MP\MP9\CLIB\MODELS.ZAR"), new byte[4096]);
         var pkg = ZipperPackage.Open(map);
-        Assert.Single(pkg.BlankFiles, p => p.EndsWith(@"CLIB\MODELS.ZAR", StringComparison.OrdinalIgnoreCase));
+        Assert.Single(pkg.BlankFiles, p => p.EndsWith(P(@"CLIB\MODELS.ZAR"), StringComparison.OrdinalIgnoreCase));
 
         // A blank map .ZED in a SOCOM 1 folder layout is reported as damage rather than opened as a loose folder.
-        Put(@"RUN\MP\MP9\MP9.ZED", new byte[1696]);
+        Put(P(@"RUN\MP\MP9\MP9.ZED"), new byte[1696]);
         var ex = Assert.Throws<InvalidDataException>(() => ZipperPackage.Open(map));
         Assert.Contains("damaged", ex.Message);
     }
@@ -120,8 +123,8 @@ public sealed class Socom1DiscMapTests : IDisposable
 
         var written = PackageSave.Write(pkg, new[] { "MP9_GEO.ZED", "WEAP_MDL.ZED" }, output);
 
-        string geo = Path.Combine(output, @"RUN\MP\MP9\ASSETLIB\MP9\MP9_MDL.ZED");
-        string weapons = Path.Combine(output, @"RUN\COMMON\ASSETLIB\WEAPONS\MODELS.ZAR");
+        string geo = Path.Combine(output, P(@"RUN\MP\MP9\ASSETLIB\MP9\MP9_MDL.ZED"));
+        string weapons = Path.Combine(output, P(@"RUN\COMMON\ASSETLIB\WEAPONS\MODELS.ZAR"));
         Assert.Equal(new[] { geo, weapons }, written);
         Assert.Equal(edited, File.ReadAllBytes(geo));
         Assert.Equal(edited, File.ReadAllBytes(weapons));
