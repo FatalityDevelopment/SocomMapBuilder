@@ -37,6 +37,7 @@ namespace MapBuilder.Server.Services.Assets
                     c.VertexCount, triangleCount = c.Triangles.Length / 3, hasColors = c.Colors != null,
                     positions = arrays ? F(c.Positions) : null,
                     uvs = arrays ? F(c.Uvs) : null,
+                    waterMotion = arrays && c.WaterMotion != null ? F(c.WaterMotion) : null,
                     normals = arrays ? F(c.Normals) : null,
                     colors = arrays && c.Colors != null ? Convert.ToBase64String(c.Colors) : null,
                     triangles = arrays ? I(c.Triangles) : null,

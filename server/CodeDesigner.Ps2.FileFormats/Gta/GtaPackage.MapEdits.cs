@@ -1,5 +1,5 @@
 using System.Globalization;
-using System.Text;
+
 
 namespace CodeDesigner.Ps2.FileFormats.Gta;
 
@@ -12,13 +12,17 @@ public sealed partial class GtaPackage
 {
     // Stream IPL disc-style path (DATA/MAPS/LA/lae2_stream5.ipl) -> its IMG and entry.
     private readonly Dictionary<string, (string Archive, string Entry)> _streamFiles = new(StringComparer.OrdinalIgnoreCase);
-    // The disc's own record of every placement moved in this session, by (file, row).
-    private readonly Dictionary<(string File, int Row), Placement> _placementOriginals = new();
+    // Null originals are rows added in this session. File and row are stable across inserts and deletes.
+    private readonly Dictionary<(string File, int Row), Placement?> _placementOriginals = new();
     private Dictionary<(string File, int Row), int>? _placementIndex;
+    private Dictionary<string, MapArea>? _originalAreas;
+    private Dictionary<(string File, int Row), int>? _sourceOrder;
+    // New rows sort after the original records. Their physical ordinal is assigned on save.
+    private const int FirstAddedRow = 1_000_000_000;
+    private int _nextAddedRow = FirstAddedRow;
 
     private static (string, int) Key(string file, int row) => (file.ToUpperInvariant(), row);
 
-    /// <summary>A placement by its IPL file (as <see cref="Placement.File"/>) and row; null when there is none.</summary>
     public Placement? FindPlacement(string file, int row)
     {
         var all = Placements;
@@ -26,36 +30,112 @@ public sealed partial class GtaPackage
         return _placementIndex.TryGetValue(Key(file, row), out int at) ? all[at] : null;
     }
 
-    /// <summary>Places a placement by a new Y-up matrix (rotation and translation only: IPLs hold no scale).</summary>
+    private static void ValidatePlacementMatrix(float[] matrix)
+    {
+        if (matrix.Length != 16 || matrix.Any(v => !float.IsFinite(v))) throw new ArgumentException("The matrix must be 16 finite numbers");
+        var g = GameTransform(matrix);
+        var rigid = Transform(g.X, g.Y, g.Z, g.Qx, g.Qy, g.Qz, g.Qw);
+        if (rigid.Where((v, i) => Math.Abs(v - matrix[i]) > .001f).Any())
+            throw new NotSupportedException("GTA placements cannot be scaled or sheared (IPLs store a position and a rotation).");
+    }
+
     public Placement MovePlacement(string file, int row, float[] matrix)
     {
-        if (matrix.Length != 16 || matrix.Take(15).Any(v => !float.IsFinite(v))) throw new ArgumentException("The matrix must be 16 finite numbers");
-        for (int c = 0; c < 3; c++)
-        {
-            float len = MathF.Sqrt(matrix[c * 4] * matrix[c * 4] + matrix[c * 4 + 1] * matrix[c * 4 + 1] + matrix[c * 4 + 2] * matrix[c * 4 + 2]);
-            if (MathF.Abs(len - 1) > 0.01f) throw new NotSupportedException("GTA placements cannot be scaled (IPLs store a position and a rotation); move or turn them instead.");
-        }
+        ValidatePlacementMatrix(matrix);
         var p = FindPlacement(file, row) ?? throw new KeyNotFoundException($"No placement {file} row {row}");
-        var key = Key(file, row);
-        _placementOriginals.TryAdd(key, p);
-        var original = _placementOriginals[key];
-        Placement moved;
-        // Back to the disc's own matrix (an undo): the disc's record, exactly.
-        if (original.Matrix.AsSpan().SequenceEqual(matrix)) { moved = original; _placementOriginals.Remove(key); }
-        else
-        {
-            var g = GameTransform(matrix);
-            // Keep the stored values (re-derived through Transform) so the scene shows exactly what a save writes.
-            moved = p with { X = g.X, Y = g.Y, Z = g.Z, Matrix = Transform(g.X, g.Y, g.Z, g.Qx, g.Qy, g.Qz, g.Qw) };
-        }
-        _placements![_placementIndex![key]] = moved;
-        _lodRows = null;
+        var g = GameTransform(matrix);
+        var moved = p with { X = g.X, Y = g.Y, Z = g.Z, Matrix = Transform(g.X, g.Y, g.Z, g.Qx, g.Qy, g.Qz, g.Qw) };
+        if (_placementOriginals.GetValueOrDefault(Key(file, row)) is { } original && original.Matrix.AsSpan().SequenceEqual(matrix))
+            moved = original;
+        SetPlacement(file, row, moved);
         return moved;
     }
 
-    /// <summary>The IPL files (text and stream, as <see cref="Placement.File"/>) with placements moved from the disc.</summary>
-    public IReadOnlyList<string> EditedPlacementFiles => _placementOriginals.Values
-        .Select(p => p.File).Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToList();
+    public static bool CanPlace(Model m) => m.Kind == "prop" && m.Id >= 0 &&
+        (m.Archive.Equals("GTA3.IMG", StringComparison.OrdinalIgnoreCase) || m.Archive.Equals("GTA_INT.IMG", StringComparison.OrdinalIgnoreCase));
+
+    public Placement AddPlacement(string area, Model model, float[] matrix, Placement? template = null)
+    {
+        ValidatePlacementMatrix(matrix);
+        if (!CanPlace(model)) throw new ArgumentException("Choose a world prop with a defined IDE id.");
+        bool copyFlags = template != null;
+        template ??= Placements.Where(p => p.AreaId.Equals(area, StringComparison.OrdinalIgnoreCase) && !p.IsLod)
+            .MinBy(p => Math.Pow(p.Matrix[12] - matrix[12], 2) + Math.Pow(p.Matrix[13] - matrix[13], 2) + Math.Pow(p.Matrix[14] - matrix[14], 2));
+        template ??= Placements.FirstOrDefault(p => p.AreaId.Equals(area, StringComparison.OrdinalIgnoreCase))
+            ?? _placementOriginals.Values.FirstOrDefault(p => p?.AreaId.Equals(area, StringComparison.OrdinalIgnoreCase) == true);
+        if (template == null || !template.AreaId.Equals(area, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("Pick a map area and a placement within it.");
+        // A streamed INST stores only the IDE id. Check the interior-dependent archive resolution.
+        var matches = Models.Where(m => m.Id == model.Id && m.Kind is "prop" or "vehicle" or "character" or "weapon").ToList();
+        string preferred = template.IsInterior ? "GTA_INT.IMG" : "GTA3.IMG";
+        var resolved = matches.FirstOrDefault(m => m.Archive.Equals(preferred, StringComparison.OrdinalIgnoreCase)) ?? matches.First();
+        if (resolved != model) throw new ArgumentException($"IDE id {model.Id} resolves to {resolved.Name} in this area.");
+        var g = GameTransform(matrix);
+        int interior = copyFlags ? template.Interior : template.Interior & 255;
+        var added = new Placement(template.Zone, template.File, checked(_nextAddedRow++), model.Id, model.Name, interior,
+            g.X, g.Y, g.Z, Transform(g.X, g.Y, g.Z, g.Qx, g.Qy, g.Qz, g.Qw), -1, model);
+        SetPlacement(added.File, added.Row, added);
+        return added;
+    }
+
+    // Replays a placement change, also used by batch rollback and undo/redo.
+    public void SetPlacement(string file, int row, Placement? value)
+    {
+        var key = Key(file, row);
+        var previous = FindPlacement(file, row);
+        if (previous == null && value == null) return;
+        _originalAreas ??= MapAreas.ToDictionary(a => a.Id, StringComparer.OrdinalIgnoreCase);
+        // Preserve draw and paging order when undoing a delete or rolling back a rejected batch.
+        if (previous == null || value == null) _sourceOrder ??= new(_placementIndex!);
+        _placementOriginals.TryAdd(key, previous);
+        var original = _placementOriginals[key];
+        if (value == null && original == null || original != null && value != null && original.Matrix.AsSpan().SequenceEqual(value.Matrix))
+        {
+            value = original;
+            _placementOriginals.Remove(key);
+        }
+        if (previous == null)
+        {
+            var sourceOrder = _sourceOrder!;
+            int order = sourceOrder.GetValueOrDefault(key, row);
+            int next = _placements!.FindIndex(p => sourceOrder.GetValueOrDefault(Key(p.File, p.Row), p.Row) > order);
+            if (next < 0) _placements.Add(value!);
+            else _placements.Insert(next, value!);
+        }
+        else if (value == null) _placements!.RemoveAt(_placementIndex![key]);
+        else _placements![_placementIndex![key]] = value;
+        _lodRows = null;
+        _areas = null;
+        if (previous == null || value == null)
+        {
+            _placementIndex = null;
+            MarkLods(_placements!, (previous ?? value!).Zone);
+        }
+    }
+
+    // A LOD index counts physical INST rows in the text IPL. Project the live session IDs at write time.
+    private Dictionary<string, int[]> DeletedTextRows() => _placementOriginals.Values
+        .OfType<Placement>().Where(p => !_streamFiles.ContainsKey(p.File) && FindPlacement(p.File, p.Row) == null)
+        .GroupBy(p => p.Zone, StringComparer.OrdinalIgnoreCase)
+        .ToDictionary(g => g.Key, g => g.Select(p => p.Row).Order().ToArray(), StringComparer.OrdinalIgnoreCase);
+
+    private static int SavedLod(Placement p, Dictionary<string, int[]> deleted)
+    {
+        if (p.LodRow < 0 || !deleted.TryGetValue(p.Zone, out var rows)) return p.LodRow;
+        int index = Array.BinarySearch(rows, p.LodRow);
+        return index >= 0 ? -1 : p.LodRow - ~index;
+    }
+
+    public IReadOnlyList<string> EditedPlacementFiles
+    {
+        get
+        {
+            var deleted = DeletedTextRows();
+            var files = _placementOriginals.Select(kv => (kv.Value ?? FindPlacement(kv.Key.File, kv.Key.Row)!).File);
+            if (deleted.Count > 0) files = files.Concat(Placements.Where(p => SavedLod(p, deleted) != p.LodRow).Select(p => p.File));
+            return files.Distinct(StringComparer.OrdinalIgnoreCase).Order(StringComparer.OrdinalIgnoreCase).ToList();
+        }
+    }
 
     /// <summary>Where a placement file lives: "GTA3.IMG/lae2_stream5.ipl" for a stream IPL, else its disc path.</summary>
     public string PlacementFileLabel(string file) => _streamFiles.TryGetValue(file, out var s) ? $"{s.Archive}/{s.Entry}" : file;
@@ -98,47 +178,7 @@ public sealed partial class GtaPackage
     // Shortest text that reads back as the same float (no exponent: tiny values are written as 0).
     private static string Num(float v) => (MathF.Abs(v) < 1e-6f ? 0f : v).ToString("R", CultureInfo.InvariantCulture);
 
-    /// <summary>An edited IPL's bytes: a text IPL with its moved INST lines rewritten (every other byte kept), or a
-    /// binary stream IPL with its moved 40-byte records patched.</summary>
-    public byte[] PlacementFileBytes(string file)
-    {
-        var moved = Placements.Where(p => p.File.Equals(file, StringComparison.OrdinalIgnoreCase) && _placementOriginals.ContainsKey(Key(p.File, p.Row)))
-            .ToDictionary(p => p.Row);
-        if (_streamFiles.TryGetValue(file, out var stream))
-        {
-            var data = _imgByArchive[stream.Archive].Read(stream.Entry) ?? throw new KeyNotFoundException($"{stream.Entry} is not in {stream.Archive}");
-            int start = BitConverter.ToInt32(data, 28);
-            foreach (var (row, p) in moved)
-            {
-                var g = GameTransform(p.Matrix);
-                int at = start + 40 * row;
-                foreach (var (offset, value) in new[] { (0, g.X), (4, g.Y), (8, g.Z), (12, g.Qx), (16, g.Qy), (20, g.Qz), (24, g.Qw) })
-                    BitConverter.TryWriteBytes(data.AsSpan(at + offset, 4), value);
-            }
-            return data;
-        }
-        var source = _disc.GetValueOrDefault(file) ?? throw new KeyNotFoundException($"{file} is not on the disc");
-        string text = Encoding.ASCII.GetString(source.Read());
-        var lines = text.Split('\n');
-        string? section = null;
-        int inst = 0;
-        for (int i = 0; i < lines.Length; i++)
-        {
-            // The same reading as Ide(): comments stripped, blank lines skipped, "end" closes a section.
-            string line = lines[i].Split('#')[0].Trim();
-            if (line.Length == 0) continue;
-            if (section == null) { section = line.ToLowerInvariant(); continue; }
-            if (line.Equals("end", StringComparison.OrdinalIgnoreCase)) { section = null; continue; }
-            if (section != "inst") continue;
-            int row = inst++;
-            if (!moved.TryGetValue(row, out var p)) continue;
-            var c = line.Split(',').Select(x => x.Trim()).ToArray();
-            var g = GameTransform(p.Matrix);
-            var values = new[] { c[0], c[1], c[2], Num(g.X), Num(g.Y), Num(g.Z), Num(g.Qx), Num(g.Qy), Num(g.Qz), Num(g.Qw) }.Concat(c.Skip(10));
-            lines[i] = string.Join(", ", values) + (lines[i].EndsWith('\r') ? "\r" : "");
-        }
-        return Encoding.ASCII.GetBytes(string.Join('\n', lines));
-    }
+    // IPL encoders live in GtaPackage.PlacementFiles.cs.
 
     /// <summary>
     /// Writes every edited IPL under <paramref name="folder"/> at its disc path: text IPLs (DATA/MAPS/...), and for
@@ -148,11 +188,12 @@ public sealed partial class GtaPackage
     public IReadOnlyList<string> SaveMapEdits(string folder)
     {
         var files = EditedPlacementFiles;
-        if (files.Count == 0) throw new InvalidOperationException("No placements were moved.");
+        if (files.Count == 0) throw new InvalidOperationException("No placements were edited.");
         var written = new List<string>();
         foreach (string file in files.Where(f => !_streamFiles.ContainsKey(f)))
         {
             string path = Path.Combine(folder, file.Replace('/', Path.DirectorySeparatorChar));
+            if (IsSourceFile(path)) throw new InvalidOperationException("Choose a separate folder for the edited map files.");
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             File.WriteAllBytes(path, PlacementFileBytes(file));
             written.Add(path);

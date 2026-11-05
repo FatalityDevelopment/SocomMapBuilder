@@ -58,6 +58,7 @@ namespace MapBuilder.Server.Services
             reg.Add(c => Assets.SwbfAssetService.Route(c, "ASSET_LIST_TEXTURES") ?? WithSession(c.AssetSession, "ASSET_LIST_TEXTURES", s => ListTextures(s)), "ASSET_LIST_TEXTURES");
             reg.Add(c => WithSession(c.AssetSession, "ASSET_LIST_PALETTES", s => ListPalettes(s)), "ASSET_LIST_PALETTES");
             reg.Add(c => CaRoute(c, "ASSET_MODEL_MESH") ?? WithSession(c.AssetSession, "ASSET_MODEL_MESH", s => Mesh(s, c.AssetArchive, c.AssetName, c.AssetJson)), "ASSET_MODEL_MESH");
+            reg.Add(c => Assets.GtaAssetService.Route(c, "ASSET_MODEL_MESH_BATCH") ?? Responses.Error("A GTA session is required for mesh batches."), "ASSET_MODEL_MESH_BATCH");
             reg.Add(c => CaRoute(c, "ASSET_MAP_SCENE") ?? WithSession(c.AssetSession, "ASSET_MAP_SCENE", s => MapScene(s, c.AssetJson)), "ASSET_MAP_SCENE");
             reg.Add(c => CaRoute(c, "ASSET_MAP_POINTS") ?? WithSession(c.AssetSession, "ASSET_MAP_POINTS", s => MapPointsOf(s)), "ASSET_MAP_POINTS");
             reg.Add(c => CaRoute(c, "ASSET_LIST_ANIMATIONS") ?? WithSession(c.AssetSession, "ASSET_LIST_ANIMATIONS", s => ListAnimations(s, c.AssetJson)), "ASSET_LIST_ANIMATIONS");

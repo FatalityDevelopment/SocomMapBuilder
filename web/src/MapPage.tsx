@@ -61,8 +61,8 @@ export function MapPage() {
   const battlefront = status?.game === 'Star Wars: Battlefront';
   const gta = status?.game === 'GTA: San Andreas';
   const viewOnly = mapViewOnly(status);
-  // CA, Battlefront and GTA placements move and turn; new ones cannot be added.
-  const canPlace = !!status && !viewOnly && !ca && !battlefront && !gta;
+  const socomTools = !!status && !viewOnly && !ca && !battlefront && !gta;
+  const canPlace = socomTools || (gta && !viewOnly && !status?.mission?.startsWith('lod-'));
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   // The Map tab's check: rerun while the tab is open whenever the session changes.
   const [check, setCheck] = useState<MapValidation | null>(null);
@@ -205,7 +205,7 @@ export function MapPage() {
     try { setPrefabs((await client.listPrefabs()).prefabs); }
     catch (err) { say(`Could not list prefabs: ${errText(err)}`, true); }
   };
-  useEffect(() => { if (canPlace) { void refreshPrefabs(); } }, [status?.session, canPlace]);
+  useEffect(() => { if (socomTools) { void refreshPrefabs(); } }, [status?.session, socomTools]);
 
   const pickModel = (m: ModelSummary) => {
     setPlacePrefab(null);
@@ -248,14 +248,14 @@ export function MapPage() {
   const dropAsset = async (e: React.DragEvent) => {
     const raw = e.dataTransfer.getData(ASSET_DRAG_TYPE);
     const vp = viewportRef.current;
-    if (!raw || !vp || !canPlace) { return; }
+    if (!raw || !vp || !canPlace || (gta && (locked.has('reference') || hidden.layers.has('reference')))) { return; }
     e.preventDefault();
     const drag = JSON.parse(raw) as AssetDrag;
     const at = vp.placementAt(e.clientX, e.clientY);
     if (!at) { say('Drop onto the map: nothing is under that point.', true); return; }
-    if (drag.kind === 'prefab') { await place(at, { prefab: drag.name }); return; }
+    if (drag.kind === 'prefab') { if (!socomTools) { return; } await place(at, { prefab: drag.name }); return; }
     const model = models.find(m => m.archive === drag.archive && m.name === drag.name);
-    if (model) { setPlacePrefab(null); setPlaceModel(model); await place(at, { model }); }
+    if (model && (!gta || model.canPlace)) { setPlacePrefab(null); setPlaceModel(model); await place(at, { model }); }
   };
 
   // A prop's model in the Model Editor: the same package (and session) with that model selected.
@@ -271,7 +271,7 @@ export function MapPage() {
   // Copies a model from another package and selects it for placement.
   const importFromPackage = async () => {
     const session = client.session;
-    if (!session || !canPlace) { return; }
+    if (!session || !socomTools) { return; }
     const result = await host.importModel(session);
     if (!result) { return; }
     const list = await client.listModels();
@@ -471,17 +471,16 @@ export function MapPage() {
   // ------------------------------------------------------------------ view
 
   const setTool = (next: MapTool) => {
-    if (!canPlace && (next === 'place' || next === 'paint')) { return; }
+    if ((!canPlace && next === 'place') || (!socomTools && next === 'paint') || (gta && next === 'scale')) { return; }
     setToolState(next);
     if (viewportRef.current) { viewportRef.current.tool = next; }
     if (next === 'place' || next === 'paint') { setPropTab('place'); }
   };
 
   useEffect(() => {
-    if (!ca) { return; }
-    if (tool === 'place' || tool === 'paint') { setTool('select'); }
-    if (propTab === 'place' || propTab === 'actions') { setPropTab('item'); }
-  }, [ca, propTab, tool]);
+    if ((tool === 'place' && !canPlace) || (tool === 'paint' && !socomTools) || (tool === 'scale' && gta)) { setTool('select'); }
+    if ((ca && (propTab === 'place' || propTab === 'actions')) || (gta && (propTab === 'actions' || propTab === 'mission'))) { setPropTab('item'); }
+  }, [ca, gta, canPlace, socomTools, propTab, tool]);
 
   const setShading = (s: Shading) => {
     setShadingState(s);
@@ -672,11 +671,11 @@ export function MapPage() {
       id: 'file', label: 'File', items: [
         { label: 'Open package…', shortcut: SHORTCUTS.open.label, action: () => void openDialog() },
         { label: 'Reload', action: () => void retryScene(), disabled: () => !status || busy || loading },
-        { label: 'Import from package…', action: () => void importFromPackage(), disabled: () => !canPlace || busy },
+        { label: 'Import from package…', action: () => void importFromPackage(), disabled: () => !socomTools || busy },
         { separator: true, label: '' },
         { label: 'Save copy…', shortcut: SHORTCUTS.save.label, action: () => void saveCopy(), disabled: () => busy || loading || !dirtyCount },
         { label: 'Save to disc image…', action: () => void saveDisc(), disabled: () => busy || loading || !dirtyCount },
-        { label: 'Export memory-card pack…', action: () => void exportPack(), disabled: () => !canPlace || !dirtyCount },
+        { label: 'Export memory-card pack…', action: () => void exportPack(), disabled: () => !socomTools || !dirtyCount },
       ],
     },
     {
@@ -684,8 +683,8 @@ export function MapPage() {
         { label: status?.canUndo ? `Undo ${status.canUndo}` : 'Undo', shortcut: SHORTCUTS.undo.label, action: () => void history(true), disabled: () => busy || loading || !status?.canUndo },
         { label: status?.canRedo ? `Redo ${status.canRedo}` : 'Redo', shortcut: SHORTCUTS.redo.label, action: () => void history(false), disabled: () => busy || loading || !status?.canRedo },
         { separator: true, label: '' },
-        { label: 'Copy clutter', shortcut: SHORTCUTS.copy.label, action: copySelection, disabled: () => !canPlace || !movableCount },
-        { label: 'Paste clutter', shortcut: SHORTCUTS.paste.label, action: () => void paste(), disabled: () => !canPlace || busy },
+        { label: 'Copy clutter', shortcut: SHORTCUTS.copy.label, action: copySelection, disabled: () => !socomTools || !movableCount },
+        { label: 'Paste clutter', shortcut: SHORTCUTS.paste.label, action: () => void paste(), disabled: () => !socomTools || busy },
         { separator: true, label: '' },
         { label: 'Duplicate', shortcut: SHORTCUTS.duplicate.label, action: () => void duplicateSelection(), disabled: () => !canPlace || !movableCount },
         { label: 'Delete', shortcut: SHORTCUTS.delete.label, action: () => void deleteSelection(), disabled: () => !canPlace || !movableCount },
@@ -755,8 +754,8 @@ export function MapPage() {
     save: () => void saveCopy(),
     open: () => void openDialog(),
     // Without a selection / clipboard the browser keeps Ctrl+C / Ctrl+V (copying the status text, say).
-    copy: () => { if (!canPlace || !selection.length) { return false; } copySelection(); },
-    paste: () => { if (!canPlace || !clipboardRef.current.length) { return false; } void paste(); },
+    copy: () => { if (!socomTools || !selection.length) { return false; } copySelection(); },
+    paste: () => { if (!socomTools || !clipboardRef.current.length) { return false; } void paste(); },
     front: () => void view('front'),
     right: () => void view('right'),
     top: () => void view('top'),
@@ -841,9 +840,9 @@ export function MapPage() {
   useEffect(() => () => { viewportRef.current?.dispose(); viewportRef.current = null; }, []);
 
   useEffect(() => {
-    viewportRef.current?.setPlacementOptions({ yaw: placeYaw, scale: placeScale, randomYaw, randomScale,
-      minScale: minPlaceScale, maxScale: maxPlaceScale, alignSurface });
-  }, [placeYaw, placeScale, randomYaw, randomScale, minPlaceScale, maxPlaceScale, alignSurface]);
+    viewportRef.current?.setPlacementOptions({ yaw: placeYaw, scale: gta ? 1 : placeScale, randomYaw, randomScale: !gta && randomScale,
+      minScale: minPlaceScale, maxScale: maxPlaceScale, alignSurface }, gta ? 'reference' : 'clutter');
+  }, [gta, placeYaw, placeScale, randomYaw, randomScale, minPlaceScale, maxPlaceScale, alignSurface]);
 
   useEffect(() => {
     let cancelled = false;
@@ -930,7 +929,7 @@ export function MapPage() {
 
   return (
     <div className="me-app mp-app has-header" onPointerDown={e => { if (!(e.target as HTMLElement).closest('.me-menu')) { setOpenMenu(null); } }}>
-      <PageHeader icon="globe" title="Map Builder" subtitle={ca ? 'Combined Assault maps and missions' : battlefront ? 'Star Wars: Battlefront maps: move props, command posts and vehicle spawns' : gta ? 'GTA: San Andreas map areas: move and turn buildings and props' : 'Props, clutter and spawn points of SOCOM II maps'} />
+      <PageHeader icon="globe" title="Map Builder" subtitle={ca ? 'Combined Assault maps and missions' : battlefront ? 'Star Wars: Battlefront maps: move props, command posts and vehicle spawns' : gta ? 'GTA: San Andreas buildings and props' : 'Props, clutter and spawn points of SOCOM II maps'} />
       <MenuBar {...menuBarProps} />
       {shortcutsOpen && <ShortcutReference onClose={() => setShortcutsOpen(false)} />}
       {paletteOpen && <CommandPalette commands={commandsFromMenus(menus)} onClose={() => setPaletteOpen(false)} />}
@@ -943,6 +942,12 @@ export function MapPage() {
             </select>
           </label>
         )}
+        {gta && <label className="me-toggle" title="Show placements active at this hour">
+          Time <select aria-label="Scene hour" value={mapSession.sceneHour} disabled={busy || loading}
+            onChange={e => void mapSession.pickHour(Number(e.target.value))}>
+            {Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>)}
+          </select>
+        </label>}
         <div className="me-seg" title={`Shading (${SHORTCUTS.shading.label} cycles)`}>
           {SHADINGS.map(s => (
             <button key={s.id} className={shading === s.id ? 'on' : ''} onClick={() => setShading(s.id)}>{s.label}</button>
@@ -1002,7 +1007,9 @@ export function MapPage() {
       <div className="me-body">
         <aside className="me-assets">
           <AssetBrowser
-            models={models}
+            key={gta ? 'gta' : 'package'}
+            models={gta ? models.filter(m => m.canPlace) : models}
+            nativePlacements={gta}
             prefabs={prefabs}
             selectedModel={placePrefab ? null : placeModel}
             selectedPrefab={placePrefab?.name ?? null}
@@ -1019,7 +1026,7 @@ export function MapPage() {
           />
         </aside>
         <nav className="me-tools">
-          {TOOLS.filter(t => !ca || (t.id !== 'place' && t.id !== 'paint')).map(t => (
+          {TOOLS.filter(t => (!gta || t.id !== 'scale') && (t.id !== 'paint' || socomTools) && (t.id !== 'place' || canPlace)).map(t => (
             <button key={t.id} className={`me-tool${tool === t.id ? ' on' : ''}`} onClick={() => setTool(t.id)} title={`${t.label} (${t.key})`}>
               <span className="me-tool-glyph">{t.glyph}</span>
             </button>
@@ -1076,7 +1083,7 @@ export function MapPage() {
             pickPoint={pickPoint}
           />
           <PropsPanel
-            actions={status && canPlace ? <MapActionsPanel key={status.session} data={actionData} error={actionError} onFocusNode={focusNode}
+            actions={status && socomTools ? <MapActionsPanel key={status.session} data={actionData} error={actionError} onFocusNode={focusNode}
               revision={status.revision} client={client} selected={single?.geoIndex ?? actionNode} busy={busy || loading} edit={edit} path={status.path} model={request?.path === status.path ? request.actionsFor : undefined} /> :
               <div className="me-note">Open an editable SOCOM II map to manage its actions.</div>}
             mission={status && (!viewOnly || !!status.missions?.length) ? <MissionPanel tables={!ca || tables?.missionId === status.mission ? tables : null}

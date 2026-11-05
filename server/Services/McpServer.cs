@@ -481,7 +481,8 @@ namespace MapBuilder.Server.Services
                 case "deleteInstance": return ("map", null, null);
                 case "movePoint": return ("map", null, new { point = Str(op, "name") });
                 case "setPoint": return ("map", null, new { point = Str(op, "newName") ?? Str(op, "name") });
-                case "placeInstance": return ("map", null, new { geoIndex = R("newGeoIndex") });
+                case "placeInstance": return ("map", null, new { geoIndex = R("newGeoIndex"),
+                    instance = result.ValueKind == JsonValueKind.Object ? Str(result, "newInstance") : null });
                 case "placePrefab":
                 {
                     JsonElement first = result.ValueKind == JsonValueKind.Object && result.TryGetProperty("results", out var pr) && pr.ValueKind == JsonValueKind.Array && pr.GetArrayLength() > 0 ? pr[0] : default;
@@ -653,12 +654,13 @@ namespace MapBuilder.Server.Services
                 "name / path substring; limit defaults to 500. When more match, the answer's nextOffset pages on (pass it as offset). " +
                 "Risk: read-only.",
                 true, Schema(new[] { "session" }, session, E("kind", "Optional kind.", "model", "reference", "visuals", "clutter"),
-                    P("query", "string", "Optional model name or scene path substring."), N("limit", "integer", "Maximum instances (default 500).", minimum: 1, maximum: 5000),
+                    P("query", "string", "Optional model name or scene path substring."), N("hour", "integer", "GTA scene hour (default noon).", minimum: 0, maximum: 23),
+                    N("limit", "integer", "Maximum instances (default 500).", minimum: 1, maximum: 5000),
                     N("offset", "integer", "Skip this many matching instances (from a previous answer's nextOffset).", minimum: 0)),
                 a => FromCommand(new CommandMessage
                 {
                     Command = "ASSET_MAP_SCENE", AssetSession = Session(a),
-                    AssetJson = JsonSerializer.Serialize(new { kind = Str(a, "kind"), query = Str(a, "query"), limit = IntOpt(a, "limit"), offset = IntOpt(a, "offset") }, Json),
+                    AssetJson = JsonSerializer.Serialize(new { kind = Str(a, "kind"), query = Str(a, "query"), limit = IntOpt(a, "limit"), offset = IntOpt(a, "offset"), hour = IntOpt(a, "hour") }, Json),
                 }, d => d.TryGetProperty("instances", out var i) ? $"{i.GetArrayLength()} instance(s)" + (d.TryGetProperty("nextOffset", out var n) && n.ValueKind == JsonValueKind.Number ? $", more from {n.GetInt32()}" : "") : null!));
 
             AddSync("assets_validate", "Check map",
@@ -785,7 +787,9 @@ namespace MapBuilder.Server.Services
                 "- placeInstance {model, position, yaw?, scale?, matrix?, name?, templateGeoIndex?} (a new placed reference of any " +
                 "package model, e.g. a crate, turret or vehicle; copied from the placed reference nearest the position unless " +
                 "templateGeoIndex picks one; answers newGeoIndex)\n" +
-                "- deleteInstance {geoIndex}\n" +
+                "- On a GTA map, placeInstance {model, archive?, matrix | position, templateInstance?} adds a prop and returns newInstance. " +
+                "moveInstance {instance, matrix | position, followLod?} moves its dedicated LOD by default.\n" +
+                "- deleteInstance {geoIndex}, or {instance} on a GTA map\n" +
                 "- movePoint {name, position:[x,y,z]} (an AIMAPS point; snaps to its grid cell)\n" +
                 "- setPoint {name, newName?, team?, kind?: start|waypoint|other, position?} (changes a point in place; points " +
                 "cannot be added or removed: their table sits mid-file)\n" +

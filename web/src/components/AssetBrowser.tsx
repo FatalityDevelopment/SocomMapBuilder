@@ -27,6 +27,7 @@ interface AssetBrowserProps {
   onRefreshPrefabs: () => void;
   onImport: () => void;
   readOnly: boolean;
+  nativePlacements?: boolean;
 }
 
 export function AssetBrowser(p: AssetBrowserProps) {
@@ -35,7 +36,7 @@ export function AssetBrowser(p: AssetBrowserProps) {
   const [kinds, setKinds] = useState<Set<string>>(() => new Set(['prop', 'library']));
   const [naming, setNaming] = useState<string | null>(null);
   const q = query.toLowerCase();
-  const models = p.models.filter(m => kinds.has(m.kind) && (!q || m.name.toLowerCase().includes(q))).slice(0, 600);
+  const models = p.models.filter(m => (p.nativePlacements || kinds.has(m.kind)) && (!q || m.name.toLowerCase().includes(q))).slice(0, 600);
   const prefabs = p.prefabs.filter(f => !q || f.name.toLowerCase().includes(q) || (f.models ?? []).some(m => m.toLowerCase().includes(q)));
   const toggleKind = (k: string) => setKinds(prev => { const next = new Set(prev); if (next.has(k)) { next.delete(k); } else { next.add(k); } return next; });
 
@@ -43,14 +44,14 @@ export function AssetBrowser(p: AssetBrowserProps) {
     <div className="mb-assets">
       <div className="me-panel-title">
         <span>Assets</span>
-        <button className="lm-tool-btn mb-assets-import" disabled={p.readOnly} onClick={p.onImport} title="Copy a model from another package into this one">Import…</button>
+        {!p.nativePlacements && <button className="lm-tool-btn mb-assets-import" disabled={p.readOnly} onClick={p.onImport} title="Copy a model from another package into this one">Import…</button>}
       </div>
-      <div className="me-kinds">
+      {!p.nativePlacements && <div className="me-kinds">
         <button className={`me-chip${shelf === 'models' ? ' active' : ''}`} onClick={() => setShelf('models')}>Models</button>
         <button className={`me-chip${shelf === 'prefabs' ? ' active' : ''}`} onClick={() => { setShelf('prefabs'); p.onRefreshPrefabs(); }}>Prefabs ({p.prefabs.length})</button>
-      </div>
+      </div>}
       <input className="me-search" type="text" placeholder={shelf === 'models' ? 'Filter models…' : 'Filter prefabs…'} value={query} onChange={e => setQuery(e.target.value)} />
-      {shelf === 'models' && (
+      {!p.nativePlacements && shelf === 'models' && (
         <div className="me-kinds">
           {['prop', 'library'].map(k => (
             <button key={k} className={`me-chip${kinds.has(k) ? ' active' : ''}`} onClick={() => toggleKind(k)}>{k === 'prop' ? 'Props' : 'Library'}</button>
@@ -85,7 +86,7 @@ export function AssetBrowser(p: AssetBrowserProps) {
         {shelf === 'models' && !models.length && <div className="lm-muted me-note">No models match.</div>}
         {shelf === 'prefabs' && !prefabs.length && <div className="lm-muted me-note">No prefabs yet: select props and clutter on the map, then Save selection as prefab.</div>}
       </div>
-      {!p.readOnly && <div className="lm-muted me-note mb-assets-hint">Click to place (P) or paint (B); drag onto the map to drop it there.</div>}
+      {!p.readOnly && <div className="lm-muted me-note mb-assets-hint">{p.nativePlacements ? 'Pick a model, then click a surface to place it. You can also drag the model onto the map.' : 'Click to place (P) or paint (B); drag onto the map to drop it there.'}</div>}
     </div>
   );
 }

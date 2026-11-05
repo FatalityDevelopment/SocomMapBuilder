@@ -18,13 +18,13 @@ This is a handover for the San Andreas map work in the Map Builder (November 202
   - Also here: `Transform` (game to editor matrix), `MapAreas`, `AreaAt`, `LodOf`, water polygons, clipping, timed-object hours.
 - `GtaPackage.MapEdits.cs`:
   - `MovePlacement`, `GameTransform` (the inverse of `Transform`).
-  - `PlacementFileBytes`: rewrites only the moved INST lines, or patches the moved 40-byte records.
+  - `GtaPackage.PlacementFiles.cs` writes edited INST lines and binary records. Deleting a text row also updates stream and text rows whose LOD indices shift.
   - `SaveMapEdits`: writes text IPLs at their disc paths, and `MODELS/GTA3.IMG` plus its twin `GTA3_1.IMG` for stream IPLs.
 - `server/Services/Assets/GtaAssetService.Map.cs` answers `ASSET_STATUS` (`missions`, the areas, with `label`), `ASSET_MAP_POINTS` (`mission` picks an area) and `ASSET_MAP_SCENE`, and builds the water mesh (`WATER.DAT:@water/<area>`).
-- `GtaAssetService.MapEdits.cs` handles `moveInstance` and `batch`. The instance id is `zone:fileStem:row`.
+- `GtaAssetService.MapEdits.cs` handles `moveInstance`, `placeInstance`, `deleteInstance` and `batch`. The instance id is `zone:fileStem:row`.
 - `GtaAssetService.Edits.cs` has `Step`, which holds either a DFF edit or placement `Moves`. It also handles undo/redo, history, and saving (mode `zdb`/`map` with a folder).
 - Web:
-  - `web/src/MapPage.tsx`: the `gta` flag. You can move but not place; the action panel is off.
+  - `web/src/MapPage.tsx`: the `gta` flag. Select, place, duplicate or delete props in a zone.
   - `web/src/useMapSession.ts`: `placementsOnly` includes GTA.
   - `web/src/shared/host.ts`: GTA saves pick a folder.
   - `web/src/mapModel.ts`: `missionLabel` uses `label`.
@@ -42,7 +42,7 @@ This is a handover for the San Andreas map work in the Map Builder (November 202
 ## How to check
 
 ```bash
-MAPBUILDER_GTA_DISC="F:/GTA SA.iso" MAPBUILDER_DISC_CACHE="J:/swbf-test/cache" dotnet test tests/MapBuilder.Tests --filter "FullyQualifiedName~GtaMapTests"
+MAPBUILDER_GTA_DISC="F:/GTA SA.iso" MAPBUILDER_DISC_CACHE="J:/swbf-test/cache" dotnet test tests/MapBuilder.Tests --filter "FullyQualifiedName~GtaMapTests|FullyQualifiedName~GtaPlacementEditsTests"
 ```
 
 ```bash
@@ -53,14 +53,19 @@ In the app:
 1. Run the Debug server on port 8771 (`dotnet run --project server --no-launch-profile --urls http://127.0.0.1:8771`) and open it in a browser.
 2. Use the MCP tools at `http://127.0.0.1:8771/mcp`: `ui_show {page:"map", path:"F:\\GTA SA.iso"}`, then `ui_focus {session, instance:"lae2:lae2_stream5:6"}` (CJ's house), `ui_view`, `ui_screenshot`.
 
-An LA zone loads about 800 models in roughly a minute.
+An LA zone can contain about 800 distinct models. The time to load it depends on texture decoding, the disc cache and the renderer.
 
-## What is left
+## Follow-up
 
-1. **Test in the game.** A saved `.ISO` with moved placements has not been booted. Check that a moved stream IPL record shows up in the game, from both `GTA3.IMG` copies.
-2. **LOD follow-up.** Moving a building leaves its LOD where it was (the edit warns about this). Option: move the LOD row by the same delta when it serves only that building.
-3. **Adding and deleting placements.** Text IPLs can grow, and the ISO patcher moves larger files. Stream IPLs would need their record count and entry size changed (`GtaImg.WriteEntry` relocates entries that grow). The IDE id comes from the model.
-4. **Collision.** SA's COL files (`*.col` in the IMGs) are not moved with a placement. The game uses the model's own collision at the placement, so this probably needs nothing; confirm in the game.
-5. **Time of day.** The scene fixes noon (`SceneHour`). A picker could pass the hour through `ASSET_MAP_SCENE`.
-6. **Water.** It is a flat colour. It could use the game's water texture and the per-vertex wave values.
-7. **Load speed.** Models load one `ASSET_MODEL_MESH` call at a time from the web (6 concurrent requests, served in order). A batched mesh command would cut the whole-map overview's 4,300 calls.
+- Additions and deletions use stable session IDs. On save the writer rebuilds the text or binary INST rows, updates LOD indices and adjusts offsets to later binary sections. Undo restores the original rows.
+- A move or turn carries its dedicated LOD through the same transform. The editor warns about shared LODs. Pass `followLod: false` on a move to edit just the detailed placement.
+- The **Time** picker filters timed placements by hour. The water preview uses `waterclear256` from the disc when available and animates ripples from the flow and wave values in `WATER.DAT`.
+- The web clients request up to 16 GTA meshes per batch. On the US PS2 disc the whole-map overview requests 4,299 distinct meshes, including water, in 269 batches on a cold load. A model failure identifies its source, and successful meshes stay cached.
+
+## In-game check on the US PS2 disc
+
+In a copy of SLUS-20946, raise `lae:lae_stream3:145` (`compmedhos4_lae`, model 3557) by 10 m next to the opening BMX alley. Reopen the saved ISO and inspect `lae_stream3.ipl` in both `GTA3.IMG` and `GTA3_1.IMG`. Each copy contained the new Z of 36.4609375 instead of 26.4609375. Every other row in that stream matched retail.
+
+PCSX2 booted the patched ISO. The game streamed model 3557 at the edited height. A call to the game's downward collision query at world XY (2249.21094, −1277.94531) hit that same house at Z 38.6501. An untouched copy of model 3557 returned Z 29.07199. After accounting for the difference in the two houses' original elevations, the measured collision shift was 9.9999981 m. The house carried its collision with it without a COL edit.
+
+Both IMG copies were verified on disk. The running game streamed the edited house, though the test did not trace which physical archive it selected. The debug emulator crashed in its graphics thread during the first opening sequence, after the collision probes and a save-state restore. On a fresh boot of the same ISO, with no guest-memory writes or save-state restores, the game completed the opening sequence and reached the Jefferson BMX alley with the HUD, minimap and movement tutorial visible.

@@ -30,6 +30,8 @@ namespace CodeDesigner.Ps2.FileFormats.Assets
             public int VertexCount { get; init; }
             public float[] Positions { get; init; } = Array.Empty<float>();
             public float[] Uvs { get; init; } = Array.Empty<float>();
+            /// <summary>Water only: authored flow X/Y and large/small wave strengths per vertex.</summary>
+            public float[]? WaterMotion { get; init; }
             public float[] Normals { get; init; } = Array.Empty<float>();
             public byte[]? Colors { get; init; }
             public int[] Triangles { get; init; } = Array.Empty<int>();

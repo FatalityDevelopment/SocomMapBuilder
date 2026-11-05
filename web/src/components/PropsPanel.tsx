@@ -81,7 +81,7 @@ export function PropsPanel(p: PropsPanelProps) {
   return (
     <div className="me-props">
       <div className="me-tabs">
-        {TABS.filter(t => !ca || (t.id !== 'actions' && t.id !== 'place')).map(t => (
+        {TABS.filter(t => (!ca || (t.id !== 'actions' && t.id !== 'place')) && (p.status?.game !== 'GTA: San Andreas' || !['actions', 'mission'].includes(t.id))).map(t => (
           <button key={t.id} className={`me-tab${p.tab === t.id ? ' active' : ''}`} onClick={() => p.setTab(t.id)}>{t.label}</button>
         ))}
       </div>
@@ -216,7 +216,7 @@ function ItemTab(p: PropsPanelProps) {
             <span>Yaw °</span>
             <NumField value={fmt(yawOf(inst.matrix))} step={5} disabled={!canMove} onCommit={v => p.onSetField('yaw', v)} />
             <span>Scale</span>
-            <NumField value={fmt(scaleOf(inst.matrix))} step={0.1} min={0.01} disabled={!canMove} onCommit={v => p.onSetField('scale', v)} />
+            <NumField value={fmt(scaleOf(inst.matrix))} step={0.1} min={0.01} disabled={!canMove || p.status?.game === 'GTA: San Andreas'} onCommit={v => p.onSetField('scale', v)} />
           </div>
         </div>
         <Actions {...p} />
@@ -243,7 +243,7 @@ function ItemTab(p: PropsPanelProps) {
               <span>Turn by °</span>
               <NumField reset value="0" step={15} disabled={p.busy} onCommit={v => p.onEditSelection('turn', v)} />
               <span>Scale</span>
-              <NumField reset value="" step={0.1} min={0.01} disabled={p.busy} title="Set every selected instance to this scale" onCommit={v => p.onEditSelection('scale', v)} />
+              <NumField reset value="" step={0.1} min={0.01} disabled={p.busy || p.status?.game === 'GTA: San Andreas'} title="Set every selected instance to this scale" onCommit={v => p.onEditSelection('scale', v)} />
             </div>
           </div>
         )}
@@ -264,7 +264,7 @@ function Actions(p: PropsPanelProps) {
     <div className="me-card">
       <div className="me-card-title">Edit</div>
       <div className="me-actions">
-        {!p.status?.game && <><button className="lm-tool-btn" disabled={p.busy || !p.movableCount} onClick={p.onDuplicate}>Duplicate (Shift+D)</button>
+        {(!p.status?.game || p.status.game === 'GTA: San Andreas') && <><button className="lm-tool-btn" disabled={p.busy || !p.movableCount} onClick={p.onDuplicate}>Duplicate (Shift+D)</button>
         <button className="lm-tool-btn lm-danger-btn" disabled={p.busy || !p.movableCount} onClick={p.onDelete}>Delete (X)</button></>}
         <button className="lm-tool-btn" disabled={p.busy || !p.movableCount} onClick={p.onDrop}>Drop to ground</button>
         <button className="lm-tool-btn" disabled={p.selection.length !== 1 || !p.single?.source} onClick={p.onOpenModel}>Open model…</button>
@@ -294,6 +294,7 @@ function ArrangeCard(p: PropsPanelProps) {
 }
 
 function PlaceTab(p: PropsPanelProps) {
+  const gta = p.status?.game === 'GTA: San Andreas';
   const b = p.brush;
   const what = p.placePrefab ? `prefab ${p.placePrefab}` : p.placeModel ? p.placeModel.name : null;
   return (
@@ -301,25 +302,25 @@ function PlaceTab(p: PropsPanelProps) {
       <div className="me-card mp-place">
         <div className="me-card-title">Place</div>
         <div className="me-note">{what ? <>Placing <b className="lm-mono">{what}</b>. Click a surface with the Place tool (P), or drag a tile from Assets onto the map.</>
-          : 'Pick a model or prefab in the Assets panel on the left.'}</div>
-        {!p.placePrefab && (
+          : gta ? 'Pick a model in Assets.' : 'Pick a model or prefab in the Assets panel on the left.'}</div>
+        {!gta && !p.placePrefab && (
           <div className="me-seg" title="A clutter placement (CLUTTER.ZAR: light, many) or a GEO prop (a scene node, like the map's buildings)">
             <button className={p.placeAs === 'clutter' ? 'on' : ''} onClick={() => p.setPlaceAs('clutter')}>As clutter</button>
             <button className={p.placeAs === 'prop' ? 'on' : ''} onClick={() => p.setPlaceAs('prop')}>As prop</button>
           </div>
         )}
         <label className="me-field me-field-wide">Yaw ° <NumField value={String(p.placeYaw)} step={15} onCommit={v => p.setPlaceYaw(+v || 0)} /></label>
-        <label className="me-field me-field-wide">Scale <NumField value={String(p.placeScale)} step={0.1} min={0.01} onCommit={v => p.setPlaceScale(+v || 1)} /></label>
+        {!gta && <label className="me-field me-field-wide">Scale <NumField value={String(p.placeScale)} step={0.1} min={0.01} onCommit={v => p.setPlaceScale(+v || 1)} /></label>}
         <label className="me-toggle"><input type="checkbox" checked={p.randomYaw} onChange={e => p.setRandomYaw(e.target.checked)} /> Random yaw</label>
-        <label className="me-toggle"><input type="checkbox" checked={p.randomScale} onChange={e => p.setRandomScale(e.target.checked)} /> Random scale</label>
-        {p.randomScale && <>
+        {!gta && <label className="me-toggle"><input type="checkbox" checked={p.randomScale} onChange={e => p.setRandomScale(e.target.checked)} /> Random scale</label>}
+        {!gta && p.randomScale && <>
           <label className="me-field me-field-wide">Scale from <NumField value={String(p.minPlaceScale)} min={0.01} step={0.01} onCommit={v => p.setMinPlaceScale(Number(v))} /></label>
           <label className="me-field me-field-wide">Scale to <NumField value={String(p.maxPlaceScale)} min={0.01} step={0.01} onCommit={v => p.setMaxPlaceScale(Number(v))} /></label>
         </>}
         <label className="me-toggle"><input type="checkbox" checked={p.alignSurface} onChange={e => p.setAlignSurface(e.target.checked)} /> Align to surface</label>
-        <div className="lm-muted me-note">The preview uses the next placement's rotation and scale. Escape cancels. Unlock and show the Clutter layer to place clutter.</div>
+        {!gta && <div className="lm-muted me-note">The preview uses the next placement's rotation and scale. Escape cancels. Unlock and show the Clutter layer to place clutter.</div>}
       </div>
-      <div className="me-card mp-place">
+      {!gta && <div className="me-card mp-place">
         <div className="me-card-title">Clutter brush</div>
         {p.tool !== 'paint'
           ? <button className="lm-tool-btn" onClick={p.onPaintTool}>Paint clutter (B)</button>
@@ -330,7 +331,7 @@ function PlaceTab(p: PropsPanelProps) {
         <label className="me-field me-field-wide" title="Steepest ground the brush paints on (degrees)">Max slope ° <NumField value={String(b.slope)} min={0} step={5} onCommit={v => p.setBrush({ ...b, slope: Math.min(90, Math.max(0, +v)) })} /></label>
         <label className="me-toggle"><input type="checkbox" checked={b.erase} onChange={e => p.setBrush({ ...b, erase: e.target.checked })} /> Erase</label>
         <div className="lm-muted me-note">Rotation and scale come from the settings above (random yaw and scale make it look natural); Align to surface tilts each one with the ground.</div>
-      </div>
+      </div>}
     </>
   );
 }
