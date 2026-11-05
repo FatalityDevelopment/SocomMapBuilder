@@ -9,12 +9,15 @@ export const LAYERS: Array<{ id: MapLayer; label: string }> = [
   { id: 'clutter', label: 'Clutter' },
   { id: 'sky', label: 'Sky' },
   { id: 'points', label: 'Points' },
+  // Star Wars: Battlefront only (listed when the map has them).
+  { id: 'paths', label: 'Paths' },
+  { id: 'regions', label: 'Regions' },
 ];
 
 export interface ModelGroup { source: string; model: string; indices: number[] }
 
 // Sky models go by many names (sky, sky_m72, mp62_sky, alaska4d_sky, sky_follow, sun); skylines and skylights are scenery.
-const SKY_NAME = /^(thesun|flare|mist)|^sun$|sky(?!line|light|scraper)/i;
+const SKY_NAME = /^(thesun|flare|mist)|^sun$|sky(?!line|light|scraper|way)/i;
 // Most maps draw their sky inside the world model: a skydome / sky / cloudlayer node, or a node with sky or cloud textures.
 const SKY_PART = /sky(?!line|light|scraper)|cloud|whispy/i;
 // Retail maps also keep celestial cards outside the dome node (MP7's moon / stars,
@@ -87,7 +90,8 @@ export function fileName(p: string): string { return p.split(/[\\/]/).pop() ?? p
 export function errText(err: unknown): string { return err instanceof Error ? err.message : String(err); }
 
 export function pointColor(kind: string): number {
-  return kind === 'start' ? 0x46a758 : kind === 'waypoint' ? 0x3e8bff : kind === 'marker' ? 0xe0a030 : 0xb4b4b4;
+  return kind === 'start' ? 0x46a758 : kind === 'waypoint' ? 0x3e8bff : kind === 'marker' ? 0xe0a030
+    : kind === 'command post' ? 0xffd23e : kind === 'vehicle spawn' ? 0xd070ff : 0xb4b4b4;
 }
 
 const MISSION_KINDS: Record<string, string> = { SP: 'campaign', MP: 'online', IA: 'instant action', TR: 'training' };

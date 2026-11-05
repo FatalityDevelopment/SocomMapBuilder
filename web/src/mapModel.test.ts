@@ -26,7 +26,7 @@ describe('layerOf', () => {
     for (const model of ['sky', 'sky_m72', 'mp62_sky', 'mp72_sky', 'alaska4d_sky', 'sky_follow', 'sun']) {
       expect(layerOf(inst({ model }))).toBe('sky');
     }
-    for (const model of ['obj_skylight', 'far_skyline', 'sunroof', 'crate']) {
+    for (const model of ['obj_skylight', 'far_skyline', 'sunroof', 'crate', 'bes2_bldg_skyway']) {
       expect(layerOf(inst({ model }))).toBe('reference');
     }
   });
