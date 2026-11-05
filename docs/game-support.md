@@ -9,7 +9,8 @@ SOCOM U.S. Navy SEALs II is the primary target. Combined Assault also supports s
 | **SOCOM 3** | Compatible asset archives | Map edits verified on the Combined Assault disc only | Compatible models to SOCOM II |
 | **Grand Theft Auto: San Andreas (PS2)** | Mounted disc, ISO, IMG or DFF; the map by area | Frame positions, geometry transforms and material properties; move and turn map placements. Save DFF, IMG or IPL copies, or a patched `.ISO`. | Models and selected character clips to SOCOM II |
 | **Star Wars: Battlefront** | `.ISO` or a `.LVL`: models, textures and maps | Move and turn props, command posts and vehicle spawns. Save `.LVL` copies or a patched `.ISO`. | Soldiers, weapons, vehicles and props to SOCOM II |
-| **SOCOM: Fireteam Bravo** | Not tested | — | — |
+| **SOCOM: Fireteam Bravo 2 (PSP)** | A map folder or any ZDB in it: the world, props, characters (bind pose), weapons and textures | Read-only | — |
+| **SOCOM: Fireteam Bravo / Fireteam Bravo 3** | Not tested | — | — |
 
 ## SOCOM II
 
@@ -77,6 +78,10 @@ Open the disc image (`Star Wars - Battlefront (USA).iso`) or a loose `.LVL` in t
 - **Editing:** move and turn props with the gizmo or the Item fields, and drag command posts and vehicle spawns. Placements cannot be scaled, and props cannot be added or deleted yet. A command post's regions and spawn path stay where they are when it moves. **File › Save copy** writes the edited levels into a folder at their disc paths (`TAT/TAT2.LVL`); saving to a path ending `.ISO` (for example through the assistant's `assets_save`) writes a copy of the whole disc with the edited levels in place, which needs the disc's size free. Edits keep every file's size, so the copy is otherwise byte for byte the original. Not yet tested in game.
 
 The terrain's blended texture layers, map edits that change sizes (adding or deleting props, editing paths and regions) and animations are planned. The PS2 position quantisation, bone-space vertices and the terrain and world layouts follow research by the [openbf](https://github.com/sprucey149/openbf) project (MIT).
+
+## SOCOM: Fireteam Bravo 2 (PSP)
+
+Open a map folder from the UMD, such as `K:\PSP_GAME\USRDIR\RUN\FORT_MP`, or any `.ZDB` in it. The Map Builder draws the island's terrain, buildings and placed props, textured, with the sky in the **Sky** layer. The Model Editor lists the island's props, the characters in their bind pose and the weapons from `RUN\GLOBAL.ZDB`. Everything is read-only: missions, animations, editing and conversion are not done yet. [File layouts](formats/psp.md)
 
 ## Saving to a disc image
 

@@ -1,5 +1,5 @@
 import type { MapInstanceWire, MapPointWire, MapProblem, MapValidation, ModelSummary, SessionStatus } from '../webview/model-editor/asset-client';
-import { fmt, movable, scaleOf, sortProblems, yawOf } from '../mapModel';
+import { fmt, isCaFamily, movable, scaleOf, sortProblems, yawOf } from '../mapModel';
 import { NumField } from './NumField';
 import type { MapTool } from '../viewport/mapViewport';
 import type { AlignTo, Axis } from '../viewport/arrange';
@@ -77,7 +77,7 @@ interface PropsPanelProps {
 }
 
 export function PropsPanel(p: PropsPanelProps) {
-  const ca = p.status?.game === 'SOCOM 3 / Combined Assault';
+  const ca = isCaFamily(p.status?.game);
   return (
     <div className="me-props">
       <div className="me-tabs">
@@ -162,7 +162,7 @@ function ProblemsCard(p: PropsPanelProps) {
 
 function ItemTab(p: PropsPanelProps) {
   const { single, selectedPoint, pointInfo, selection } = p;
-  const ca = p.status?.game === 'SOCOM 3 / Combined Assault';
+  const ca = isCaFamily(p.status?.game);
   const locked = p.busy || !!p.status?.readOnly;
   if (selectedPoint && pointInfo) {
     const pointLocked = locked || pointInfo.canMove === false;

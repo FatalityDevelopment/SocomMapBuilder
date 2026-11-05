@@ -199,7 +199,7 @@ Map Builder is actively developed, and support differs by game and asset type.
 - Map, model and animation edits round-trip through save and reopen. Imported models, imported textures and textures made from images render in the editors, but not every combination has been tested in game.
 - **Runtime VRAM is limited.** Large textures or many new textures may exceed what a map can use in game.
 - An imported character can appear correctly in the editors, but spawning it in a mission also needs the relevant character records.
-- SOCOM 3 and Combined Assault workflows vary by format and feature. GTA: San Andreas models convert to SOCOM II packs. Fireteam Bravo has not been tested.
+- SOCOM 3 and Combined Assault workflows vary by format and feature. GTA: San Andreas models convert to SOCOM II packs. Fireteam Bravo 2 (PSP) maps, models and textures open read-only; the other two Fireteam Bravo games have not been tested.
 - This repository does not include game assets, or the CodeDesigner runtime source used to inject map items and launch new maps.
 
 ## Related projects

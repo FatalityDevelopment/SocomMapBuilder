@@ -14,7 +14,7 @@ import { ThumbnailRenderer, type ThumbPart } from './viewport/thumbnails';
 import { AssetBrowser, ASSET_DRAG_TYPE, type AssetDrag } from './components/AssetBrowser';
 import { LIGHTINGS, type Lighting, type Shading, type ViewPreset } from './webview/zipper-core/viewport-core';
 import { pathDetail, regionDetail } from './viewport/mapShapes';
-import { LAYERS, errText, layerOf, missionLabel, movable, pointKindCounts, problemTarget, type ModelGroup } from './mapModel';
+import { LAYERS, errText, isCaFamily, layerOf, missionLabel, movable, pointKindCounts, problemTarget, type ModelGroup } from './mapModel';
 
 import { MenuBar, type Menu } from './components/MenuBar';
 import { PageHeader } from './shared/PageHeader';
@@ -57,7 +57,8 @@ export function MapPage() {
   const { client, instancesRef, statusRef, status, setStatus, sceneNs, counts, instances, points, shapes, models, setModels,
     busy, progress, loading, loadWarnings, connectionIssue, message, messageIsError, say,
     retryScene, edit, history, saveCopy, saveDisc, exportPack, openDialog, loadModel, texturePixels, jump, sceneReady, reload } = mapSession;
-  const ca = status?.game === 'SOCOM 3 / Combined Assault';
+  const ca = isCaFamily(status?.game);
+  const ftb = /^SOCOM: Fireteam Bravo/.test(status?.game ?? '');
   const battlefront = status?.game === 'Star Wars: Battlefront';
   const gta = status?.game === 'GTA: San Andreas';
   const viewOnly = mapViewOnly(status);
@@ -930,7 +931,7 @@ export function MapPage() {
 
   return (
     <div className="me-app mp-app has-header" onPointerDown={e => { if (!(e.target as HTMLElement).closest('.me-menu')) { setOpenMenu(null); } }}>
-      <PageHeader icon="globe" title="Map Builder" subtitle={ca ? 'Combined Assault maps and missions' : battlefront ? 'Star Wars: Battlefront maps: move props, command posts and vehicle spawns' : gta ? 'GTA: San Andreas map areas: move and turn buildings and props' : 'Props, clutter and spawn points of SOCOM II maps'} />
+      <PageHeader icon="globe" title="Map Builder" subtitle={ftb ? `${status?.game?.replace('SOCOM: ', '')} maps (read-only)` : ca ? 'Combined Assault maps and missions' : battlefront ? 'Star Wars: Battlefront maps: move props, command posts and vehicle spawns' : gta ? 'GTA: San Andreas map areas: move and turn buildings and props' : 'Props, clutter and spawn points of SOCOM II maps'} />
       <MenuBar {...menuBarProps} />
       {shortcutsOpen && <ShortcutReference onClose={() => setShortcutsOpen(false)} />}
       {paletteOpen && <CommandPalette commands={commandsFromMenus(menus)} onClose={() => setPaletteOpen(false)} />}

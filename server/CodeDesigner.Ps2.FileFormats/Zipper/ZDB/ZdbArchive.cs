@@ -34,6 +34,9 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZDB
             public ushort Errors;            // 0x1C
             public ushort Warnings;          // 0x1E
             // 0x20-0xC3  padding
+            // Version 7 (SOCOM: Fireteam Bravo 2, PSP) inserts a word at 0x0C (1 on retail files), shifting the
+            // fields above by 4, and aligns the header area to 0x40. Its 0x0C-0xC3 bytes are kept verbatim.
+            public byte[]? RawV7;
             // 0xC4  FileCount
         }
 
@@ -115,6 +118,9 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZDB
 
         /// <summary>Archive variant (1 or 2; 3 = memory-card pack .CDB). Returns 0 when nothing is loaded.</summary>
         public int ArchiveType => _archiveType;
+
+        /// <summary>Type 1: the header's format version (6 SOCOM 3 / Combined Assault, 7 Fireteam Bravo 2); 0 otherwise.</summary>
+        public uint Version => _archiveType == 1 ? _head1.Version : 0;
 
         /// <summary>True for a memory-card pack (<c>&lt;NAME&gt;.CDB</c>).</summary>
         public bool IsMemoryCardPack => _archiveType == 3;
@@ -540,17 +546,19 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZDB
             _archiveType = 1;
             _entries.Clear();
 
+            uint shift = R32(data, 0x08) >= 7 ? 4u : 0u;
             _head1 = new Type1Header
             {
                 MainHeaderSize = R32(data, 0x00),
                 FileHeaderSize = R32(data, 0x04),
                 Version = R32(data, 0x08),
-                ArchiveHeaderSize = R32(data, 0x0C),
-                BodySize = R32(data, 0x10),
-                UnusedId = R32(data, 0x14),
-                Compression = R32(data, 0x18),
-                Errors = R16(data, 0x1C),
-                Warnings = R16(data, 0x1E),
+                ArchiveHeaderSize = R32(data, 0x0C + shift),
+                BodySize = R32(data, 0x10 + shift),
+                UnusedId = R32(data, 0x14 + shift),
+                Compression = R32(data, 0x18 + shift),
+                Errors = R16(data, 0x1C + shift),
+                Warnings = R16(data, 0x1E + shift),
+                RawV7 = shift != 0 ? ReadBlock(data, 0x0C, 0xC4 - 0x0C) : null,
             };
 
             uint fileCount = R32(data, 0xC4);
@@ -567,16 +575,20 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZDB
                 uint size = R32(data, cursor + 0x4C);
                 uint checksum = R32(data, cursor + 0x50);
 
+                // A DEP_ descriptor's size word is a dependency index, -1 on Fireteam Bravo 2's map packages: it owns
+                // no payload when the range runs past the file, and its size word is written back as read.
+                bool dangling = varName == DepTag && (ulong)entry + _head1.ArchiveHeaderSize + size > (ulong)data.Length;
                 _entries.Add(new ZdbEntry
                 {
                     FullPath = fullPath,
                     Name = name,
-                    Data = ReadBlock(data, entry + _head1.ArchiveHeaderSize, size),
+                    Data = dangling ? Array.Empty<byte>() : ReadBlock(data, entry + _head1.ArchiveHeaderSize, size),
                     VarName = varName,
                     DbId = dbId,
                     Checksum = checksum,
+                    DependencySize = dangling ? size : null,
                 });
-                _slots.Add(new Slot(_entries[^1], cursor, checked(entry + _head1.ArchiveHeaderSize), size));
+                _slots.Add(new Slot(_entries[^1], cursor, dangling ? 0 : checked(entry + _head1.ArchiveHeaderSize), dangling ? 0 : size));
 
                 cursor += _head1.FileHeaderSize;
             }
@@ -680,7 +692,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZDB
             }
 
             uint archiveHeaderSize = 0xC8u + (uint)(fileCount * 0x58);
-            if ((_head1.ArchiveHeaderSize & 15) == 0) archiveHeaderSize = Align16(archiveHeaderSize);
+            if (_head1.RawV7 != null) archiveHeaderSize = (archiveHeaderSize + 0x3F) & ~0x3Fu;
+            else if ((_head1.ArchiveHeaderSize & 15) == 0) archiveHeaderSize = Align16(archiveHeaderSize);
 
             using var ms = new MemoryStream();
             using var bw = new BinaryWriter(ms);
@@ -689,14 +702,25 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZDB
             bw.Write(0x000000C8u);       // MainHeaderSize
             bw.Write(0x00000058u);       // FileHeaderSize
             bw.Write(_head1.Version);
-            bw.Write(archiveHeaderSize); // ArchiveHeaderSize
-            bw.Write(bodySize);          // BodySize
-            bw.Write(_head1.UnusedId);
-            bw.Write(_head1.Compression);
-            bw.Write(_head1.Errors);
-            bw.Write(_head1.Warnings);
-            for (int i = 0x20; i < 0xC4; i += 4)
-                bw.Write(0u);
+            if (_head1.RawV7 is { } raw)
+            {
+                // Version 7: the kept 0x0C-0xC3 bytes with the header and body sizes (0x10, 0x14) updated.
+                var head = (byte[])raw.Clone();
+                BitConverter.TryWriteBytes(head.AsSpan(0x10 - 0x0C), archiveHeaderSize);
+                BitConverter.TryWriteBytes(head.AsSpan(0x14 - 0x0C), bodySize);
+                bw.Write(head);
+            }
+            else
+            {
+                bw.Write(archiveHeaderSize); // ArchiveHeaderSize
+                bw.Write(bodySize);          // BodySize
+                bw.Write(_head1.UnusedId);
+                bw.Write(_head1.Compression);
+                bw.Write(_head1.Errors);
+                bw.Write(_head1.Warnings);
+                for (int i = 0x20; i < 0xC4; i += 4)
+                    bw.Write(0u);
+            }
             bw.Write((uint)fileCount);   // FileCount @ 0xC4
 
             // Per-file headers
@@ -707,7 +731,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZDB
                 bw.Write(e.VarName);
                 bw.Write(e.DbId);
                 bw.Write(offsets[i]);
-                bw.Write(e.Size);
+                bw.Write(e.DependencySize ?? e.Size);
                 bw.Write(e.Checksum);
                 bw.Write(0u); // reserved
             }
@@ -821,6 +845,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZDB
         // ====================================================================
         // Private – binary helpers
         // ====================================================================
+
+        private const uint DepTag = 0x5F504544; // "DEP_"
 
         private static uint R32(byte[] d, uint o) => BitConverter.ToUInt32(d, (int)o);
         private static ushort R16(byte[] d, uint o) => BitConverter.ToUInt16(d, (int)o);

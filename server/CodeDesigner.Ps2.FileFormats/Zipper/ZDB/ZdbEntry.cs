@@ -25,6 +25,8 @@
         internal uint VarName { get; set; }
         internal uint DbId { get; set; }
         internal uint Checksum { get; set; }
+        /// <summary>A DEP_ descriptor's size word when it does not describe a payload (Fireteam Bravo 2: 0xFFFFFFFF).</summary>
+        internal uint? DependencySize { get; set; }
 
         /// <summary>
         /// Type 1 (ZDB v6, SOCOM 3 / Combined Assault): the resource tag (<c>ISLE</c>, <c>ASST</c>, <c>CHAR</c>, <c>DEP_</c>
