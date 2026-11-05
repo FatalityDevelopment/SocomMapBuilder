@@ -12,6 +12,7 @@ public static class CaWorldEdits
     {
         var node = package.MapScene().FirstOrDefault(p => p.Instance == instance)
             ?? throw new KeyNotFoundException($"No world instance '{instance}' in this location");
+        if (node.NodeOffset < 0) throw new NotSupportedException($"'{instance}' is a scatter instance (rocks, trees, crates); only world nodes can be moved for now");
         var resource = package.Libraries[node.LibraryIndex].Res;
         if (resource.Tag != "ISLE") throw new InvalidDataException("World node does not belong to an ISLE resource");
         float[] world = placement((float[])node.Matrix.Clone());

@@ -40,6 +40,8 @@ Move a point within its current AI zone or rename it. The editor updates actor s
 
 Undo and redo work across missions in the same archive. **Save copy** writes the complete archive into the selected folder. To see shared weapon models and labels when reopening, place the copy beside the game's `GLOBAL.ZDB`. In-game verification is pending. [File layouts and in-game check](formats/ca-missions.md#editing-and-saving)
 
+The world includes each island's scatter props (rocks, trees, crates), and water and terrain blend layers draw translucent as the game's GS state sets them ([Combined Assault worlds](formats/ca-worlds.md)). Scatter props cannot be moved yet.
+
 ## Grand Theft Auto: San Andreas (partial)
 
 Character and prop models open and convert, along with some vehicles. Support is incomplete, so treat exports as experimental and check the results in your target workflow.
