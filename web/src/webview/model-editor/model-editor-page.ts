@@ -136,6 +136,7 @@ export class ModelEditorPageLogic {
     if (!s || !m) { return null; }
     if (s.game) {
       if (/GTA/.test(s.game)) { return ['character', 'weapon', 'vehicle', 'prop', 'model'].includes(m.kind) ? 'SOCOM II' : null; }
+      if (/Battlefront/.test(s.game)) { return ['character', 'weapon', 'vehicle', 'prop', 'sky', 'first-person'].includes(m.kind) ? 'SOCOM II' : null; }
       return /Combined Assault/.test(s.game) && ['character', 'weapon', 'prop'].includes(m.kind) ? 'SOCOM II' : null;
     }
     const skinned = m.kind === 'character' && /^MESH_/i.test(m.name);
@@ -145,7 +146,8 @@ export class ModelEditorPageLogic {
   readonly exportModelPlaceholder = computed(() => {
     const n = this.current()?.name ?? '';
     if (this.exportToCa()) { return n.replace(/^MESH_/i, ''); }
-    return /GTA/.test(this.status()?.game ?? '') ? 'gta_' + n.toLowerCase() : 'ca_' + n.replace(/^clib_/, '');
+    const game = this.status()?.game ?? '';
+    return /GTA/.test(game) ? 'gta_' + n.toLowerCase() : /Battlefront/.test(game) ? 'swbf_' + n.toLowerCase() : 'ca_' + n.replace(/^clib_/, '');
   });
   readonly shownExportClips = computed(() => {
     const q = this.exportClipQuery().trim().toLowerCase();
