@@ -10,9 +10,7 @@ namespace MapBuilder.Server.Services
 {
     /// <summary>
     /// SOCOM 3 / Combined Assault sessions: the same ASSET_* commands over a <see cref="CaPackage"/> (a location .ZAR or
-    /// a ZDB v6). Read-only for now: models (ISLE world + prop prototypes, ASST props / vehicles / skies, skinned clib
-    /// characters, GLOBAL.ZDB weapons), meshes, textures, the world as the map scene and the AUX_*ZAN.ZDB clips.
-    /// Edits and saves answer that the session is read-only; CA firing effects are not decoded yet.
+    /// a ZDB v6). Mission and world edits use fixed-size resource replacements and save to a separate archive.
     /// </summary>
     internal sealed partial class ZipperAssetService
     {
@@ -21,6 +19,11 @@ namespace MapBuilder.Server.Services
             public required string Id { get; init; }
             public required CaPackage Package { get; init; }
             public object Gate { get; } = new();
+            public int Revision { get; set; }
+            public Dictionary<int, byte[]> Clean { get; } = new();
+            public HashSet<int> Dirty { get; } = new();
+            public Stack<CaStep> Undo { get; } = new();
+            public Stack<CaStep> Redo { get; } = new();
             /// <summary>The mission whose points ASSET_MAP_POINTS returns (a location archive holds several).</summary>
             public string? Mission { get; set; }
         }
@@ -40,13 +43,34 @@ namespace MapBuilder.Server.Services
             if (!File.Exists(full) && !Directory.Exists(full) && CaDisc.Resolve(full) is { } named)
                 (full, mission) = (Path.GetFullPath(named.Archive), named.Mission);
             if (!CaPackage.IsCaPath(full)) return null;
-            CaSession? existing = CaSessions.Values.FirstOrDefault(s => s.Package.SourcePath.Equals(full, StringComparison.OrdinalIgnoreCase));
-            CaSession session = existing ?? new CaSession { Id = NewId(full), Package = CaPackage.Open(full) };
-            if (mission != null)
-                session.Mission = (session.Package.FindMission(mission) ?? throw new FileNotFoundException($"{session.Package.Location ?? Path.GetFileName(full)} has no mission {mission}")).Id;
-            session.Mission ??= session.Package.Missions().FirstOrDefault()?.Id;
-            CaSessions[session.Id] = session;
-            return Ok("ASSET_OPEN", new { reused = existing != null, status = CaStatus(session) });
+            lock (OpenGate)
+            {
+                var session = CaSessions.Values.FirstOrDefault(s => s.Package.SourcePath.Equals(full, StringComparison.OrdinalIgnoreCase));
+                if (session != null)
+                {
+                    lock (session.Gate)
+                    {
+                        SelectCaMission(session, mission);
+                        return Ok("ASSET_OPEN", new { reused = true, status = CaStatusLocked(session) });
+                    }
+                }
+                lock (CaWriteGate)
+                {
+                    session = new CaSession { Id = NewId(full), Package = CaPackage.Open(full) };
+                    SelectCaMission(session, mission);
+                    var status = CaStatusLocked(session);
+                    CaSessions[session.Id] = session;
+                    return Ok("ASSET_OPEN", new { reused = false, status });
+                }
+            }
+        }
+
+        private static void SelectCaMission(CaSession s, string? id)
+        {
+            if (id == null) { s.Mission ??= s.Package.Missions().FirstOrDefault()?.Id; return; }
+            var selected = s.Package.FindMission(id) ?? throw new KeyNotFoundException($"No mission {id} in this location");
+            if (s.Mission != null && s.Mission != selected.Id) s.Revision++;
+            s.Mission = selected.Id;
         }
 
         /// <summary>Answers <paramref name="command"/> when the message names a CA session; null otherwise.</summary>
@@ -58,27 +82,37 @@ namespace MapBuilder.Server.Services
                 object result;
                 lock (s.Gate)
                 {
+                    if (!CaSessions.ContainsKey(s.Id)) throw new InvalidOperationException("The CA session has closed.");
                     result = command switch
                     {
                         "ASSET_STATUS" => CaStatus(s),
+                        "ASSET_EDIT" => CaEdit(s, c.AssetJson),
+                        "ASSET_UNDO" => CaUndoRedo(s, true),
+                        "ASSET_REDO" => CaUndoRedo(s, false),
+                        "ASSET_HISTORY" => CaHistory(s),
+                        "ASSET_SAVE" => CaSave(s, c.AssetJson),
                         "ASSET_LIST_MODELS" => CaListModels(s, c.AssetJson),
                         "ASSET_DESCRIBE_MODEL" => CaDescribe(s, c.AssetArchive, c.AssetName),
                         "ASSET_MODEL_MESH" => CaMesh(s, c.AssetArchive, c.AssetName, c.AssetJson),
                         "ASSET_TEXTURE" => CaTexture(s, c.AssetName),
                         "ASSET_MAP_SCENE" => CaMapScene(s),
                         "ASSET_MAP_POINTS" => CaPoints(s, c.AssetJson),
+                        "ASSET_MAP_TABLES" => CaTables(s),
+                        "ASSET_MAP_HUD" => new { revision = s.Revision, map = s.Mission ?? s.Package.Location,
+                            icons = new Dictionary<string, object>(), missing = HudTextures, tacmap = (object?)null },
                         "ASSET_LIST_ANIMATIONS" => CaListAnimations(s, c.AssetJson),
                         "ASSET_ANIMATION" => CaAnimation(s, c.AssetName),
                         "ASSET_WEAPONS" => CaWeapons(s),
                         "ASSET_WEAPON_FX" => new { weapon = c.AssetName, effect = (object?)null },
                         "ASSET_EXPORT" => CaExport(s, c.AssetArchive, c.AssetName, c.AssetJson),
                         "ASSET_EFFECTS" => Array.Empty<object>(),
-                        _ => throw new NotSupportedException($"{CaGame} sessions are read-only for now ({command} is not available)"),
+                        _ => throw new NotSupportedException($"{command} is unavailable for {CaGame}"),
                     };
                 }
                 return Ok(command, result);
             }
-            catch (Exception ex) when (ex is ArgumentException or KeyNotFoundException or InvalidOperationException or InvalidDataException or NotSupportedException)
+            catch (Exception ex) when (ex is ArgumentException or KeyNotFoundException or InvalidOperationException or InvalidDataException
+                or NotSupportedException or JsonException or FormatException or IOException or UnauthorizedAccessException)
             {
                 return Responses.Error($"{command}: {ex.Message}");
             }
@@ -86,22 +120,31 @@ namespace MapBuilder.Server.Services
 
         private static object CaStatus(CaSession s)
         {
+            lock (s.Gate) return CaStatusLocked(s);
+        }
+
+        private static object CaStatusLocked(CaSession s)
+        {
             var models = s.Package.Models();
+            var world = models.FirstOrDefault(m => m.Kind == "world");
+            string? location = s.Package.Location;
             return new
             {
                 session = s.Id,
                 path = s.Package.SourcePath,
                 game = CaGame,
-                readOnly = true,
+                readOnly = world == null && s.Mission == null,
+                packageKind = location == "UI" ? "menu" : world != null || s.Mission != null ? "map" : "assets",
                 isZdb = true,
-                mapNamespace = models.FirstOrDefault(m => m.Kind == "world")?.Name,
-                revision = 0,
-                dirty = Array.Empty<string>(),
-                canUndo = (string?)null,
-                canRedo = (string?)null,
+                mapNamespace = world?.Name,
+                revision = s.Revision,
+                dirty = CaResourceNames(s, s.Dirty),
+                canUndo = s.Undo.TryPeek(out var undo) ? undo.Description : null,
+                canRedo = s.Redo.TryPeek(out var redo) ? redo.Description : null,
+                autosave = AutosaveOf(s.Id),
                 entries = s.Package.Resources.Count,
                 models = models.GroupBy(m => m.Kind).ToDictionary(g => g.Key, g => g.Count()),
-                location = s.Package.Location,
+                location,
                 mission = s.Mission,
                 missions = s.Package.Missions().Select(m => new { id = m.Id, kind = m.Kind, mode = m.Mode }).ToList(),
             };
@@ -110,19 +153,111 @@ namespace MapBuilder.Server.Services
         private sealed record PointArgs(string? Mission);
 
         /// <summary>
-        /// The session mission's named points (mission.rdr) in world space; <c>{"mission": "MP414CTR"}</c> selects
-        /// another mission of the location first (and keeps it for later calls).
+        /// The session mission's tables in ASSET_MAP_TABLES' shape: actors with their character type, model,
+        /// weapons and starts (vehicles.rdr, character.rdr, GLOBAL's weapon table), the mission header (title, briefing,
+        /// map image, allowed weapons), valves and named objective regions from the mission's AI zones.
         /// </summary>
+        private static object CaTables(CaSession s)
+        {
+            var p = s.Package;
+            if (s.Mission == null)
+                return new { revision = s.Revision, missionId = s.Mission, hasReader = false, objectives = Array.Empty<object>(), actors = Array.Empty<object>(), loadoutSource = (string?)null,
+                    mission = (object?)null, world = (object?)null, extents = (object?)null, cams = Array.Empty<object>(), valves = Array.Empty<object>(), texts = new Dictionary<string, string>() };
+
+            var actors = p.MissionResource(s.Mission, "MSNv") is { } vehiclesRes ? CaMissionTables.ParseActors(vehiclesRes.Data) : new List<CaMissionTables.Actor>();
+            var types = p.MissionResource(s.Mission, "CHAR") is { } charRes ? CaMissionTables.ParseCharacterTypes(charRes.Data) : new List<CaMissionTables.CharacterType>();
+            var header = p.MissionResource(s.Mission, "MISN") is { } misn ? CaMissionTables.ParseHeader(misn.Data) : null;
+            var valveValues = p.MissionResource(s.Mission, "VALV") is { } valv ? CaMissionTables.ParseValves(valv.Data) : new List<(uint Hash, int Value)>();
+            var weaponTable = p.GlobalResource("WEAP")?.Data;
+            var weapons = weaponTable == null ? new Dictionary<uint, CaMissionTables.Weapon>()
+                : CaMissionTables.FindWeapons(weaponTable, types.SelectMany(t => t.Weapons).Concat(header?.Weapons ?? new List<uint>()));
+
+            var texts = new Dictionary<string, string>();
+            string? Text(string? key)
+            {
+                if (key != null && key.EndsWith("_MSG", StringComparison.Ordinal)) texts[key] = CaMissionTables.KeyText(key);
+                return key;
+            }
+            string? ModelRef(uint hash, string kind) => p.ModelByHash(hash, kind) is { } m ? $"{CaArchive(m)}:{m.Name}" : null;
+            // Grenades and gear have no display name: their model's name when it is known (not w<hash>), else the
+            // start of their description key, marked as cut off.
+            string WeaponName(uint h)
+            {
+                if (!weapons.TryGetValue(h, out var w)) return $"w{h:x8}";
+                if (w.Display != null) return w.Display;
+                if (w.Model is uint mh && p.ModelByHash(mh, "weapon") is { } m && !System.Text.RegularExpressions.Regex.IsMatch(m.Name, "^w[0-9a-f]{8}$")) return m.Name;
+                return w.Key != null ? CaMissionTables.KeyText(w.Key) + "…" : $"w{h:x8}";
+            }
+
+            var actorRows = actors.Select(a =>
+            {
+                var type = types.FirstOrDefault(t => t.Hash == a.Type);
+                string kind = a.Kind;
+                var loadout = type?.Weapons.Select(h => new { name = WeaponName(h), model = weapons.TryGetValue(h, out var w) && w.Model is uint mh ? ModelRef(mh, "weapon") : null }).ToList();
+                // The figure holds the first gun the package has (grenades have no display name, items no model).
+                string? held = type?.Weapons.Select(h => weapons.TryGetValue(h, out var w) && w.Kind == "weapon" && w.Display != null && w.Model is uint mh ? ModelRef(mh, "weapon") : null)
+                    .FirstOrDefault(m => m != null);
+                return new
+                {
+                    row = a.Row, path = new object[] { a.Row }, name = a.Name, display = Text(a.Display),
+                    character = type != null ? $"{type.Display ?? kind} {a.Type:x8}" : $"{kind} {a.Type:x8}",
+                    model = type != null && type.Model != 0 ? ModelRef(type.Model, "character") : null,
+                    weapons = loadout, weapon = held, animSet = (string?)null, stand = (string?)null,
+                    starts = a.Starts.Select(st => new { point = st.Point, value = (object)st.Heading }).ToList(),
+                    teams = Array.Empty<int>(),
+                    flags = new[] { new { name = kind, values = Array.Empty<object>() } },
+                    ai = (object?)null,
+                };
+            }).ToList();
+
+            var valves = (header?.Valves ?? new List<uint>()).Select((h, i) => new
+            {
+                index = i, name = CaNames.Valve(h),
+                value = valveValues.FirstOrDefault(v => v.Hash == h) is { Hash: not 0 } v ? (object?)v.Value : null,
+            }).ToList();
+            var keys = header?.Strings.Where(x => x.EndsWith("_MSG", StringComparison.Ordinal)).ToList() ?? new List<string>();
+            var objectives = CaMissions.ObjectiveRegions(p, s.Mission).Select((region, row) => new
+            {
+                row, path = Array.Empty<object>(), name = region.Name, descriptions = Array.Empty<string>(),
+                valve = (string?)null, displayValve = (string?)null, invalidValve = (string?)null, animation = (string?)null,
+                location = new[] { region.X, region.Z }, navPoints = Array.Empty<string>(), secondary = region.Secondary,
+                subObjective = false, region.Zone,
+            }).ToArray();
+            return new
+            {
+                revision = s.Revision, missionId = s.Mission, hasReader = true, objectives, actors = actorRows,
+                loadoutSource = types.Count > 0 ? $"{s.Mission} character.rdr" : null,
+                mission = header == null ? null : new
+                {
+                    description = Text(keys.FirstOrDefault()), briefing = Text(keys.Skip(1).FirstOrDefault()),
+                    mapImage = header.Strings.FirstOrDefault(x => x.EndsWith(".raw", StringComparison.OrdinalIgnoreCase)),
+                    satchelTimer = (float?)null, elevation = (object?)null, ai = Array.Empty<object>(),
+                    valves = valves.Select(v => new { v.index, v.name, v.value }).ToList(),
+                    weapons = header.Weapons.Where(h => weapons.TryGetValue(h, out var w) && w.Kind == "weapon").Select(WeaponName).Distinct().ToList(),
+                    weaponSlots = header.Weapons.Select((hash, index) => new { index, hash, name = WeaponName(hash) }).ToList(),
+                    weaponChoices = header.Weapons.Concat(types.SelectMany(t => t.Weapons)).Where(h => h != 0).Distinct()
+                        .Select(hash => new { hash, name = WeaponName(hash) }).OrderBy(w => w.name).ToList(),
+                },
+                world = (object?)null, extents = (object?)null, cams = Array.Empty<object>(),
+                valves = valves.Select(v => new { v.name, id = (int?)v.index, v.value }).ToList(),
+                texts,
+            };
+        }
+
         private static object CaPoints(CaSession s, string? json)
         {
             if (Parse<PointArgs>(json)?.Mission is { Length: > 0 } pick)
-                s.Mission = (s.Package.FindMission(pick) ?? throw new KeyNotFoundException($"No mission {pick} in this location")).Id;
+                SelectCaMission(s, pick);
             if (s.Mission == null) return new { mission = (string?)null, points = Array.Empty<object>() };
             var points = s.Package.MissionPoints(s.Mission);
             return new
             {
                 mission = s.Mission,
                 points = points.Select(p => new { p.Name, team = 0, p.Kind, p.X, y = (float?)p.Y, p.Z, p.CellX, p.CellZ, p.Zone, p.Island }).ToList(),
+                teamSpawns = CaMissions.TeamSpawns(s.Package, s.Mission, points).Select(p => new
+                {
+                    p.Name, p.Faction, p.Team, kind = "start", p.X, y = (float?)null, p.Z, p.CellX, p.CellZ, p.Zone, p.Island, editable = false,
+                }).ToList(),
             };
         }
 
@@ -202,7 +337,7 @@ namespace MapBuilder.Server.Services
             static string I(int[] a) { var bytes = new byte[a.Length * 4]; Buffer.BlockCopy(a, 0, bytes, 0, bytes.Length); return Convert.ToBase64String(bytes); }
             return new
             {
-                archive = meshArchive, name = meshName, revision = 0, textureNamespace = (string?)null, game = CaGame,
+                archive = meshArchive, name = meshName, revision = s.Revision, textureNamespace = (string?)null, game = CaGame,
                 boundsMin = mesh.BoundsMin, boundsMax = mesh.BoundsMax,
                 chunks = mesh.Chunks.Select(c => new
                 {
@@ -238,27 +373,21 @@ namespace MapBuilder.Server.Services
         private static object CaMapScene(CaSession s)
         {
             var placements = s.Package.MapScene();
-            if (placements.Count == 0) throw new InvalidOperationException("This package has no ISLE world");
-            // Ids are "<world>/<node hash>"; a node can place several objects (terrain + overlay, trunk + canopy) and a
-            // hash can repeat in a world, so repeats get "~<n>".
-            var seen = new Dictionary<string, int>();
-            var ids = placements.Select(p =>
+            // A standalone mission ZDB carries points and tables, while the geometry lives in its island ZDB.
+            if (placements.Count == 0 && s.Mission == null)
+                throw new InvalidOperationException(s.Package.Models().Any(m => m.Kind == "ui")
+                    ? "This archive contains menu scenes. Open a location archive to edit a map."
+                    : "This package has no ISLE world or mission");
+            var instances = placements.Select(p => new
             {
-                string id = $"{p.World}/{p.NodeHash:x8}";
-                int n = seen.TryGetValue(id, out int k) ? k + 1 : 0;
-                seen[id] = n;
-                return n == 0 ? id : $"{id}~{n}";
-            }).ToList();
-            var instances = placements.Select((p, i) => new
-            {
-                kind = "model", model = p.World, instance = ids[i], path = "/" + ids[i],
+                kind = "model", model = p.World, instance = p.Instance, path = "/" + p.Instance, caNode = true,
                 position = new[] { p.Matrix[12], p.Matrix[13], p.Matrix[14] }, scale = 1f, matrix = p.Matrix,
                 geoIndex = (int?)null, clutterIndex = (int?)null,
                 source = $"{s.Package.LibraryArchive(p.LibraryIndex)}:{CaPackage.ObjectName(p.Object)}",
             }).ToList();
             return new
             {
-                sceneNamespace = string.Join("+", placements.Select(p => p.World).Distinct()),
+                sceneNamespace = placements.Count == 0 ? s.Mission : string.Join("+", placements.Select(p => p.World).Distinct()),
                 counts = new Dictionary<string, int> { ["model"] = instances.Count },
                 returned = instances.Count, instances, game = CaGame,
             };
@@ -293,7 +422,7 @@ namespace MapBuilder.Server.Services
             return new
             {
                 c.Name, source = c.Bank, editable = false, c.Duration, frames = c.Intervals, samples, fps = CaAnimations.FramesPerSecond,
-                revision = 0,
+                revision = s.Revision,
                 bones = c.Tracks.Select(t => new
                 {
                     name = s.Package.BoneName(t.Bone), rawName = $"{t.Bone:x8}", kind = "ca",
@@ -354,8 +483,5 @@ namespace MapBuilder.Server.Services
 
         private static readonly float[] Matrix4Identity = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
 
-        private static object CaSessionsList() => CaSessions.Values.Select(CaStatus).ToList();
-
-        private static bool CloseCa(string id) => CaSessions.TryRemove(id, out _);
     }
 }

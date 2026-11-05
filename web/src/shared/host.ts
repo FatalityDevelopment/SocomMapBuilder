@@ -162,6 +162,15 @@ export const host = {
     return path;
   },
 
+  async pickPackageCopy(s: { path: string; game?: string }): Promise<string | null> {
+    // CA location archives keep their disc filename in the selected output directory.
+    if (s.game === 'SOCOM 3 / Combined Assault') {
+      return host.browse({ mode: 'folder', title: 'Choose a folder for the edited archive', key: 'ca-save', submitLabel: 'Save here' });
+    }
+    const suggested = /\.cdb$/i.test(s.path) ? s.path : s.path.replace(/(\.zdb)$/i, '_edit$1');
+    return (await host.pickSavePath('zdb', suggested)).path;
+  },
+
   // Where to save: a .ZDB / .CDB copy, a folder, or a memory-card pack (name, then its folder).
   async pickSavePath(kind: 'zdb' | 'folder' | 'pack', suggested?: string): Promise<{ path: string | null; packName: string | null }> {
     if (kind === 'pack') {

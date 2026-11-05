@@ -23,7 +23,7 @@ Open a SOCOM II package and work across the whole map: its world, props, clutter
 
 > **Get started:** build the web client, run the server and open `http://127.0.0.1:8770`. See [Getting started](#getting-started).
 >
-> **Status:** SOCOM II is the primary, tested target. SOCOM 3 and Combined Assault open read-only (Combined Assault maps by location name, with each mission's points), and GTA: San Andreas model support is partial. See [Game support](docs/game-support.md).
+> **Status** — SOCOM II is the primary, tested target. Combined Assault supports editing points, actor starts and headings, valves, allowed weapon slots and world placements. Edits save to an archive copy and reopen in the editor. In-game verification is pending. GTA: San Andreas model support is partial. See [Game support](docs/game-support.md).
 
 ## Contents
 

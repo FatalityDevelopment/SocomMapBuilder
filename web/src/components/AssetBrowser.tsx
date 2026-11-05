@@ -85,13 +85,13 @@ export function AssetBrowser(p: AssetBrowserProps) {
         {shelf === 'models' && !models.length && <div className="lm-muted me-note">No models match.</div>}
         {shelf === 'prefabs' && !prefabs.length && <div className="lm-muted me-note">No prefabs yet: select props and clutter on the map, then Save selection as prefab.</div>}
       </div>
-      <div className="lm-muted me-note mb-assets-hint">Click to place (P) or paint (B); drag onto the map to drop it there.</div>
+      {!p.readOnly && <div className="lm-muted me-note mb-assets-hint">Click to place (P) or paint (B); drag onto the map to drop it there.</div>}
     </div>
   );
 }
 
 function Tile(t: { thumbKey: string; label: string; meta: string; active: boolean; drag: AssetDrag; onPick: () => void; onDelete?: () => void }
-  & Pick<AssetBrowserProps, 'thumbnail' | 'thumbnailNow'>) {
+  & Pick<AssetBrowserProps, 'thumbnail' | 'thumbnailNow' | 'readOnly'>) {
   const ref = useRef<HTMLButtonElement | null>(null);
   const [url, setUrl] = useState<string | null | undefined>(() => t.thumbnailNow(t.thumbKey));
   // Drawn once the tile scrolls into view.
@@ -107,7 +107,7 @@ function Tile(t: { thumbKey: string; label: string; meta: string; active: boolea
     return () => { live = false; io.disconnect(); };
   }, [t.thumbKey, url]);
   return (
-    <button ref={ref} type="button" className={`mb-tile${t.active ? ' active' : ''}`} title={`${t.label}\n${t.meta}`} draggable
+    <button ref={ref} type="button" className={`mb-tile${t.active ? ' active' : ''}`} title={`${t.label}\n${t.meta}`} disabled={t.readOnly} draggable={!t.readOnly}
       onClick={t.onPick}
       onDragStart={e => { e.dataTransfer.setData(ASSET_DRAG_TYPE, JSON.stringify(t.drag)); e.dataTransfer.effectAllowed = 'copy'; }}>
       <span className="mb-tile-thumb">{url ? <img src={url} alt="" draggable={false} /> : <span className="lm-muted">{url === null ? '—' : '…'}</span>}</span>

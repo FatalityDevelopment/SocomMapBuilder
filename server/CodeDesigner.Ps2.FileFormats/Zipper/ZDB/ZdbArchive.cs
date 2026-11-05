@@ -59,6 +59,13 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZDB
 
         private readonly List<ZdbEntry> _entries = new List<ZdbEntry>();
 
+        // Same-size edits can reuse the exact disc layout. Keep the headers and gaps (ZAR sector padding often
+        // contains nonzero bytes), without retaining a second copy of the payloads.
+        private sealed record Slot(ZdbEntry Entry, uint Header, uint Offset, uint Length);
+        private readonly List<Slot> _slots = new();
+        private readonly List<(uint Offset, byte[] Bytes)> _gaps = new();
+        private int _originalLength;
+
         // ------------------------------------------------------------------
         // Factory methods
         // ------------------------------------------------------------------
@@ -95,7 +102,9 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZDB
                 2 => BuildBlankType2(),
                 _ => throw new ArgumentOutOfRangeException(nameof(type), "Must be 1 or 2.")
             };
-            return FromBytes(blank);
+            var archive = new ZdbArchive();
+            archive.Load(blank, preserveLayout: false);
+            return archive;
         }
 
         private ZdbArchive() { }
@@ -189,6 +198,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZDB
         {
             EnsureOpen();
             ZdbEntry entry = _entries[index];
+            if (_archiveType == 1 && entry.Tag == "DEP_")
+                throw new InvalidOperationException("A DEP_ entry is a dependency descriptor and has no payload to replace.");
             entry.Data = (byte[])newData.Clone();
             if (_archiveType == 1)
                 entry.Checksum = ZdbChecksum.Compute(newData);
@@ -250,7 +261,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZDB
         public void FixAllChecksums()
         {
             if (_archiveType != 1) return;
-            foreach (ZdbEntry entry in _entries)
+            foreach (ZdbEntry entry in _entries.Where(e => e.Tag != "DEP_"))
                 entry.Checksum = ZdbChecksum.Compute(entry.Data);
         }
 
@@ -269,6 +280,9 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZDB
         public byte[] ToBytes()
         {
             EnsureOpen();
+            if (_originalLength > 0 && _slots.Count == _entries.Count
+                && _slots.All(s => s.Entry.Size == s.Length) && _entries.SequenceEqual(_slots.Select(s => s.Entry)))
+                return WriteOriginalLayout();
             return _archiveType switch
             {
                 1 => SerializeType1(),
@@ -492,6 +506,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZDB
         public void Dispose()
         {
             _entries.Clear();
+            _slots.Clear();
+            _gaps.Clear();
             _archiveType = 0;
         }
 
@@ -499,7 +515,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZDB
         // Private – loading
         // ====================================================================
 
-        private void Load(byte[] data)
+        private void Load(byte[] data, bool preserveLayout = true)
         {
             if (data.Length < 4)
                 throw new InvalidDataException("Data too short to be a ZDB archive.");
@@ -516,6 +532,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZDB
                     throw new InvalidDataException(
                         $"Unrecognised ZDB magic 0x{magic:X8}. Expected 0xC8, 0xFC or 0x110 (memory-card pack).");
             }
+            if (preserveLayout && _archiveType != 3) CaptureGaps(data);
         }
 
         private void LoadType1(byte[] data)
@@ -559,6 +576,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZDB
                     DbId = dbId,
                     Checksum = checksum,
                 });
+                _slots.Add(new Slot(_entries[^1], cursor, checked(entry + _head1.ArchiveHeaderSize), size));
 
                 cursor += _head1.FileHeaderSize;
             }
@@ -605,6 +623,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZDB
                     RawNameField = rawName,
                     TrailingWord = trailingWord,
                 });
+                _slots.Add(new Slot(_entries[^1], cursor, entry, size));
 
                 cursor += headSize;
             }
@@ -613,6 +632,36 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZDB
         // ====================================================================
         // Private – serialisation
         // ====================================================================
+
+        private void CaptureGaps(byte[] data)
+        {
+            uint end = 0;
+            foreach (var s in _slots.Where(s => IsPayload(s.Entry) && s.Length > 0).OrderBy(s => s.Offset))
+            {
+                if (s.Offset > end) _gaps.Add((end, ReadBlock(data, end, s.Offset - end)));
+                end = Math.Max(end, checked(s.Offset + s.Length));
+            }
+            if (end < data.Length) _gaps.Add((end, ReadBlock(data, end, (uint)data.Length - end)));
+            _originalLength = data.Length;
+        }
+
+        // Retail DEP_ descriptors store a dependency index in the size word. They share offset zero with
+        // the first actual resource and must never overwrite its first bytes.
+        private bool IsPayload(ZdbEntry entry) => _archiveType != 1 || entry.Tag != "DEP_";
+
+        private byte[] WriteOriginalLayout()
+        {
+            var result = new byte[_originalLength];
+            foreach (var (offset, bytes) in _gaps)
+                bytes.CopyTo(result, offset);
+            foreach (var s in _slots.Where(s => IsPayload(s.Entry)))
+            {
+                s.Entry.Data.CopyTo(result, s.Offset);
+                if (_archiveType == 1)
+                    BitConverter.TryWriteBytes(result.AsSpan((int)s.Header + 0x50), s.Entry.Checksum);
+            }
+            return result;
+        }
 
         private byte[] SerializeType1()
         {
@@ -623,11 +672,15 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZDB
             uint bodySize = 0;
             for (int i = 0; i < fileCount; i++)
             {
-                offsets[i] = bodySize;
-                bodySize = Align16(bodySize + (uint)_entries[i].Data.Length);
+                if (IsPayload(_entries[i]))
+                {
+                    offsets[i] = bodySize;
+                    bodySize = Align16(checked(bodySize + _entries[i].Size));
+                }
             }
 
             uint archiveHeaderSize = 0xC8u + (uint)(fileCount * 0x58);
+            if ((_head1.ArchiveHeaderSize & 15) == 0) archiveHeaderSize = Align16(archiveHeaderSize);
 
             using var ms = new MemoryStream();
             using var bw = new BinaryWriter(ms);
@@ -635,13 +688,13 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZDB
             // Main header
             bw.Write(0x000000C8u);       // MainHeaderSize
             bw.Write(0x00000058u);       // FileHeaderSize
-            bw.Write(0x00000006u);       // Version
+            bw.Write(_head1.Version);
             bw.Write(archiveHeaderSize); // ArchiveHeaderSize
             bw.Write(bodySize);          // BodySize
-            bw.Write(0x4532ABCDu);       // UnusedId sentinel
-            bw.Write(0x00000000u);       // Compression
-            bw.Write((ushort)0);         // Errors
-            bw.Write((ushort)0);         // Warnings
+            bw.Write(_head1.UnusedId);
+            bw.Write(_head1.Compression);
+            bw.Write(_head1.Errors);
+            bw.Write(_head1.Warnings);
             for (int i = 0x20; i < 0xC4; i += 4)
                 bw.Write(0u);
             bw.Write((uint)fileCount);   // FileCount @ 0xC4
@@ -660,8 +713,11 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZDB
             }
 
             // Body (16-byte aligned)
+            ms.Position = archiveHeaderSize;
+            ms.SetLength(archiveHeaderSize);
             for (int i = 0; i < fileCount; i++)
             {
+                if (!IsPayload(_entries[i])) continue;
                 bw.Write(_entries[i].Data);
                 uint written = (uint)_entries[i].Data.Length;
                 while ((written & 0xF) != 0) { bw.Write((byte)0); written++; }
@@ -673,7 +729,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZDB
         private byte[] SerializeType2()
         {
             int fileCount = _entries.Count;
-            uint dataStart = 0xA0u + (uint)(fileCount * 0x5C);
+            uint dataStart = AlignSector(0xA0u + (uint)(fileCount * 0x5C));
 
             using var ms = new MemoryStream();
             using var bw = new BinaryWriter(ms);
@@ -725,12 +781,17 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZDB
                 bw.Write(0u);           // padding +0x54 (confirmed zero)
                 bw.Write(e.TrailingWord); // preserved @ +0x58 (non-zero in real archives)
 
-                running += e.Size;
+                running = AlignSector(checked(running + e.Size));
             }
 
             // Body
+            ms.Position = dataStart;
             foreach (ZdbEntry e in _entries)
+            {
                 bw.Write(e.Data);
+                ms.Position = AlignSector((uint)ms.Position);
+            }
+            ms.SetLength(ms.Position);
 
             return ms.ToArray();
         }
@@ -743,8 +804,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZDB
         {
             var b = new byte[0xC8];
             b[0x00] = 0xC8; b[0x04] = 0x58; b[0x08] = 0x06;
-            // Sentinel 0x12345678 little-endian @ 0x14
-            b[0x14] = 0x78; b[0x15] = 0x56; b[0x16] = 0x34; b[0x17] = 0x12;
+            BitConverter.GetBytes(0x4532ABCDu).CopyTo(b, 0x14);
             return b;
         }
 
@@ -794,6 +854,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.ZDB
         }
 
         private static uint Align16(uint v) => (v + 0xFu) & ~0xFu;
+        private static uint AlignSector(uint v) => checked(v + 0x7FFu) & ~0x7FFu;
 
         // ====================================================================
         // Private – path helpers

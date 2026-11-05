@@ -42,8 +42,20 @@ namespace MapBuilder.Server.Services
                     string source = s.OpenPath.Length > 0 ? s.OpenPath : s.Package.SourcePath;
                     Directory.CreateDirectory(AutosaveFolder);
                     string path = AutosavePath(source, s.Package.IsZdb);
-                    // A package that cannot be written (SOCOM 3 / CA, read-only) waits; the others still save.
                     try { PackageSave.Write(s.Package, s.Dirty.ToList(), path); }
+                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or NotSupportedException) { continue; }
+                    LastAutosave[s.Id] = new Autosaved(path, s.Revision, DateTime.UtcNow);
+                    written.Add(path);
+                }
+            }
+            foreach (var s in CaSessions.Values)
+            {
+                lock (s.Gate)
+                {
+                    if (!CaSessions.ContainsKey(s.Id)) continue;
+                    if (s.Dirty.Count == 0 || LastAutosave.TryGetValue(s.Id, out var last) && last.Revision == s.Revision) continue;
+                    string path = AutosavePath(s.Package.SourcePath, true);
+                    try { WriteCaCopy(s, path); }
                     catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or NotSupportedException) { continue; }
                     LastAutosave[s.Id] = new Autosaved(path, s.Revision, DateTime.UtcNow);
                     written.Add(path);
@@ -65,11 +77,11 @@ namespace MapBuilder.Server.Services
             byte[] digest = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(full.ToUpperInvariant()));
             string tag = Convert.ToHexString(digest, 0, 4).ToLowerInvariant();
             string ext = isZdb ? Path.GetExtension(full).ToUpperInvariant() : "";
-            if (isZdb && ext != ".ZDB" && ext != ".CDB") ext = ".ZDB";
+            if (isZdb && ext is not (".ZDB" or ".CDB" or ".ZAR")) ext = ".ZDB";
             return Path.Combine(AutosaveFolder, $"{name}-{tag}.autosave{ext}");
         }
 
-        private static object? AutosaveOf(AssetSession s) =>
-            LastAutosave.TryGetValue(s.Id, out var a) ? new { path = a.Path, revision = a.Revision, at = a.At } : null;
+        private static object? AutosaveOf(string id) =>
+            LastAutosave.TryGetValue(id, out var a) ? new { path = a.Path, revision = a.Revision, at = a.At } : null;
     }
 }

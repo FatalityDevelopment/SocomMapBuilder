@@ -33,7 +33,8 @@ interface PropsPanelProps {
   single: MapInstanceWire | null;
   movableCount: number;
   busy: boolean;
-  onMovePoint: (name: string, axis: 'x' | 'z', value: string) => void;
+  onMovePoint: (name: string, axis: 'x' | 'y' | 'z', value: string) => void;
+  onRenamePoint: (name: string) => void;
   onSetField: (field: 'position' | 'yaw' | 'scale', value: string, axis?: number) => void;
   // A multi-selection: move by an offset, turn by an angle, or set one scale for all.
   onEditSelection: (field: 'offset' | 'turn' | 'scale', value: string, axis?: number) => void;
@@ -76,10 +77,11 @@ interface PropsPanelProps {
 }
 
 export function PropsPanel(p: PropsPanelProps) {
+  const ca = p.status?.game === 'SOCOM 3 / Combined Assault';
   return (
     <div className="me-props">
       <div className="me-tabs">
-        {TABS.map(t => (
+        {TABS.filter(t => !ca || (t.id !== 'actions' && t.id !== 'place')).map(t => (
           <button key={t.id} className={`me-tab${p.tab === t.id ? ' active' : ''}`} onClick={() => p.setTab(t.id)}>{t.label}</button>
         ))}
       </div>
@@ -104,13 +106,13 @@ export function PropsPanel(p: PropsPanelProps) {
                 <div className="me-card-title">Map</div>
                 <dl className="me-kv">
                   <dt>Package</dt><dd className="lm-mono">{p.status.path}</dd>
-                  <dt>Scene</dt><dd className="lm-mono">{p.sceneNs}_GEO.ZED</dd>
+                  <dt>Scene</dt><dd className="lm-mono">{ca ? p.sceneNs : `${p.sceneNs}_GEO.ZED`}</dd>
                   {p.countList.map(c => <div key={c.kind} style={{ display: 'contents' }}><dt>{c.kind}</dt><dd>{c.count}</dd></div>)}
                   <dt>Changed</dt><dd className="lm-mono">{p.status.dirty.join(', ') || '—'}</dd>
                 </dl>
               </div>
             )}
-            <ProblemsCard {...p} />
+            {!ca && <ProblemsCard {...p} />}
             <div className="me-card">
               <div className="me-card-title">History</div>
               {p.history}
@@ -118,7 +120,7 @@ export function PropsPanel(p: PropsPanelProps) {
             </div>
             <div className="me-card">
               <div className="me-card-title">Session</div>
-              <div className="me-note">Edits stay in the session until you save. File › Save copy… writes a .ZDB; File › Export memory-card pack… writes a CDB.</div>
+              <div className="me-note">{ca ? 'File › Save copy… writes the edited archive to the folder you choose.' : 'Edits stay in the session until you save. File › Save copy… writes a .ZDB; File › Export memory-card pack… writes a CDB.'}</div>
             </div>
           </>
         )}
@@ -160,23 +162,30 @@ function ProblemsCard(p: PropsPanelProps) {
 
 function ItemTab(p: PropsPanelProps) {
   const { single, selectedPoint, pointInfo, selection } = p;
+  const ca = p.status?.game === 'SOCOM 3 / Combined Assault';
+  const locked = p.busy || !!p.status?.readOnly;
   if (selectedPoint && pointInfo) {
+    const pointLocked = locked || pointInfo.canMove === false;
     return (
       <>
         <div className="me-card">
           <div className="me-card-title">Point {pointInfo.name}</div>
+          {ca && pointInfo.editable !== false && <button className="lm-tool-btn" disabled={locked} onClick={() => p.onRenamePoint(pointInfo.name)}>Rename point…</button>}
           <dl className="me-kv">
             <dt>Kind</dt><dd>{pointInfo.kind}</dd>
-            <dt>Team</dt><dd>{pointInfo.team}</dd>
+            {(!ca || pointInfo.faction) && <><dt>Team</dt><dd>{pointInfo.faction ?? pointInfo.team}</dd></>}
             <dt>Cell</dt><dd>{pointInfo.cellX}, {pointInfo.cellZ}</dd>
           </dl>
           <div className="me-xform">
-            <span>X / Z</span>
-            <NumField value={fmt(pointInfo.x)} step={1} onCommit={v => p.onMovePoint(pointInfo.name, 'x', v)} />
-            <input className="me-num" type="number" disabled value="—" title="Points have no height (on the ground)" readOnly />
-            <NumField value={fmt(pointInfo.z)} step={1} onCommit={v => p.onMovePoint(pointInfo.name, 'z', v)} />
+            <span>{ca ? 'X / Y / Z' : 'X / Z'}</span>
+            <NumField value={fmt(pointInfo.x)} step={1} disabled={pointLocked} title="Point X" onCommit={v => p.onMovePoint(pointInfo.name, 'x', v)} />
+            {ca && pointInfo.y != null ? <NumField value={fmt(pointInfo.y)} step={1} disabled={pointLocked} title="Point height" onCommit={v => p.onMovePoint(pointInfo.name, 'y', v)} />
+              : <input className="me-num" disabled value="—" title="Ground height" readOnly />}
+            <NumField value={fmt(pointInfo.z)} step={1} disabled={pointLocked} title="Point Z" onCommit={v => p.onMovePoint(pointInfo.name, 'z', v)} />
           </div>
-          <div className="lm-muted me-note">AIMAPS cells snap to the grid; drag with the Move tool (G) or type a position.</div>
+          <div className="lm-muted me-note">{pointInfo.editable === false ? 'Team spawn positions are read-only.'
+            : pointInfo.canMove === false ? "Open the location archive to move this point on its island's grid."
+            : 'Drag with the Move tool (G) or enter a position. X and Z snap to the grid.'}</div>
         </div>
         <Actions {...p} />
       </>
@@ -184,7 +193,7 @@ function ItemTab(p: PropsPanelProps) {
   }
   if (selection.length === 1 && single) {
     const inst = single;
-    const canMove = movable(inst);
+    const canMove = !locked && movable(inst);
     return (
       <>
         <div className="me-card">
@@ -255,8 +264,8 @@ function Actions(p: PropsPanelProps) {
     <div className="me-card">
       <div className="me-card-title">Edit</div>
       <div className="me-actions">
-        <button className="lm-tool-btn" disabled={p.busy || !p.movableCount} onClick={p.onDuplicate}>Duplicate (Shift+D)</button>
-        <button className="lm-tool-btn lm-danger-btn" disabled={p.busy || !p.movableCount} onClick={p.onDelete}>Delete (X)</button>
+        {!p.status?.game && <><button className="lm-tool-btn" disabled={p.busy || !p.movableCount} onClick={p.onDuplicate}>Duplicate (Shift+D)</button>
+        <button className="lm-tool-btn lm-danger-btn" disabled={p.busy || !p.movableCount} onClick={p.onDelete}>Delete (X)</button></>}
         <button className="lm-tool-btn" disabled={p.busy || !p.movableCount} onClick={p.onDrop}>Drop to ground</button>
         <button className="lm-tool-btn" disabled={p.selection.length !== 1 || !p.single?.source} onClick={p.onOpenModel}>Open model…</button>
       </div>

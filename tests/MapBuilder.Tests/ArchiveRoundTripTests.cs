@@ -53,6 +53,77 @@ namespace MapBuilder.Tests
         }
 
         [Fact]
+        public void Fixed_size_resource_edit_only_changes_its_payload_and_crc_in_the_whole_location()
+        {
+            using var mission = ZdbArchive.CreateNew(1);
+            mission.AddResource("mission.rdr", new byte[] { 1, 2, 3, 4 }, "AIMm", 51);
+            mission.AddResource("keep.rdr", Bytes(13, 8), "TEST", 1);
+            // A retail dependency with size 2 points at the first two bytes of the first actual payload.
+            mission.AddResource("other.ZDB", new byte[2], "DEP_", 1);
+            byte[] v6 = mission.ToBytes();
+            int body = BitConverter.ToInt32(v6, 0x0C);
+            Assert.Equal(0, body % 16);
+            v6[0x14] = 0x55;
+            v6[0x1D] = 0xAA;
+            v6[body + 7] = 0xBB; // padding after the edited resource
+            // The table can be in a different order than the payloads.
+            const int first = 0xC8, second = first + 0x58;
+            byte[] header = v6.AsSpan(first, 0x58).ToArray();
+            v6.AsSpan(second, 0x58).CopyTo(v6.AsSpan(first));
+            header.CopyTo(v6, second);
+
+            using var location = ZdbArchive.CreateNew(2);
+            location.AddEntry(@"RUN\MAP\HEADER.RAW", Bytes(9, 7));
+            location.AddEntry(@"RUN\MAP\SP.ZDB", v6);
+            byte[] zar = location.ToBytes();
+            int rawOffset = BitConverter.ToInt32(zar, 0xA0 + 0x44);
+            int zdbOffset = BitConverter.ToInt32(zar, 0xA0 + 0x5C + 0x44);
+            Assert.Equal(0x800, rawOffset);
+            Assert.Equal(0x1000, zdbOffset);
+            Assert.Equal(0, zar.Length % 0x800);
+            zar[rawOffset + 9] = 0xCC; // nonzero sector padding between ZAR entries
+            zar[^1] = 0xDD;
+
+            using var outer = ZdbArchive.FromBytes(zar);
+            using var inner = ZdbArchive.FromBytes(outer.GetEntry(1).Data);
+            Assert.Equal("AIMm", inner.GetEntry(1).Tag);
+            inner.ReplaceEntryData(1, new byte[] { 0xFA, 2, 3, 4 });
+            outer.ReplaceEntryData(1, inner.ToBytes());
+            byte[] expected = (byte[])zar.Clone();
+            expected[zdbOffset + body] = 0xFA;
+            BitConverter.GetBytes(0xE75B6A6Bu).CopyTo(expected, zdbOffset + second + 0x50);
+            Assert.Equal(expected, outer.ToBytes());
+        }
+
+        [Fact]
+        public void All_retail_CA_locations_and_embedded_v6_files_round_trip_byte_for_byte()
+        {
+            string? disc = Environment.GetEnvironmentVariable("MAPBUILDER_CA_DISC");
+            if (string.IsNullOrEmpty(disc)) return;
+            var archives = Directory.GetFiles(Path.Combine(disc, "RUN"), "*.ZAR");
+            Assert.Equal(25, archives.Length);
+            int files = 0;
+            foreach (string path in archives)
+            {
+                byte[] source = File.ReadAllBytes(path);
+                using var zar = ZdbArchive.FromBytes(source);
+                for (int i = 0; i < zar.EntryCount; i++)
+                {
+                    var e = zar.GetEntry(i);
+                    if (e.Data.Length < 8 || BitConverter.ToUInt32(e.Data) != 0xC8 || BitConverter.ToUInt32(e.Data, 4) != 0x58)
+                        continue;
+                    using var zdb = ZdbArchive.FromBytes(e.Data);
+                    byte[] saved = zdb.ToBytes();
+                    Assert.True(e.Data.AsSpan().SequenceEqual(saved), $"{path} / {e.FullPath}");
+                    zar.ReplaceEntryData(i, saved);
+                    files++;
+                }
+                Assert.True(source.AsSpan().SequenceEqual(zar.ToBytes()), path);
+            }
+            Assert.Equal(976, files);
+        }
+
+        [Fact]
         public void Zed_nodes_round_trip_through_add_rename_remove()
         {
             using var zed = ZedContainer.CreateNew();

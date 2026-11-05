@@ -67,6 +67,11 @@ describe('movable', () => {
 });
 
 describe('placementOp', () => {
+  it('moves a CA world node by its unique instance ID', () => {
+    const node = inst({ kind: 'model', caNode: true, geoIndex: null, instance: 'COMPOUND/abcdef01~1' });
+    expect(movable(node)).toBe(true);
+    expect(placementOp(node, { position: [1, 2, 3] })).toEqual({ op: 'moveInstance', instance: node.instance, position: [1, 2, 3] });
+  });
   it('addresses clutter by clutter index and props by GEO node', () => {
     expect(placementOp(inst({ kind: 'clutter', clutterIndex: 7, geoIndex: null }), { yaw: 5 })).toEqual({ op: 'moveClutter', clutterIndex: 7, yaw: 5 });
     expect(placementOp(inst({ geoIndex: 12 }), { position: [1, 2, 3] })).toEqual({ op: 'moveInstance', geoIndex: 12, position: [1, 2, 3] });

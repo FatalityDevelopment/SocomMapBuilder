@@ -44,6 +44,19 @@ pistol shotgun smg sniper launcher rocket mortar mine";
             return c;
         }).ToArray();
 
+        // Case-sensitive matches against retail VALV records. Candidates come from SOCOM II's mission,
+        // valve and HUD objective names (including their numbered variants), CA's AIMm points and STATES.ZDB.
+        private static readonly Dictionary<uint, string> Valves = @"
+CurrentMission conv_GH2 dismount
+BOBJ1 BOBJ1Display BOBJ1Fail BOBJ1Invalid BOBJ1Show BOBJ2 BOBJ2Display BObj9Display
+POBJ1 POBJ2 POBJ3 POBJ4 POBJ5 PObj1 PObj2 PObj6 PObj12
+SOBJ1 SOBJ1Fail SOBJ1Show SOBJ2 SOBJ2Invalid SOBJ3Fail SOBJ6Fail
+SObj2 SObj2Fail SObj3 SObj3Fail SObj5 SObj5Fail SObj6Fail SObj9 SObj9Fail SObj10Fail"
+            .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries).ToDictionary(Crc32);
+
+        /// <summary>A known valve name, or its stable hexadecimal label.</summary>
+        public static string Valve(uint hash) => Valves.TryGetValue(hash, out string? name) ? name : $"v{hash:x8}";
+
         /// <summary>zlib CRC32 of the ASCII name (case-sensitive), how CA hashes every name.</summary>
         public static uint Crc32(string s)
         {

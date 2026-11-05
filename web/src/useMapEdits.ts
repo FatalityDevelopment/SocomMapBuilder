@@ -41,11 +41,11 @@ export function useMapEdits(session: ReturnType<typeof useMapSession>, viewportR
     if (op) { await edit(`set ${field} of ${inst.model}`, op); }
   };
 
-  const movePointField = async (name: string, axis: 'x' | 'z', value: string) => {
+  const movePointField = async (name: string, axis: 'x' | 'y' | 'z', value: string) => {
     const p = pointsRef.current.find(x => x.name === name);
     const v = parseFloat(value);
     if (!p || !Number.isFinite(v)) { return; }
-    await edit(`move point ${name}`, { op: 'movePoint', name, position: [axis === 'x' ? v : p.x, 0, axis === 'z' ? v : p.z] });
+    await edit(`move point ${name}`, { op: 'movePoint', name, position: [axis === 'x' ? v : p.x, axis === 'y' ? v : p.y ?? 0, axis === 'z' ? v : p.z] });
   };
 
   const selectedInstances = () => selection.map(i => instancesRef.current[i]).filter(i => movable(i));
