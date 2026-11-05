@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <strong>Status:</strong> SOCOM II is the primary tested target. SOCOM 3 and Combined Assault support varies by workflow; GTA: San Andreas support is partial, and FTB has not been tested.
+  <strong>Status:</strong> SOCOM II is the primary tested target. SOCOM 1 maps open straight from the disc's folders (<a href="docs/formats/socom1.md">notes</a>); spawn points are not read yet. SOCOM 3 and Combined Assault support varies by workflow; GTA: San Andreas support is partial, and FTB has not been tested.
 </p>
 
 <p align="center">

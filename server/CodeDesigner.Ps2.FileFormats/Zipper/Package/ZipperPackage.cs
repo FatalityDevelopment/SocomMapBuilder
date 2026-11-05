@@ -56,6 +56,17 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             public string Kind { get; init; } = string.Empty;
         }
 
+        /// <summary>
+        /// The <c>RUN</c> folder of a SOCOM 1 map opened from its disc layout (<see cref="Socom1DiscMap"/>); null for
+        /// SOCOM II packages. Its entries keep their disc paths and are indexed under SOCOM II leaf names.
+        /// </summary>
+        public string? DiscRunRoot { get; private init; }
+        public bool IsSocom1DiscMap => DiscRunRoot != null;
+        /// <summary>Libraries a SOCOM 1 map lists that were not found on disk (<c>//common/assetlib/hud</c> …).</summary>
+        public IReadOnlyList<string> MissingLibraries { get; private init; } = Array.Empty<string>();
+        /// <summary>A SOCOM 1 map's archives whose header is all zeros (read from a damaged disc copy).</summary>
+        public IReadOnlyList<string> BlankFiles { get; private init; } = Array.Empty<string>();
+
         private ZipperPackage(string sourcePath, bool isZdb, IEnumerable<RootEntry> entries)
         {
             SourcePath = sourcePath;
@@ -78,6 +89,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             }
             // A path that does not exist is an error, not "its parent folder" (that could be a drive root).
             if (!File.Exists(path) && !Directory.Exists(path)) throw new FileNotFoundException($"Package not found: {path}", path);
+            if (Socom1DiscMap.FindMapZed(path) is { } mapZed) return OpenSocom1(mapZed);
             string dir = Directory.Exists(path) ? path : System.IO.Path.GetDirectoryName(path) ?? path;
             if (!Directory.Exists(dir)) throw new FileNotFoundException("Package not found", path);
             // Package files are a few MB; anything huge beside them (a disc image) is not part of the package, and
@@ -89,9 +101,29 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             return new ZipperPackage(System.IO.Path.Combine(dir, name), false, files);
         }
 
-        private static RootEntry MakeEntry(string fullPath, byte[] data)
+        /// <summary>A SOCOM 1 map from its disc folders: the map's files and its libraries' (<see cref="Socom1DiscMap"/>).</summary>
+        private static ZipperPackage OpenSocom1(string mapZed)
         {
-            string leaf = fullPath.Split('\\', '/').Last();
+            string mapDir = System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(mapZed))!;
+            var missing = new List<string>();
+            var entries = Socom1DiscMap.Files(mapZed, missing)
+                .Where(f => !f.Path.EndsWith(".PSS", StringComparison.OrdinalIgnoreCase))
+                .Select(f => MakeEntry(f.Path, File.ReadAllBytes(f.Path), f.Leaf)).ToList();
+            var blank = entries.Where(e => (e.Path.EndsWith(".ZED", StringComparison.OrdinalIgnoreCase) || e.Path.EndsWith(".ZAR", StringComparison.OrdinalIgnoreCase))
+                    && Socom1DiscMap.LooksBlank(e.Data))
+                .Select(e => e.Path).ToList();
+            string source = System.IO.Path.Combine(mapDir, System.IO.Path.GetFileNameWithoutExtension(mapZed));
+            return new ZipperPackage(source, false, entries)
+            {
+                DiscRunRoot = Socom1DiscMap.RunRoot(mapDir),
+                MissingLibraries = missing,
+                BlankFiles = blank,
+            };
+        }
+
+        private static RootEntry MakeEntry(string fullPath, byte[] data, string? leafName = null)
+        {
+            string leaf = leafName ?? fullPath.Split('\\', '/').Last();
             Match m = ArchiveRx.Match(leaf);
             string? ns = m.Success ? m.Groups["ns"].Value.ToLowerInvariant() : leaf.Equals("WORL_MDL.ZED", StringComparison.OrdinalIgnoreCase) ? "worl" : null;
             string? kind = m.Success ? m.Groups["kind"].Value.ToLowerInvariant() : ns == "worl" ? "mdl" : null;

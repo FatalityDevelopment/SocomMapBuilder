@@ -34,6 +34,19 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
                 return written;
             }
 
+            // A SOCOM 1 map writes each file under its own disc name and folder (MODELS.ZAR, ASSETLIB\MP1\MP1_MDL.ZED):
+            // in place, or into the same layout from RUN\ down under the output folder.
+            if (pkg.DiscRunRoot is { } run)
+            {
+                foreach (var e in targets)
+                {
+                    string file = Socom1DiscMap.SaveTarget(run, e.Path, outputPath);
+                    SafeFile.Write(file, e.Data);
+                    written.Add(file);
+                }
+                return written;
+            }
+
             string dir = outputPath ?? Path.GetDirectoryName(pkg.SourcePath)!;
             Directory.CreateDirectory(dir);
             foreach (var e in targets)
