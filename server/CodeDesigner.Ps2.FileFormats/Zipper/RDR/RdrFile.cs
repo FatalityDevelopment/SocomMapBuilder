@@ -115,11 +115,18 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.RDR
 
         private RdrNode BuildNode(int atomIndex, HashSet<int> seen)
         {
-            if (!seen.Add(atomIndex))
+            // Cycle guard on the path from the root only: retail files point many lists at one shared block of
+            // values (zweapon.rdr's SR-25 and SR-25 SD share their ModelName), and each use must read it.
+            if (seen.Count > 256 || !seen.Add(atomIndex))
             {
-                // Cycle guard - return an empty node to keep traversal finite.
                 return new RdrNode { Atom = Atoms[atomIndex] };
             }
+            try { return BuildNodeOnce(atomIndex, seen); }
+            finally { seen.Remove(atomIndex); }
+        }
+
+        private RdrNode BuildNodeOnce(int atomIndex, HashSet<int> seen)
+        {
             var atom = Atoms[atomIndex];
             var node = new RdrNode { Atom = atom };
 
