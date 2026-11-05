@@ -87,6 +87,7 @@ namespace MapBuilder.Server.Services.Assets
                         "ASSET_UNDO" => UndoRedo(s, true),
                         "ASSET_REDO" => UndoRedo(s, false),
                         "ASSET_SAVE" => Save(s, c.AssetJson),
+                        "ASSET_EXPORT" => Export(s, c.AssetName, c.AssetArchive, c.AssetJson),
                         "ASSET_VALIDATE" => new { ok = true, counts = new Dictionary<string, int>(), instances = 0, textures = 0, textureBytes = 0, problems = Array.Empty<object>() },
                         "ASSET_LIST_ANIMATIONS" => new { packageArchive = (string?)null, sharedPath = (string?)null, clips = Array.Empty<object>() },
                         "ASSET_WEAPONS" => Array.Empty<object>(),

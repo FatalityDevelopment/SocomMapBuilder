@@ -67,6 +67,30 @@ namespace CodeDesigner.Ps2.FileFormats.Swbf
             return result;
         }
 
+        /// <summary>A skel's bones as a <see cref="CharacterSkeleton"/>, in the skel's order (vertex bone indices point
+        /// into it; the skel does not list parents first): World is the bind matrix, Local relative to the parent.</summary>
+        private static CharacterSkeleton Skeleton(List<(string Name, string Parent, float[] Bind)> bones)
+        {
+            var index = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < bones.Count; i++) index.TryAdd(bones[i].Name, i);
+            return CharacterSkeleton.FromBones(bones.Select((b, i) =>
+            {
+                int parent = b.Parent.Length > 0 && index.TryGetValue(b.Parent, out int p) && p != i ? p : -1;
+                float[] local = parent >= 0 ? MulRow(b.Bind, Inverse(bones[parent].Bind)) : (float[])b.Bind.Clone();
+                return new CharacterSkeleton.Bone(b.Name, i, parent, -1, local, (float[])b.Bind.Clone());
+            }));
+        }
+
+        /// <summary>The inverse of a rigid row-vector matrix (rotation rows, translation in 12..14).</summary>
+        private static float[] Inverse(float[] m)
+        {
+            var r = new float[16];
+            for (int i = 0; i < 3; i++) for (int j = 0; j < 3; j++) r[i * 4 + j] = m[j * 4 + i];
+            for (int j = 0; j < 3; j++) r[12 + j] = -(m[12] * r[j] + m[13] * r[4 + j] + m[14] * r[8 + j]);
+            r[15] = 1;
+            return r;
+        }
+
         private static List<string> Strings(Ucfb c, int n)
         {
             var list = new List<string>(n);
@@ -95,10 +119,12 @@ namespace CodeDesigner.Ps2.FileFormats.Swbf
             return m;
         }
 
-        public static ModelMesh Build(Ucfb modl, string archive, Ucfb? skel = null)
+        /// <summary>The model as a mesh in its bind pose. With <paramref name="skin"/> (for export), a bone-space model
+        /// also carries its skeleton (bind matrices as <see cref="CharacterSkeleton.Bone.World"/>) and each vertex its one
+        /// bone at weight 1 (the retail WGHT is 255/0/0/0 throughout).</summary>
+        public static ModelMesh Build(Ucfb modl, string archive, Ucfb? skel = null, bool skin = false)
         {
             string name = Name(modl);
-            var mesh = new ModelMesh { Archive = archive, Name = name };
             var info = modl.Child("INFO") ?? throw new InvalidDataException($"Model {name} has no INFO");
             float[] min = { info.F32(12), info.F32(16), info.F32(20) };
             float[] max = { info.F32(24), info.F32(28), info.F32(32) };
@@ -106,8 +132,10 @@ namespace CodeDesigner.Ps2.FileFormats.Swbf
             for (int k = 0; k < 3; k++) step[k] = (max[k] - min[k]) / 65535f;
             bool boneSpace = info.U32(0) == 1;
             var bones = boneSpace && skel is { } sk ? BindMatrices(sk) : new List<(string Name, string Parent, float[] Bind)>();
-            var byName = new Dictionary<string, float[]>(StringComparer.OrdinalIgnoreCase);
-            foreach (var b in bones) byName.TryAdd(b.Name, b.Bind);
+            var byName = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < bones.Count; i++) byName.TryAdd(bones[i].Name, i);
+            bool skinned = skin && boneSpace && bones.Count > 0;
+            var mesh = new ModelMesh { Archive = archive, Name = name, Skeleton = skinned ? Skeleton(bones) : null };
 
             int index = 0;
             foreach (var segm in modl.Children.Where(c => c.Tag == "segm"))
@@ -120,19 +148,20 @@ namespace CodeDesigner.Ps2.FileFormats.Swbf
                 var strp = segm.Child("STRP");
                 if (n <= 0 || posi is not { } p || strp is not { } st || p.Size < n * 6) continue;
 
-                // Each vertex's bind matrix in a bone-space model: the segment's bone, else its first influence's.
-                float[]? hard = boneSpace && segm.ChildText("BNAM") is { Length: > 0 } bn && byName.TryGetValue(bn, out var hb) ? hb : null;
+                // Each vertex's bone in a bone-space model: the segment's bone, else its first influence's.
+                int hard = boneSpace && segm.ChildText("BNAM") is { Length: > 0 } bn && byName.TryGetValue(bn, out var hb) ? hb : -1;
                 byte[]? bmap = segm.Child("BMAP") is { } bm && bm.Size >= 4 ? bm.Bytes.Slice(4, Math.Clamp(bm.I32(0), 0, bm.Size - 4)).ToArray() : null;
                 var bindChunk = segm.Child("BIND");
-                float[]? MatrixOf(int v)
+                int BoneOf(int v)
                 {
-                    if (!boneSpace) return null;
-                    if (hard != null) return hard;
-                    if (bmap == null || bindChunk is not { } bc || bc.Size < (v + 1) * 4) return null;
+                    if (!boneSpace) return -1;
+                    if (hard >= 0) return hard;
+                    if (bmap == null || bindChunk is not { } bc || bc.Size < (v + 1) * 4) return -1;
                     int slot = bc.Data[bc.Body + v * 4] >> 2;
                     int bone = slot < bmap.Length ? bmap[slot] : -1;
-                    return bone >= 0 && bone < bones.Count ? bones[bone].Bind : null;
+                    return bone >= 0 && bone < bones.Count ? bone : -1;
                 }
+                float[]? MatrixOf(int v) => BoneOf(v) is >= 0 and var b ? bones[b].Bind : null;
 
                 var pos = new float[n * 3];
                 var mats = new float[]?[n];
@@ -177,11 +206,25 @@ namespace CodeDesigner.Ps2.FileFormats.Swbf
                 }
                 var tri = Triangles(st, n);
                 if (tri.Count == 0) continue;
+                int[]? skinBones = null;
+                float[]? skinWeights = null;
+                if (skinned)
+                {
+                    skinBones = new int[n * ModelMesh.SkinInfluences];
+                    skinWeights = new float[n * ModelMesh.SkinInfluences];
+                    Array.Fill(skinBones, -1);
+                    for (int i = 0; i < n; i++)
+                    {
+                        int b = BoneOf(i);
+                        skinBones[i * ModelMesh.SkinInfluences] = b >= 0 ? b : 0;
+                        skinWeights[i * ModelMesh.SkinInfluences] = 1;
+                    }
+                }
                 mesh.Chunks.Add(new ModelMesh.MeshChunk
                 {
                     Index = number, GeometryOffset = segm.Offset, Visual = $"segment{number}", Texture = TextureOf(segm),
                     Unit = "Quantised", Scale = 1, VertexCount = n, Positions = pos, Uvs = uv, Normals = nrm, Colors = col,
-                    Triangles = tri.ToArray(),
+                    Triangles = tri.ToArray(), SkinBones = skinBones, SkinWeights = skinWeights,
                 });
             }
             mesh.Recompute();

@@ -8,7 +8,7 @@ SOCOM U.S. Navy SEALs II is the primary target. Combined Assault also supports s
 | **SOCOM: Combined Assault** | Location archives by name, missions, world, actors, loadouts and named objective areas | Points, actor starts and headings, valve start values, allowed weapon slots and world placements. Save to a copy. | Models to SOCOM II |
 | **SOCOM 3** | Compatible asset archives | Map edits verified on the Combined Assault disc only | Compatible models to SOCOM II |
 | **Grand Theft Auto: San Andreas (PS2)** | Mounted disc, ISO, IMG or DFF | Frame positions, geometry transforms and material properties. Save DFF or IMG copies. | Models and selected character clips to SOCOM II |
-| **Star Wars: Battlefront** | `.ISO` or a `.LVL`: models, textures and maps | Move and turn props, command posts and vehicle spawns. Save `.LVL` copies or a patched `.ISO`. | — |
+| **Star Wars: Battlefront** | `.ISO` or a `.LVL`: models, textures and maps | Move and turn props, command posts and vehicle spawns. Save `.LVL` copies or a patched `.ISO`. | Soldiers, weapons, vehicles and props to SOCOM II |
 | **SOCOM: Fireteam Bravo** | Not tested | — | — |
 
 ## SOCOM II
@@ -65,9 +65,10 @@ Open the disc image (`Star Wars - Battlefront (USA).iso`) or a loose `.LVL` in t
 - **Asset Viewer:** a `.ISO` lists its files by disc path, and a `.LVL` lists its models and textures for preview.
 - **Map Builder:** pick one of the disc's 22 maps from the **Map** list. It draws the terrain (heights, the base texture layer and the baked lighting, with the cut patches of caves and hangars), the placed objects and the sky dome (turn on the Sky layer). The game draws its sky in a small dome that follows the camera; here it is scaled to enclose the map. Sound emitters and particle effects are not drawn.
 - **Command posts, paths and regions:** command posts (with their starting team) and vehicle spawns are map points. The **Paths** layer draws spawn paths (green), AI paths (blue) and the map's boundary (red); the **Regions** layer draws each command post's capture (yellow) and control (orange) regions and the map's other regions. Click a name in the outliner to frame it. Ambient sound regions are left out. Cylinder regions are drawn with the first and third sizes as radii, which is not confirmed.
+- **Conversion to SOCOM II:** **Export to SOCOM II** in the Model Editor turns a soldier (retargeted onto SOCOM II's character through its bone_* skeleton, scaled head to toe), a weapon (barrel along SOCOM II's +X, the muzzle from its hp_fire hardpoint), a vehicle (as a static prop) or any prop into a memory-card pack. SOCOM II's templates come from its RUN folder or its disc image. Battlefront animations are not converted yet.
 - **Editing:** move and turn props with the gizmo or the Item fields, and drag command posts and vehicle spawns. Placements cannot be scaled, and props cannot be added or deleted yet. A command post's regions and spawn path stay where they are when it moves. **File › Save copy** writes the edited levels into a folder at their disc paths (`TAT/TAT2.LVL`); saving to a path ending `.ISO` (for example through the assistant's `assets_save`) writes a copy of the whole disc with the edited levels in place, which needs the disc's size free. Edits keep every file's size, so the copy is otherwise byte for byte the original. Not yet tested in game.
 
-The terrain's blended texture layers, editing and conversion to SOCOM II are planned. The PS2 position quantisation, bone-space vertices and the terrain and world layouts follow research by the [openbf](https://github.com/sprucey149/openbf) project (MIT).
+The terrain's blended texture layers, map edits that change sizes (adding or deleting props, editing paths and regions) and animations are planned. The PS2 position quantisation, bone-space vertices and the terrain and world layouts follow research by the [openbf](https://github.com/sprucey149/openbf) project (MIT).
 
 ## Saving to a disc image
 

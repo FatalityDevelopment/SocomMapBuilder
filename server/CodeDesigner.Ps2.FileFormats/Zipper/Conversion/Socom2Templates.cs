@@ -43,7 +43,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Conversion
         }
 
         /// <summary>The template files, from SOCOM II's RUN folder.</summary>
-        public static readonly string[] TemplateFiles = { "MP52.ZDB", "M53.ZDB", "MP61.ZDB", "MOTION_P.ZAR" };
+        public static readonly string[] TemplateFiles = { "MP52.ZDB", "M51.ZDB", "M53.ZDB", "MP61.ZDB", "MOTION_P.ZAR" };
 
         /// <summary>
         /// The first <c>X:/RUN</c> (or <paramref name="hint"/>) holding SOCOM II's MP52.ZDB and MOTION_P.ZAR. A SOCOM II
@@ -52,6 +52,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Conversion
         /// </summary>
         public static string? FindRunDir(string? hint = null)
         {
+            // A disc image named as the hint wins over mounted drives.
+            if (!string.IsNullOrEmpty(hint) && hint.EndsWith(".iso", StringComparison.OrdinalIgnoreCase) && RunFromIso(hint) is { } named) return named;
             var candidates = new List<string>();
             if (!string.IsNullOrEmpty(hint) && !hint.EndsWith(".iso", StringComparison.OrdinalIgnoreCase)) { candidates.Add(hint); candidates.Add(Path.Combine(hint, "RUN")); }
             var roots = new List<string>();
@@ -62,7 +64,6 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Conversion
             }
             string? folder = candidates.FirstOrDefault(c => File.Exists(Path.Combine(c, "MP52.ZDB")) && File.Exists(Path.Combine(c, "MOTION_P.ZAR")));
             if (folder != null) return folder;
-            if (!string.IsNullOrEmpty(hint) && hint.EndsWith(".iso", StringComparison.OrdinalIgnoreCase)) return RunFromIso(hint);
             foreach (string root in roots)
             {
                 IEnumerable<string> isos;

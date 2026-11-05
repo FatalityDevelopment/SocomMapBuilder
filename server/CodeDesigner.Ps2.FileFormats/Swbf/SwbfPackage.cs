@@ -391,6 +391,24 @@ namespace CodeDesigner.Ps2.FileFormats.Swbf
             return mesh;
         }
 
+        /// <summary>A model for export: like <see cref="BuildMesh"/>, plus its skeleton and per-vertex bones when it is
+        /// skinned (not cached).</summary>
+        public ModelMesh BuildExportMesh(Model model)
+        {
+            Ucfb? skel = _skels.TryGetValue((model.Level, model.Name.ToLowerInvariant()), out int at) ? ChunkAt(model.Level, at) : null;
+            return SwbfModel.Build(ChunkAt(model.Level, model.Offset), model.Archive, skel, skin: true);
+        }
+
+        /// <summary>A model's hardpoints (hp_fire, hp_active ...) from its skeleton: name -> bind position.</summary>
+        public Dictionary<string, float[]> Hardpoints(Model model)
+        {
+            var points = new Dictionary<string, float[]>(StringComparer.OrdinalIgnoreCase);
+            if (!_skels.TryGetValue((model.Level, model.Name.ToLowerInvariant()), out int at)) return points;
+            foreach (var b in SwbfModel.BindMatrices(ChunkAt(model.Level, at)))
+                if (b.Name.StartsWith("hp_", StringComparison.OrdinalIgnoreCase)) points.TryAdd(b.Name, new[] { b.Bind[12], b.Bind[13], b.Bind[14] });
+            return points;
+        }
+
         /// <summary>A texture by name: the copy in <paramref name="archive"/> (the level asking for it) first, then the
         /// shared levels (side and common), then any.</summary>
         public TextureRef? FindTextureRef(string name, string? archive = null)
