@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using CodeDesigner.Ps2.FileFormats;
 using CodeDesigner.Ps2.FileFormats.Zipper.Ca;
 
@@ -20,6 +20,7 @@ internal sealed partial class ZipperAssetService
 
     private static object CaEdit(CaSession s, string? json)
     {
+        RefusePsp(s, "Editing");
         using var doc = JsonDocument.Parse(json ?? "{}");
         var a = doc.RootElement;
         if (EditOps.Check(a) is { } error) throw new ArgumentException(error);
@@ -115,6 +116,7 @@ internal sealed partial class ZipperAssetService
 
     private static object CaSave(CaSession s, string? json)
     {
+        RefusePsp(s, "Saving");
         var args = Parse<SaveArgs>(json);
         if (args?.Mode != null && !args.Mode.Equals("zdb", StringComparison.OrdinalIgnoreCase))
             throw new NotSupportedException("CA maps save as complete location archives or standalone v6 ZDBs.");

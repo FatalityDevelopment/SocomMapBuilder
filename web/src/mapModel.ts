@@ -14,6 +14,9 @@ export const LAYERS: Array<{ id: MapLayer; label: string }> = [
   { id: 'regions', label: 'Regions' },
 ];
 
+// Combined Assault and the Fireteam Bravo games (PSP) share the CA session: ISLE worlds, placements and points only.
+export const isCaFamily = (game?: string | null) => game === 'SOCOM 3 / Combined Assault' || /^SOCOM: Fireteam Bravo/.test(game ?? '');
+
 export interface ModelGroup { source: string; model: string; indices: number[] }
 
 // Sky models go by many names (sky, sky_m72, mp62_sky, alaska4d_sky, sky_follow, sun); skylines and skylights are scenery.

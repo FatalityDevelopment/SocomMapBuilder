@@ -1,4 +1,4 @@
-using CodeDesigner.Ps2.FileFormats.Assets;
+﻿using CodeDesigner.Ps2.FileFormats.Assets;
 using CodeDesigner.Ps2.FileFormats.Zipper.Geo;
 using CodeDesigner.Ps2.FileFormats.Zipper.Model;
 using CodeDesigner.Ps2.FileFormats.Zipper.Package;
@@ -34,6 +34,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         /// <summary>True when the file is CA's: a .ZAR whose entries are ZDB v6, or a ZDB v6 (header 0xC8, 0x58).</summary>
         public static bool IsCaPath(string path)
         {
+            if (Directory.Exists(path)) return PspMapFiles(path).Count > 0;
             if (!File.Exists(path)) return false;
             using var f = File.OpenRead(path);
             var head = new byte[8];
@@ -49,9 +50,78 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
             catch (InvalidDataException) { return false; }
         }
 
+        /// <summary>True for SOCOM: Fireteam Bravo 2 (PSP): its ZDBs are version 7 and its libraries draw with the GE.</summary>
+        public bool IsPsp { get; private set; }
+
+        /// <summary>
+        /// The ZDB files of a Fireteam Bravo 2 map folder (<c>RUN\FORT_MP</c>): every version-7 ZDB in it. A map is the
+        /// island (<c>ISLAND_F.ZDB</c>: the <c>ISLE</c> library), the world (<c>FORT_MP.ZDB</c>), the characters
+        /// (<c>VCOMMON_*.ZDB</c>, one per game mode) and the missions (<c>DEM.ZDB</c>, <c>SUP.ZDB</c> ...). Empty when
+        /// the folder holds no version-7 ZDB.
+        /// </summary>
+        public static List<string> PspMapFiles(string dir)
+        {
+            var list = new List<string>();
+            if (!Directory.Exists(dir)) return list;
+            foreach (string f in Directory.GetFiles(dir, "*.ZDB").OrderBy(f => f, StringComparer.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    using var s = File.OpenRead(f);
+                    var head = new byte[12];
+                    if (s.Read(head, 0, 12) == 12 && BitConverter.ToUInt32(head, 0) == 0xC8 && BitConverter.ToUInt32(head, 4) == 0x58
+                        && BitConverter.ToUInt32(head, 8) >= 7) list.Add(Path.GetFullPath(f));
+                }
+                catch (IOException) { }
+            }
+            return list;
+        }
+
+        private static bool IsPspZdb(byte[] data) =>
+            data.Length >= 12 && BitConverter.ToUInt32(data, 0) == 0xC8 && BitConverter.ToUInt32(data, 4) == 0x58 && BitConverter.ToUInt32(data, 8) >= 7;
+
+        /// <summary>
+        /// A Fireteam Bravo 2 map (a map folder, or any ZDB in one, which opens the whole folder), read-only: its own
+        /// ZDBs, then <c>RUN\GLOBAL.ZDB</c> (weapons). Every game mode's <c>VCOMMON_*.ZDB</c> holds the same character
+        /// library; only the first copy of an identical library is kept.
+        /// </summary>
+        private static CaPackage OpenPsp(string path)
+        {
+            string full = Path.GetFullPath(path);
+            string dir = Directory.Exists(full) ? full : Path.GetDirectoryName(full) ?? ".";
+            var files = PspMapFiles(dir);
+            // A ZDB the folder scan did not pick up opens on its own.
+            if (File.Exists(full) && !files.Contains(full, StringComparer.OrdinalIgnoreCase)) files = new List<string> { full };
+            byte[] own = File.Exists(full) ? File.ReadAllBytes(full) : Array.Empty<byte>();
+            var pkg = new CaPackage(full, own) { IsPsp = true };
+            var seen = new HashSet<string>();
+            void Add(string file)
+            {
+                using var zdb = ZdbArchive.FromBytes(File.ReadAllBytes(file));
+                for (int i = 0; i < zdb.EntryCount; i++)
+                {
+                    var e = zdb.GetEntry(i);
+                    if (e.Tag == "DEP_") continue;
+                    // The copies differ only in a header word, so match tag, name and size.
+                    string key = $"{e.Tag}|{e.FullPath}|{e.Data.Length}";
+                    if (e.Tag is "ASST" or "ISLE" && !seen.Add(key)) continue;
+                    pkg.Resources.Add(new Resource(Path.GetFileName(file), e.FullPath, e.Tag, e.ResourceVersion, e.Data));
+                }
+            }
+            foreach (string f in files) Add(f);
+            string? run = Path.GetDirectoryName(dir);
+            string global = run == null ? "" : Path.GetFullPath(Path.Combine(run, "GLOBAL.ZDB"));
+            if (files.Count > 1 && !files.Contains(global, StringComparer.OrdinalIgnoreCase) && File.Exists(global)
+                && PspMapFiles(run!).Contains(global, StringComparer.OrdinalIgnoreCase)) Add(global);
+            pkg.IndexLibraries();
+            return pkg;
+        }
+
         public static CaPackage Open(string path)
         {
+            if (Directory.Exists(path)) return OpenPsp(path);
             byte[] data = File.ReadAllBytes(path);
+            if (IsPspZdb(data)) return OpenPsp(path);
             var pkg = new CaPackage(Path.GetFullPath(path), data);
             if (BitConverter.ToUInt32(data, 0) == 0xC8) pkg.AddV6(Path.GetFileName(path), data, -1);
             else
@@ -85,7 +155,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
             foreach (var r in Resources.Where(r => r.Tag is "ISLE" or "ASST"))
             {
                 if (r.Data.Length < 0x60) continue;
-                var lib = new CaLibrary(r.Data);
+                var lib = new CaLibrary(r.Data, psp: IsPsp);
                 if (lib.Version is < 1 or > 3 || lib.Models.Count == 0 && lib.Textures.Count == 0) continue;
                 _libraries.Add((r, lib));
                 // A version-3 header's second library (global_assets.rdr: every weapon, 88 models).
@@ -253,7 +323,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         /// </summary>
         private List<int> Drawn(int libraryIndex, CaLibrary lib, CaLibrary.Node node)
         {
-            var objs = node.Objects.Where(o => lib.U32(o) == CaLibrary.StaticObjectType).ToList();
+            var objs = node.Objects.Where(lib.IsStaticObject).ToList();
             if (objs.Count < 2) return objs;
             var info = objs.Select(o =>
             {
@@ -297,6 +367,14 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
                 var (min, max) = WorldBounds(lib, w.Offset);
                 foreach (var inst in lib.Instances())
                 {
+                    if (inst.Object > 0)
+                    {
+                        // A Fireteam Bravo 2 instance places one static object; the sun cards stand above 1,000 units.
+                        if (Enumerable.Range(0, 3).Any(k => inst.Matrix[12 + k] < min[k] - ParkedMargin || inst.Matrix[12 + k] > max[k] + ParkedMargin)) continue;
+                        list.Add(new Placement(inst.Matrix[13] > SkyHeight ? SkyWorld : w.Name, lib.U32(inst.Offset + 0x50), w.LibraryIndex, inst.Object, inst.Matrix,
+                            $"{w.Name}/inst_{inst.Offset:x}", -1, inst.Matrix));
+                        continue;
+                    }
                     if (inst.Model == w.Offset) continue;
                     // A few records are parked far off the island (at the origin, or thousands of units out: 56 of the
                     // disc's 18,262); they are not drawn.
@@ -319,9 +397,43 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
                                 piece++ == 0 ? key : $"{key}~{piece - 1}", -1, inst.Matrix));
                     }
                 }
+                if (lib.Psp) list.AddRange(PspWorldObjects(w, lib, list));
             }
             return list;
         }
+
+        /// <summary>
+        /// Fireteam Bravo 2 islands draw most of their terrain and buildings from mesh objects that no node or instance
+        /// places: their vertices are already in world space (the terrain tile nodes find them by area). Each is drawn
+        /// where it is. Sky domes (an object whose bounds enclose the others' on x and z) and cloud layers (above 1,000
+        /// units) are placed under the world name <see cref="SkyWorld"/>.
+        /// </summary>
+        private List<Placement> PspWorldObjects(Model w, CaLibrary lib, List<Placement> placed)
+        {
+            var used = placed.Where(p => p.LibraryIndex == w.LibraryIndex).Select(p => p.Object).ToHashSet();
+            foreach (var m in Models().Where(m => m.LibraryIndex == w.LibraryIndex))
+                foreach (var n in lib.Nodes(m.Offset)) used.UnionWith(n.Objects);
+            var free = lib.Objects.Where(o => !used.Contains(o) && lib.IsStaticObject(o))
+                .Select(o => (Obj: o, Mesh: ObjectMesh(w.LibraryIndex, o))).Where(x => x.Mesh.Chunks.Count > 0).ToList();
+            bool Encloses(ModelMesh a, ModelMesh b) =>
+                a.BoundsMin[0] < b.BoundsMin[0] && a.BoundsMin[2] < b.BoundsMin[2] && a.BoundsMax[0] > b.BoundsMax[0] && a.BoundsMax[2] > b.BoundsMax[2];
+            var list = new List<Placement>();
+            foreach (var (obj, mesh) in free)
+            {
+                // A dome encloses all but at most the other domes.
+                bool sky = free.Count > 2 && free.Count(o => o.Obj != obj && Encloses(mesh, o.Mesh)) >= free.Count - 2
+                    || mesh.BoundsMin[1] > SkyHeight;
+                list.Add(new Placement(sky ? SkyWorld : w.Name, lib.U32(obj + 0x08), w.LibraryIndex, obj, Matrix4.Identity(),
+                    $"{w.Name}/{ObjectName(obj)}", -1, Matrix4.Identity()));
+            }
+            return list;
+        }
+
+        /// <summary>The world name of a Fireteam Bravo 2 sky dome or cloud layer (the Map Builder's Sky layer).</summary>
+        public const string SkyWorld = "sky";
+
+        /// <summary>Fireteam Bravo 2 maps keep their playable ground well below this height; clouds and sun cards are above it.</summary>
+        private const float SkyHeight = 1000;
 
         /// <summary>How far outside its island's bounds a scatter instance may stand and still be drawn.</summary>
         private const float ParkedMargin = 1000;
@@ -330,10 +442,12 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         private static (float[] Min, float[] Max) WorldBounds(CaLibrary lib, int root)
         {
             var min = new float[3]; var max = new float[3];
+            // Fireteam Bravo 2 nodes hold one more word before the bounds (+0xB4 min, +0xC0 max).
+            int at = lib.Psp ? 0xB4 : 0xB0;
             for (int k = 0; k < 3; k++)
             {
-                min[k] = root + 0xC8 <= lib.Data.Length ? BitConverter.ToSingle(lib.Data, root + 0xB0 + 4 * k) : float.NaN;
-                max[k] = root + 0xC8 <= lib.Data.Length ? BitConverter.ToSingle(lib.Data, root + 0xBC + 4 * k) : float.NaN;
+                min[k] = root + at + 0x18 <= lib.Data.Length ? BitConverter.ToSingle(lib.Data, root + at + 4 * k) : float.NaN;
+                max[k] = root + at + 0x18 <= lib.Data.Length ? BitConverter.ToSingle(lib.Data, root + at + 0xC + 4 * k) : float.NaN;
             }
             bool valid = Enumerable.Range(0, 3).All(k => float.IsFinite(min[k]) && float.IsFinite(max[k]) && min[k] <= max[k]);
             return valid ? (min, max)
@@ -379,7 +493,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         public ModelMesh BuildMesh(Model model)
         {
             var lib = _libraries[model.LibraryIndex].Lib;
-            if (model.Kind == "character") return BuildCharacter(model, lib, BoneName);
+            // Fireteam Bravo 2 characters are drawn in their bind pose (their skin is not read yet).
+            if (model.Kind == "character" && !IsPsp) return BuildCharacter(model, lib, BoneName);
             var mesh = new ModelMesh { Archive = model.File, Name = model.Name };
             var nodes = lib.Nodes(model.Offset);
             var skip = model.Kind is "prop" or "weapon" ? LodSkip(model.LibraryIndex, lib, nodes) : new HashSet<int>();
@@ -474,7 +589,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
             if (!uint.TryParse(hex, System.Globalization.NumberStyles.HexNumber, null, out uint hash)) return null;
             foreach (var (_, lib) in _libraries)
                 foreach (int rec in lib.Textures)
-                    if (lib.U32(rec + 0x4C) == hash && lib.DecodeTexture(rec) is { } t) return t;
+                    if (lib.TextureHash(rec) == hash && lib.DecodeTexture(rec) is { } t) return t;
             return null;
         }
 
@@ -486,7 +601,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
             if (!uint.TryParse(hex, System.Globalization.NumberStyles.HexNumber, null, out uint hash)) return null;
             foreach (var (_, lib) in _libraries)
                 foreach (int rec in lib.Textures)
-                    if (lib.U32(rec + 0x4C) == hash && lib.TextureState(rec) is { } state) return state;
+                    if (lib.TextureHash(rec) == hash && lib.TextureState(rec) is { } state) return state;
             return null;
         }
 
@@ -516,11 +631,16 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         public List<MissionInfo> Missions()
         {
             if (_missions != null) return _missions;
+            // Fireteam Bravo 2: a map folder's game modes (DEM.ZDB, SUP.ZDB ...) or campaign missions (SP.ZDB,
+            // DYNAMIC.ZDB) each hold a mission.rdr in CA's layout; the folder says which (FORT_SP, VILLAGE_SP2).
+            string pspKind = System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(Path.TrimEndingDirectorySeparator(
+                Directory.Exists(SourcePath) ? SourcePath : Path.GetDirectoryName(SourcePath) ?? "")), "_SP[0-9]*$", System.Text.RegularExpressions.RegexOptions.IgnoreCase) ? "SP" : "MP";
             int Rank(string kind) => kind switch { "SP" => 0, "IA" => 1, "MP" => 2, "TR" => 3, _ => 4 };
             return _missions = Resources.Where(r => r.Tag == "AIMm")
                 .Select(r =>
                 {
                     string id = Path.GetFileNameWithoutExtension(r.File.Replace('\\', '/')).ToUpperInvariant();
+                    if (IsPsp) return new MissionInfo(id, r.File, pspKind, "");
                     var m = System.Text.RegularExpressions.Regex.Match(id, @"^(SP|MP|IA|TR)\d+([A-Z]*)$");
                     return new MissionInfo(id, r.File, m.Success ? m.Groups[1].Value : "other", m.Success ? m.Groups[2].Value : "");
                 })

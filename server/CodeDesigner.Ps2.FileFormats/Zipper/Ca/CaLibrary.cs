@@ -1,4 +1,4 @@
-using CodeDesigner.Ps2.FileFormats.Assets;
+﻿using CodeDesigner.Ps2.FileFormats.Assets;
 using CodeDesigner.Ps2.FileFormats.Zipper.Geo;
 using CodeDesigner.Ps2.FileFormats.Zipper.Model;
 using CodeDesigner.Ps2.FileFormats.Zipper.Package;
@@ -21,11 +21,22 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         public byte[] Data { get; }
         private readonly int _base;
 
-        public CaLibrary(byte[] data, int? vectorsAt = null)
+        public CaLibrary(byte[] data, int? vectorsAt = null, bool psp = false)
         {
             Data = data;
+            Psp = psp;
             _base = vectorsAt ?? 0x28 + 4 * ((int)U32(0) - 2);
         }
+
+        /// <summary>A SOCOM: Fireteam Bravo 2 (PSP) library: GE display lists and texture records (<see cref="PspGe"/>),
+        /// node mesh objects at +0x9C.</summary>
+        public bool Psp { get; }
+
+        /// <summary>A static mesh object of this library's platform.</summary>
+        public bool IsStaticObject(int obj) => Psp ? PspGe.IsMeshObject(U32(obj)) : U32(obj) == StaticObjectType;
+
+        /// <summary>A texture record's name hash (+0x4C; PSP +0x08).</summary>
+        public uint TextureHash(int rec) => U32(rec + (Psp ? 0x08 : 0x4C));
 
         public uint Version => U32(0);
 
@@ -51,7 +62,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         {
             if (Version != 3) return null;
             int o = (int)U32(0x0C);
-            return o > 0 && o < Data.Length - 0x58 ? new CaLibrary(Data, o + 0x18) : null;
+            return o > 0 && o < Data.Length - 0x58 ? new CaLibrary(Data, o + 0x18, Psp) : null;
         }
 
         // ------------------------------------------------------------------ node trees
@@ -75,7 +86,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
                 if (!local.All(float.IsFinite)) local = Matrix4.Identity();
                 float[] world = Matrix4.Multiply(parentWorld, local);
                 int index = list.Count;
-                list.Add(new Node(n, U32(n + 4), parent, local, world, Vector(n + 0x98)));
+                list.Add(new Node(n, U32(n + 4), parent, local, world, Vector(n + (Psp ? 0x9C : 0x98))));
                 foreach (int c in Vector(n + 0x50)) Walk(c, index, world);
             }
             Walk(model, -1, Matrix4.Identity());
@@ -148,6 +159,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         public List<ModelMesh.MeshChunk> Chunks(int obj, float[] world, string visual, int firstIndex,
             ZedModelFile.PositionUnit unit = ZedModelFile.PositionUnit.Sixteenth)
         {
+            if (Psp) return PspGe.Chunks(this, obj, world, visual, firstIndex);
             var list = new List<ModelMesh.MeshChunk>();
             foreach (var s in Sections(obj))
             {
@@ -234,6 +246,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
 
         public TextureGs? TextureState(int rec)
         {
+            if (Psp) return PspGe.TextureState(this, rec);
             int packet = (int)U32(rec + 0x14);
             if (packet <= 0 || packet + 16 > Data.Length) return null;
             var regs = AdRegisters(packet, Data.Length - packet);
@@ -255,7 +268,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         /// scale in its w; +0x40 / +0x44 fade distances squared; +0x4C flags; +0x5C colour; +0x60 the model; +0x64 0;
         /// +0x68 / +0x6C −1.0. <paramref name="Matrix"/> is the placement in <see cref="Matrix4"/> order.
         /// </summary>
-        public sealed record Instance(int Offset, int Model, uint Flags, float[] Matrix);
+        public sealed record Instance(int Offset, int Model, uint Flags, float[] Matrix, int Object = 0);
 
         public const int InstanceSize = 0x70;
         private const uint MinusOne = 0xBF800000;
@@ -270,6 +283,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         public List<Instance> Instances()
         {
             if (_instances != null) return _instances;
+            if (Psp) return _instances = PspGe.Instances(this);
             var models = Models.ToHashSet();
             var found = new SortedSet<int>();
             if (models.Count > 1)
@@ -324,6 +338,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         /// <summary>TEX0 of a texture record (from its GIF A+D packet at +0x14), or null.</summary>
         public ulong? Tex0(int rec)
         {
+            if (Psp) return null;
             int packet = (int)U32(rec + 0x14);
             if (packet <= 0 || packet + 16 > Data.Length) return null;
             int nloop = (int)(U32(packet) & 0x7FFF);
@@ -367,6 +382,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
 
         public Texture? DecodeTexture(int rec)
         {
+            if (Psp) return PspGe.DecodeTexture(this, rec);
             int packet = (int)U32(rec + 0x14);
             if (packet <= 0 || packet + 16 > Data.Length) return null;
             int nloop = (int)(U32(packet) & 0x7FFF);

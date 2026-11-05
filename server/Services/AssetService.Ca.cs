@@ -1,4 +1,4 @@
-using CodeDesigner.Ps2.FileFormats.Assets;
+﻿using CodeDesigner.Ps2.FileFormats.Assets;
 using System.Collections.Concurrent;
 using System.Text.Json;
 using CodeDesigner.Ps2.FileFormats.Imaging;
@@ -31,6 +31,11 @@ namespace MapBuilder.Server.Services
         private static readonly ConcurrentDictionary<string, CaSession> CaSessions = new(StringComparer.OrdinalIgnoreCase);
 
         private const string CaGame = "SOCOM 3 / Combined Assault";
+
+        /// <summary>SOCOM: Fireteam Bravo 2 (PSP) sessions run on the CA code path, read-only.</summary>
+        private const string FtbGame = "SOCOM: Fireteam Bravo 2";
+
+        private static string GameOf(CaSession s) => s.Package.IsPsp ? FtbGame : CaGame;
 
         /// <summary>
         /// Opens a CA archive, or a location / mission path on the disc that names one (<c>G:\RUN\WHARF</c>,
@@ -132,8 +137,8 @@ namespace MapBuilder.Server.Services
             {
                 session = s.Id,
                 path = s.Package.SourcePath,
-                game = CaGame,
-                readOnly = world == null && s.Mission == null,
+                game = GameOf(s),
+                readOnly = s.Package.IsPsp || world == null && s.Mission == null,
                 packageKind = location == "UI" ? "menu" : world != null || s.Mission != null ? "map" : "assets",
                 isZdb = true,
                 mapNamespace = world?.Name,
@@ -164,9 +169,10 @@ namespace MapBuilder.Server.Services
                 return new { revision = s.Revision, missionId = s.Mission, hasReader = false, objectives = Array.Empty<object>(), actors = Array.Empty<object>(), loadoutSource = (string?)null,
                     mission = (object?)null, world = (object?)null, extents = (object?)null, cams = Array.Empty<object>(), valves = Array.Empty<object>(), texts = new Dictionary<string, string>() };
 
-            var actors = p.MissionResource(s.Mission, "MSNv") is { } vehiclesRes ? CaMissionTables.ParseActors(vehiclesRes.Data) : new List<CaMissionTables.Actor>();
-            var types = p.MissionResource(s.Mission, "CHAR") is { } charRes ? CaMissionTables.ParseCharacterTypes(charRes.Data) : new List<CaMissionTables.CharacterType>();
-            var header = p.MissionResource(s.Mission, "MISN") is { } misn ? CaMissionTables.ParseHeader(misn.Data) : null;
+            var actors = p.MissionResource(s.Mission, "MSNv") is { } vehiclesRes ? CaMissionTables.ParseActors(vehiclesRes.Data, p.IsPsp) : new List<CaMissionTables.Actor>();
+            // Fireteam Bravo 2's character.rdr and mission header are laid out differently and are not read yet.
+            var types = !p.IsPsp && p.MissionResource(s.Mission, "CHAR") is { } charRes ? CaMissionTables.ParseCharacterTypes(charRes.Data) : new List<CaMissionTables.CharacterType>();
+            var header = !p.IsPsp && p.MissionResource(s.Mission, "MISN") is { } misn ? CaMissionTables.ParseHeader(misn.Data) : null;
             var valveValues = p.MissionResource(s.Mission, "VALV") is { } valv ? CaMissionTables.ParseValves(valv.Data) : new List<(uint Hash, int Value)>();
             var weaponTable = p.GlobalResource("WEAP")?.Data;
             var weapons = weaponTable == null ? new Dictionary<uint, CaMissionTables.Weapon>()
@@ -311,7 +317,7 @@ namespace MapBuilder.Server.Services
             return new
             {
                 archive = CaArchive(m), name = m.Name, kind = m.Kind, @namespace = m.File, size = 0, nodeIndex = 0,
-                textureNamespace = (string?)null, geoArchive = (string?)null, fromChains = true, game = CaGame,
+                textureNamespace = (string?)null, geoArchive = (string?)null, fromChains = true, game = GameOf(s),
                 visuals = chunks.Select(c => c.visual).Distinct().ToList(),
                 chunks,
                 textures = mesh.Chunks.Select(c => c.Texture).Where(t => t != null).Distinct().Select(t => CaTextureInfo(s, t!)).ToList(),
@@ -341,7 +347,7 @@ namespace MapBuilder.Server.Services
             static string I(int[] a) { var bytes = new byte[a.Length * 4]; Buffer.BlockCopy(a, 0, bytes, 0, bytes.Length); return Convert.ToBase64String(bytes); }
             return new
             {
-                archive = meshArchive, name = meshName, revision = s.Revision, textureNamespace = (string?)null, game = CaGame,
+                archive = meshArchive, name = meshName, revision = s.Revision, textureNamespace = (string?)null, game = GameOf(s),
                 boundsMin = mesh.BoundsMin, boundsMax = mesh.BoundsMax,
                 chunks = mesh.Chunks.Select(c => new
                 {
@@ -393,7 +399,7 @@ namespace MapBuilder.Server.Services
             {
                 sceneNamespace = placements.Count == 0 ? s.Mission : string.Join("+", placements.Select(p => p.World).Distinct()),
                 counts = new Dictionary<string, int> { ["model"] = instances.Count },
-                returned = instances.Count, instances, game = CaGame,
+                returned = instances.Count, instances, game = GameOf(s),
             };
         }
 
@@ -465,8 +471,15 @@ namespace MapBuilder.Server.Services
         /// optionally with CA clips retargeted into its MOTION_S.ZAR. Templates come from SOCOM II's RUN folder
         /// (socom2Run, else the first drive with RUN/MP52.ZDB).
         /// </summary>
+        /// <summary>Fireteam Bravo 2 sessions are read-only for now.</summary>
+        private static void RefusePsp(CaSession s, string what)
+        {
+            if (s.Package.IsPsp) throw new NotSupportedException($"{what} is not available for {FtbGame} yet: its packages open read-only.");
+        }
+
         private static object CaExport(CaSession s, string? archive, string? name, string? json)
         {
+            RefusePsp(s, "Conversion");
             var m = CaFind(s, archive, name);
             var a = Parse<ExportArgs>(json) ?? new ExportArgs(null, null, null, null, null, null);
             string run = Socom2Templates.FindRunDir(a.Socom2Run)
