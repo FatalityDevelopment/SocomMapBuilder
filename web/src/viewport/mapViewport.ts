@@ -29,6 +29,8 @@ export type MapLayer = 'world' | 'reference' | 'clutter' | 'sky' | 'points' | 'p
 
 export interface MapInstance {
   caNode?: boolean;
+  // Battlefront: moved by id like a CA node, but several can move in one batch.
+  multiMove?: boolean;
   kind: string;
   model: string;
   instance: string;
@@ -1129,7 +1131,7 @@ export class MapViewport extends ViewportCore {
 
   // Selected instances that may move (the world model and sky stay put).
   private movable(): number[] {
-    if (this.selected.size > 1 && [...this.selected].some(i => this.instances[i]?.caNode)) { return []; }
+    if (this.selected.size > 1 && [...this.selected].some(i => this.instances[i]?.caNode && !this.instances[i]?.multiMove)) { return []; }
     return [...this.selected].filter(i => isMovable(this.instances[i]));
   }
 
