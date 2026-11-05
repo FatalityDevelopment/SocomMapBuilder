@@ -73,13 +73,17 @@ Coverage on the disc (2026-11-05): 27 maps draw, with 14,000–88,000 triangles 
 
 Each game mode of an online map (`DEM.ZDB`, `SUP.ZDB` … and `DEFAULT.ZDB`) and each campaign file (`SP.ZDB`, `DYNAMIC.ZDB`) is a mission, named after its file. A folder ending `_SP` or `_SP<n>` holds campaign missions; the others are online. All 164 `AIMm` (`mission.rdr`) and `AIMi` resources on the disc read with CA's layouts ([Combined Assault missions](ca-missions.md)), so named points (1,971 in all) are placed on the island's AI grid as in CA.
 
-`vehicles.rdr` (`MSNv`) actors are 0x1BC bytes, not CA's 0x1EC: name `char[32]` (no display key follows), type hash `+0x20`, group `+0x30`, start count `+0x34`, starts from `+0x38` (32 bytes: point `char[28]`, heading). The player's start leaves its name empty and is followed by a position, which is not read.
+`vehicles.rdr` (`MSNv`) actors are 0x1BC bytes, not CA's 0x1EC: name `char[32]` (no display key follows), another hash at `+0x20`, the character type at `+0x24` (a `character.rdr` record's hash), group `+0x30`, start count `+0x34`, starts from `+0x38` (32 bytes: point `char[28]`, heading). The player's start leaves its name empty and is followed by a position, which is not read.
 
-`character.rdr` (`CHAR`) and the mission header (`MISN`) are laid out differently from CA's and are not read, so actors show no model, weapons or mission text. Team spawns are not read.
+`character.rdr` (`CHAR`): `+0x24`/`+0x28` a list of record offsets. A record is 0x4D4 bytes: its hash, the `clib` model's root hash at `+0x04`, and from `+0x2C0` CA-style vectors of 20 bytes (a stale pointer, begin, end, capacity, size). The one beginning at `+0x300` is the loadout: up to 8 weapon table hashes. No display name is stored, so the Mission tab names actors by their actor name.
+
+`GLOBAL.ZDB › weapons/wep_weapon.rdr` (`WEAP`): a weapon's hash is the CRC32 of its upper-case name (`M4A1` → `D3E46CCE`). An entry starts with that hash and, at `+0x04`, the offset of its strings; the first, at `+0x0C`, is its UI message key (`_30660_ASSAULTRIFLE_UI_MSG`). The model's root hash is one of the entry's next words. Grenades and attachments have models too, so the key's category (ASSAULTRIFLE, SNIPERRIFLE, SMG, SHOTGUN, MACHINEGUN, PISTOL, LAUNCHER) decides what counts as a gun. Display names come from leftover source text in the table (`_LOCT("SNIPER RIFLE: SR-25" _30696_…)`) for the few keys it covers, else from the model's name when it is known (`M4A1`, `MP5`); otherwise the Mission tab shows the key's words. On Village SP2, 26 of 29 loadout hashes have an entry, each with a model.
+
+The mission header (`MISN`) is not read: it holds the world ZDB's path, (online) a list of character types and the loading-screen tips, but no title, briefing or map image. Team spawns are not read.
 
 ## Not done yet
 
-- Character types, mission headers, objectives and team spawns.
+- Objectives and team spawns; names for the weapon models CA's word list does not crack.
 - Skinning, animations (`BONE`, `ZANM`) and the terrain tiles' own records.
 - Editing, saving and conversion to and from SOCOM II and Combined Assault.
 - Fireteam Bravo and Fireteam Bravo 3.

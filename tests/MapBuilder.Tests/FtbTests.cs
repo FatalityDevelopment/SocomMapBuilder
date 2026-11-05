@@ -169,15 +169,46 @@ public sealed class FtbTests
     [Fact]
     public void Fireteam_Bravo_2_actors_have_no_display_key()
     {
-        // One 0x1BC-byte actor at 0x10: name, type hash +0x20, group +0x30, one start at +0x38.
+        // One 0x1BC-byte actor at 0x10: name, character type +0x24, group +0x30, one start at +0x38.
         var d = new byte[0x10 + 0x1BC];
         Put(d, 0, 0x10); Put(d, 4, 0x10 + 0x1BC);
         System.Text.Encoding.ASCII.GetBytes("lonestar").CopyTo(d, 0x10);
-        Put(d, 0x10 + 0x20, 0x0490A2A8); Put(d, 0x10 + 0x30, 1); Put(d, 0x10 + 0x34, 1);
+        Put(d, 0x10 + 0x20, 0x11111111); Put(d, 0x10 + 0x24, 0x0490A2A8); Put(d, 0x10 + 0x30, 1); Put(d, 0x10 + 0x34, 1);
         System.Text.Encoding.ASCII.GetBytes("s_bravo2").CopyTo(d, 0x10 + 0x38); Put(d, 0x10 + 0x38 + 28, 3);
         var a = Assert.Single(CaMissionTables.ParseActors(d, psp: true));
         Assert.Equal(("lonestar", (string?)null, 0x0490A2A8u, "character"), (a.Name, a.Display, a.Type, a.Kind));
         Assert.Equal(("s_bravo2", 3), (a.Starts[0].Point, a.Starts[0].Heading));
+    }
+
+    [Fact]
+    public void Fireteam_Bravo_2_character_types_list_their_model_and_loadout()
+    {
+        // The record list at +0x24, one 0x4D4-byte record at 0x40, its loadout vector at +0x300 → two hashes at 0x600.
+        var d = new byte[0x700];
+        Put(d, 0x24, 0x30); Put(d, 0x28, 0x34); Put(d, 0x30, 0x40);
+        Put(d, 0x40, 0x65B66632); Put(d, 0x44, 0x69B16EB9);
+        Put(d, 0x40 + 0x300, 0x600); Put(d, 0x40 + 0x304, 0x608); Put(d, 0x40 + 0x308, 0x608);
+        Put(d, 0x600, 0xD3E46CCE); Put(d, 0x604, 0x7FCF62ED);
+        var t = Assert.Single(CaMissionTables.ParsePspCharacterTypes(d));
+        Assert.Equal((0x65B66632u, 0x69B16EB9u), (t.Hash, t.Model));
+        Assert.Equal(new[] { 0xD3E46CCEu, 0x7FCF62EDu }, t.Weapons);
+    }
+
+    [Fact]
+    public void Fireteam_Bravo_2_weapons_are_named_by_their_key_and_model()
+    {
+        // Entries: hash, offset of the strings (UI key at +0x0C), then the model's root hash among the next words.
+        var d = new byte[0x400];
+        void Key(int at, string key) => System.Text.Encoding.ASCII.GetBytes(key).CopyTo(d, at + 0x0C);
+        Key(0x010, "_30660_ASSAULTRIFLE_UI_MSG");
+        Key(0x040, "_39194_GRENADEM67_UI_MSG");
+        System.Text.Encoding.ASCII.GetBytes("UI_NAME(_LOCT(\"GRENADE: M67\" _39194_GRENADEM67_UI_MSG ))").CopyTo(d, 0x80);
+        Put(d, 0x200, 0xD3E46CCE); Put(d, 0x204, 0x010); Put(d, 0x210, 0xAAAA0001);
+        Put(d, 0x280, 0xB6A2F3FB); Put(d, 0x284, 0x040); Put(d, 0x290, 0xAAAA0002);
+        var models = new Dictionary<uint, string> { [0xAAAA0001] = "m4a1", [0xAAAA0002] = "w887d53fc" };
+        var w = CaMissionTables.FindPspWeapons(d, new[] { 0xD3E46CCEu, 0xB6A2F3FBu }, models);
+        Assert.Equal(("weapon", "M4A1", (uint?)0xAAAA0001u), (w[0xD3E46CCE].Kind, w[0xD3E46CCE].Display, w[0xD3E46CCE].Model));
+        Assert.Equal(("item", "GRENADE: M67"), (w[0xB6A2F3FB].Kind, w[0xB6A2F3FB].Display));
     }
 
     // ------------------------------------------------------------------ retail
@@ -225,6 +256,14 @@ public sealed class FtbTests
         // Each game mode is a mission whose points are in CA's mission.rdr layout.
         Assert.Contains(pkg.Missions(), m => m.Id == "DEM" && m.Kind == "MP");
         Assert.Contains(pkg.MissionPoints("DEM"), p => p.Name == "seal_tent");
+        // Village's squad: Wraith is a clib character carrying the M4A1.
+        var village = CaPackage.Open(Path.Combine(run, "VILLAGE_SP2"));
+        var types = CaMissionTables.ParsePspCharacterTypes(village.MissionResource("SP2", "CHAR")!.Data);
+        var wraith = CaMissionTables.ParseActors(village.MissionResource("SP2", "MSNv")!.Data, psp: true).Single(a => a.Name == "wraith");
+        var type = types.Single(t => t.Hash == wraith.Type);
+        Assert.NotNull(village.ModelByHash(type.Model, "character"));
+        var guns = CaMissionTables.FindPspWeapons(village.GlobalResource("WEAP")!.Data, type.Weapons, village.WeaponModelHashes());
+        Assert.Equal("M4A1", guns[type.Weapons[0]].Display);
         var ak = pkg.Models().First(m => m.Name == "ak47");
         Assert.True(pkg.BuildMesh(ak).Chunks.Count > 0);
     }

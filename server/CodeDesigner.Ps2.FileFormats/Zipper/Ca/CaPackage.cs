@@ -691,6 +691,14 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
             return Resources.FirstOrDefault(r => r.Tag == tag && r.File == info.File);
         }
 
+        /// <summary>The package's weapon models by root hash: hash → name.</summary>
+        public IReadOnlyDictionary<uint, string> WeaponModelHashes()
+        {
+            var map = new Dictionary<uint, string>();
+            foreach (var m in Models().Where(m => m.Kind == "weapon")) map.TryAdd(_libraries[m.LibraryIndex].Lib.ModelHash(m.Offset), m.Name);
+            return map;
+        }
+
         /// <summary>A resource of GLOBAL.ZDB (the shared weapon, vehicle and turret tables), or null.</summary>
         public Resource? GlobalResource(string tag) =>
             Resources.FirstOrDefault(r => r.Tag == tag && Path.GetFileName(r.File).Equals("GLOBAL.ZDB", StringComparison.OrdinalIgnoreCase));
