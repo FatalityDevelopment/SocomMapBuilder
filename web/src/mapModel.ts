@@ -86,7 +86,15 @@ export function fileName(p: string): string { return p.split(/[\\/]/).pop() ?? p
 export function errText(err: unknown): string { return err instanceof Error ? err.message : String(err); }
 
 export function pointColor(kind: string): number {
-  return kind === 'start' ? 0x46a758 : kind === 'waypoint' ? 0x3e8bff : 0xb4b4b4;
+  return kind === 'start' ? 0x46a758 : kind === 'waypoint' ? 0x3e8bff : kind === 'marker' ? 0xe0a030 : 0xb4b4b4;
+}
+
+const MISSION_KINDS: Record<string, string> = { SP: 'campaign', MP: 'online', IA: 'instant action', TR: 'training' };
+
+/** A SOCOM 3 / CA mission for the picker: "MP414CTR · online CTR", "SP414 · campaign". */
+export function missionLabel(m: { id: string; kind: string; mode: string }): string {
+  const kind = MISSION_KINDS[m.kind];
+  return kind ? `${m.id} · ${kind}${m.mode ? ` ${m.mode}` : ''}` : m.id;
 }
 
 export function pointKindCounts(points: MapPointWire[]): Array<{ kind: string; count: number }> {

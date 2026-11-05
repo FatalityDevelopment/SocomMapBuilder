@@ -21,17 +21,30 @@ namespace MapBuilder.Server.Services
             public required string Id { get; init; }
             public required CaPackage Package { get; init; }
             public object Gate { get; } = new();
+            /// <summary>The mission whose points ASSET_MAP_POINTS returns (a location archive holds several).</summary>
+            public string? Mission { get; set; }
         }
 
         private static readonly ConcurrentDictionary<string, CaSession> CaSessions = new(StringComparer.OrdinalIgnoreCase);
 
         private const string CaGame = "SOCOM 3 / Combined Assault";
 
+        /// <summary>
+        /// Opens a CA archive, or a location / mission path on the disc that names one (<c>G:\RUN\WHARF</c>,
+        /// <c>G:\RUN\WHARF\SP422.ZDB</c>: the archive is <see cref="CaPackage.ArchiveName"/>); a mission path selects
+        /// that mission.
+        /// </summary>
         private static string? TryOpenCa(string full)
         {
+            string? mission = null;
+            if (!File.Exists(full) && !Directory.Exists(full) && CaDisc.Resolve(full) is { } named)
+                (full, mission) = (Path.GetFullPath(named.Archive), named.Mission);
             if (!CaPackage.IsCaPath(full)) return null;
             CaSession? existing = CaSessions.Values.FirstOrDefault(s => s.Package.SourcePath.Equals(full, StringComparison.OrdinalIgnoreCase));
             CaSession session = existing ?? new CaSession { Id = NewId(full), Package = CaPackage.Open(full) };
+            if (mission != null)
+                session.Mission = (session.Package.FindMission(mission) ?? throw new FileNotFoundException($"{session.Package.Location ?? Path.GetFileName(full)} has no mission {mission}")).Id;
+            session.Mission ??= session.Package.Missions().FirstOrDefault()?.Id;
             CaSessions[session.Id] = session;
             return Ok("ASSET_OPEN", new { reused = existing != null, status = CaStatus(session) });
         }
@@ -53,7 +66,7 @@ namespace MapBuilder.Server.Services
                         "ASSET_MODEL_MESH" => CaMesh(s, c.AssetArchive, c.AssetName, c.AssetJson),
                         "ASSET_TEXTURE" => CaTexture(s, c.AssetName),
                         "ASSET_MAP_SCENE" => CaMapScene(s),
-                        "ASSET_MAP_POINTS" => new { points = Array.Empty<object>() },
+                        "ASSET_MAP_POINTS" => CaPoints(s, c.AssetJson),
                         "ASSET_LIST_ANIMATIONS" => CaListAnimations(s, c.AssetJson),
                         "ASSET_ANIMATION" => CaAnimation(s, c.AssetName),
                         "ASSET_WEAPONS" => CaWeapons(s),
@@ -88,6 +101,28 @@ namespace MapBuilder.Server.Services
                 canRedo = (string?)null,
                 entries = s.Package.Resources.Count,
                 models = models.GroupBy(m => m.Kind).ToDictionary(g => g.Key, g => g.Count()),
+                location = s.Package.Location,
+                mission = s.Mission,
+                missions = s.Package.Missions().Select(m => new { id = m.Id, kind = m.Kind, mode = m.Mode }).ToList(),
+            };
+        }
+
+        private sealed record PointArgs(string? Mission);
+
+        /// <summary>
+        /// The session mission's named points (mission.rdr) in world space; <c>{"mission": "MP414CTR"}</c> selects
+        /// another mission of the location first (and keeps it for later calls).
+        /// </summary>
+        private static object CaPoints(CaSession s, string? json)
+        {
+            if (Parse<PointArgs>(json)?.Mission is { Length: > 0 } pick)
+                s.Mission = (s.Package.FindMission(pick) ?? throw new KeyNotFoundException($"No mission {pick} in this location")).Id;
+            if (s.Mission == null) return new { mission = (string?)null, points = Array.Empty<object>() };
+            var points = s.Package.MissionPoints(s.Mission);
+            return new
+            {
+                mission = s.Mission,
+                points = points.Select(p => new { p.Name, team = 0, p.Kind, p.X, y = (float?)p.Y, p.Z, p.CellX, p.CellZ, p.Zone, p.Island }).ToList(),
             };
         }
 

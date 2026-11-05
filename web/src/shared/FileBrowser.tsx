@@ -3,7 +3,8 @@ import { command } from '../api/client';
 import { Icon } from './Icon';
 import { activeBrowse, cleanPath, rememberedFolder, useSignals, type BrowseRequest } from './index';
 
-interface Entry { name: string; path: string; dir: boolean; size: number | null; modified: string }
+// title: what the file holds when its name does not say (a SOCOM 3 / CA location archive's location).
+interface Entry { name: string; path: string; dir: boolean; size: number | null; modified: string; title?: string | null }
 interface Listing { path: string; parent: string | null; entries: Entry[] }
 interface Places { drives: Array<{ name: string; path: string; label: string; kind: string }>; places: Array<{ name: string; path: string }> }
 
@@ -183,6 +184,7 @@ function BrowserDialog({ request }: { request: BrowseRequest }) {
                 <span className="mb-fb-name">
                   <span className={e.dir ? 'mb-fb-ico-dir' : 'mb-fb-ico-file'}><Icon name={e.dir ? 'library' : 'filecode'} size={14} /></span>
                   {e.name}
+                  {e.title && <span className="mb-fb-title-tag">{e.title}</span>}
                 </span>
                 <span className="mb-fb-meta">{formatSize(e.size)}</span>
                 <span className="mb-fb-meta">{e.modified}</span>

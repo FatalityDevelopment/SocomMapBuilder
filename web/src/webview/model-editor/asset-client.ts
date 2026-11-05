@@ -20,7 +20,14 @@ export interface SessionStatus {
   readOnly?: boolean;
   // The last autosave (a recovery copy of unsaved edits), if any.
   autosave?: { path: string; revision: number; at: string } | null;
+  // SOCOM 3 / CA: the location the archive holds, its missions and the one whose points ASSET_MAP_POINTS returns.
+  location?: string | null;
+  mission?: string | null;
+  missions?: MissionSummary[];
 }
+
+// kind: SP (campaign), MP (online), IA (instant action), TR (training) or other; mode: the letters after the number.
+export interface MissionSummary { id: string; kind: string; mode: string }
 
 export interface ModelSummary {
   archive: string;
@@ -295,7 +302,10 @@ export class AssetClient {
     return this.withJson('ASSET_MAP_SCENE', { limit: 100000, ...filter });
   }
 
-  mapPoints(): Promise<{ points: MapPointWire[] }> { return this.call('ASSET_MAP_POINTS'); }
+  // A SOCOM 3 / CA session reads one mission's points; naming one switches the session to it.
+  mapPoints(mission?: string): Promise<{ points: MapPointWire[] }> {
+    return mission ? this.withJson('ASSET_MAP_POINTS', { mission }) : this.call('ASSET_MAP_POINTS');
+  }
   mapActions(): Promise<MapActions> { return this.call('ASSET_MAP_ACTIONS'); }
   mapTables(): Promise<MapTables> { return this.call('ASSET_MAP_TABLES'); }
   mapHud(): Promise<MapHud> { return this.call('ASSET_MAP_HUD'); }

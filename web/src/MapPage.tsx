@@ -13,7 +13,7 @@ import { analyzeScene } from './viewport/mapAnalysis';
 import { ThumbnailRenderer, type ThumbPart } from './viewport/thumbnails';
 import { AssetBrowser, ASSET_DRAG_TYPE, type AssetDrag } from './components/AssetBrowser';
 import { LIGHTINGS, type Lighting, type Shading, type ViewPreset } from './webview/zipper-core/viewport-core';
-import { LAYERS, errText, layerOf, movable, pointKindCounts, problemTarget, type ModelGroup } from './mapModel';
+import { LAYERS, errText, layerOf, missionLabel, movable, pointKindCounts, problemTarget, type ModelGroup } from './mapModel';
 
 import { MenuBar, type Menu } from './components/MenuBar';
 import { PageHeader } from './shared/PageHeader';
@@ -55,7 +55,7 @@ export function MapPage() {
   }, () => { setPlaceModel(null); setPlacePrefab(null); setSelection([]); setSelectedPoint(null); thumbsRef.current?.clear(); });
   const { client, instancesRef, statusRef, status, setStatus, sceneNs, counts, instances, points, models, setModels,
     busy, progress, loading, loadWarnings, connectionIssue, message, messageIsError, say,
-    retryScene, edit, history, saveCopy, exportPack, openDialog, loadModel, texturePixels, jump, sceneReady } = mapSession;
+    retryScene, edit, history, saveCopy, exportPack, openDialog, loadModel, texturePixels, jump, sceneReady, reload } = mapSession;
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   // The Map tab's check: rerun while the tab is open whenever the session changes.
   const [check, setCheck] = useState<MapValidation | null>(null);
@@ -288,6 +288,20 @@ export function MapPage() {
     try { if (status?.path) { localStorage.setItem(bookmarkKey(status.path), JSON.stringify(next)); } } catch { /* storage unavailable */ }
   };
   // The app's own dialog, not window.prompt (which embedded browsers may block).
+  // SOCOM 3 / CA: switch the session to another mission of the location, then redraw its points (models stay cached).
+  const pickMission = async (mission: string) => {
+    if (!status || mission === status.mission) { return; }
+    try {
+      await client.mapPoints(mission);
+      setStatus(await client.status());
+      setSelectedPoint(null);
+      await reload(true, false);
+      say(`${mission}: ${mapSession.pointsRef.current.length} points.`);
+    } catch (error) {
+      say(`Mission ${mission} could not be read: ${errText(error)}`, true);
+    }
+  };
+
   const addBookmark = async () => {
     const vp = viewportRef.current;
     if (!vp || !status) { return; }
@@ -879,6 +893,13 @@ export function MapPage() {
       {paletteOpen && <CommandPalette commands={commandsFromMenus(menus)} onClose={() => setPaletteOpen(false)} />}
 
       <div className="me-header">
+        {!!status?.missions?.length && (
+          <label className="me-toggle" title={`The mission whose points are shown: ${status.location ?? 'this location'} holds ${status.missions.length}`}>Mission
+            <select aria-label="Mission" value={status.mission ?? ''} disabled={busy || loading} onChange={e => void pickMission(e.target.value)}>
+              {status.missions.map(m => <option key={m.id} value={m.id}>{missionLabel(m)}</option>)}
+            </select>
+          </label>
+        )}
         <div className="me-seg" title={`Shading (${SHORTCUTS.shading.label} cycles)`}>
           {SHADINGS.map(s => (
             <button key={s.id} className={shading === s.id ? 'on' : ''} onClick={() => setShading(s.id)}>{s.label}</button>

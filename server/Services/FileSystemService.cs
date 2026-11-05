@@ -47,6 +47,8 @@ namespace MapBuilder.Server.Services
                 if (File.Exists(path)) path = Path.GetDirectoryName(path)!;
                 if (!Directory.Exists(path)) return Responses.Error($"FS_LIST: no folder {path}");
                 var dir = new DirectoryInfo(path);
+                // A SOCOM 3 / CA RUN folder: location archives are named by a hash, so each gets its location as a title.
+                var locations = CodeDesigner.Ps2.FileFormats.Zipper.Ca.CaDisc.Locations(dir.FullName);
                 var entries = new List<object>();
                 foreach (var info in SafeEntries(dir))
                 {
@@ -59,6 +61,7 @@ namespace MapBuilder.Server.Services
                         dir = isDir,
                         size = isDir ? (long?)null : ((FileInfo)info).Length,
                         modified = info.LastWriteTime.ToString("yyyy-MM-dd HH:mm"),
+                        title = !isDir && locations.TryGetValue(info.Name, out var location) ? location : null,
                     });
                 }
                 return Ok("FS_LIST", new { path = dir.FullName, parent = dir.Parent?.FullName, entries });
