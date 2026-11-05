@@ -63,9 +63,10 @@ Open the disc image (`Star Wars - Battlefront (USA).iso`) or a loose `.LVL` in t
 
 - **Model Editor:** characters, vehicles, weapons, first-person models, props and sky domes, textured. Characters show in their bind pose; animations are not read yet.
 - **Asset Viewer:** a `.ISO` lists its files by disc path, and a `.LVL` lists its models and textures for preview.
-- **Map Builder:** pick one of the disc's 22 maps from the **Map** list. It draws the terrain (heights, the base texture layer and the baked lighting, with the cut patches of caves and hangars), the placed objects and the sky dome (turn on the Sky layer). The game draws its sky in a small dome that follows the camera; here it is scaled to enclose the map. Sound emitters, vehicle spawns and particle effects are not drawn.
+- **Map Builder:** pick one of the disc's 22 maps from the **Map** list. It draws the terrain (heights, the base texture layer and the baked lighting, with the cut patches of caves and hangars), the placed objects and the sky dome (turn on the Sky layer). The game draws its sky in a small dome that follows the camera; here it is scaled to enclose the map. Sound emitters and particle effects are not drawn.
+- **Command posts, paths and regions:** command posts (with their starting team) and vehicle spawns are map points. The **Paths** layer draws spawn paths (green), AI paths (blue) and the map's boundary (red); the **Regions** layer draws each command post's capture (yellow) and control (orange) regions and the map's other regions. Click a name in the outliner to frame it. Ambient sound regions are left out. Cylinder regions are drawn with the first and third sizes as radii, which is not confirmed.
 
-Paths, regions and command posts, the terrain's blended texture layers, editing and conversion to SOCOM II are planned. The PS2 position quantisation, bone-space vertices and the terrain and world layouts follow research by the [openbf](https://github.com/sprucey149/openbf) project (MIT).
+The terrain's blended texture layers, editing and conversion to SOCOM II are planned. The PS2 position quantisation, bone-space vertices and the terrain and world layouts follow research by the [openbf](https://github.com/sprucey149/openbf) project (MIT).
 
 ## Not included
 

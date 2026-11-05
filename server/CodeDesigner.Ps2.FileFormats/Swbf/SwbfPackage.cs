@@ -37,6 +37,8 @@ namespace CodeDesigner.Ps2.FileFormats.Swbf
         // A model's skeleton ("skel" named after it) per level: (level, name) -> chunk offset.
         private readonly Dictionary<(int Level, string Name), int> _skels = new();
         private readonly List<WorldRef> _worlds = new();
+        // "PATH" containers per level (chunk offsets).
+        private readonly Dictionary<int, List<int>> _paths = new();
         // Terrains per level by lower-case name -> chunk offset; entity classes and geometry tables by lower-case name.
         private readonly Dictionary<(int Level, string Name), int> _terrains = new();
         private readonly Dictionary<string, List<(int Level, SwbfWorld.EntityClass Class)>> _classes = new(StringComparer.OrdinalIgnoreCase);
@@ -138,6 +140,10 @@ namespace CodeDesigner.Ps2.FileFormats.Swbf
                             _worlds.Add(new WorldRef(w.Name, _levels[level].Name, level, c.Offset, w.Terrain, w.Sky, w.Instances.Count, w.Regions.Count));
                             break;
                         }
+                        case "PATH":
+                            if (!_paths.TryGetValue(level, out var pathList)) _paths[level] = pathList = new();
+                            pathList.Add(c.Offset);
+                            break;
                         case "tern":
                         {
                             string name = c.ChildText("NAME") ?? "";
@@ -253,6 +259,16 @@ namespace CodeDesigner.Ps2.FileFormats.Swbf
         public const string TerrainPrefix = "@terrain:";
 
         public SwbfWorld.World ReadWorld(WorldRef w) => SwbfWorld.Parse(ChunkAt(w.Level, w.Offset));
+
+        /// <summary>The paths of a level (every PATH container in it, nested levels included).</summary>
+        public List<SwbfWorld.Path> PathsOf(string archive)
+        {
+            int level = LevelIndex(archive);
+            var list = new List<SwbfWorld.Path>();
+            if (level >= 0 && _paths.TryGetValue(level, out var offsets))
+                foreach (int at in offsets) list.AddRange(SwbfWorld.ParsePaths(ChunkAt(level, at)));
+            return list;
+        }
 
         /// <summary>The worlds of a level (by archive, e.g. TAT/TAT2.LVL).</summary>
         public IEnumerable<WorldRef> WorldsIn(string archive) =>

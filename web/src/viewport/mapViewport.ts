@@ -16,6 +16,8 @@ import { actionIconCanvas, objectiveIconCanvas, type ActionKind } from '../share
 import { markerAnchor, type ActionMarker } from './actionMarkers';
 import { heldWeaponMatrix, poseBones, skinChunk, type PoseClip } from '../webview/zipper-core/skinning';
 import { yawOf } from './actorFigures';
+import { buildPathObject, buildRegionObject } from './mapShapes';
+import type { MapPathWire, MapRegionWire } from '../webview/model-editor/asset-client';
 
 export type MapTool = 'select' | 'move' | 'rotate' | 'scale' | 'place' | 'paint' | 'measure';
 /** A saved camera: where it stands and what it looks at. */
@@ -23,7 +25,7 @@ export interface CameraState { position: [number, number, number]; target: [numb
 /** What a move drag snaps to beyond the increment snap: nothing, the surface under each item, or the nearest vertex under the cursor. */
 export type SnapTarget = 'increment' | 'surface' | 'vertex';
 export interface BrushOptions extends ScatterOptions { erase: boolean }
-export type MapLayer = 'world' | 'reference' | 'clutter' | 'sky' | 'points';
+export type MapLayer = 'world' | 'reference' | 'clutter' | 'sky' | 'points' | 'paths' | 'regions';
 
 export interface MapInstance {
   caNode?: boolean;
@@ -128,6 +130,9 @@ export class MapViewport extends ViewportCore {
   private placementPointer: { x: number; y: number } | null = null;
   private readonly overlay = new THREE.Group();
   private readonly pointGroup = new THREE.Group();
+  // Battlefront paths and regions (view only).
+  private readonly pathGroup = new THREE.Group();
+  private readonly regionGroup = new THREE.Group();
   private instances: MapInstance[] = [];
   private display: THREE.Matrix4[] = [];
   // Placements as they stand right now, including a gizmo drag in progress (what a commit sends).
@@ -201,7 +206,7 @@ export class MapViewport extends ViewportCore {
 
   constructor(canvas: HTMLCanvasElement, private readonly callbacks: MapCallbacks = {}) {
     super(canvas, () => callbacks.onCameraChange?.());
-    this.scene.add(this.content, this.overlay, this.pointGroup, this.figureGroup, this.placementGhost);
+    this.scene.add(this.content, this.overlay, this.pointGroup, this.pathGroup, this.regionGroup, this.figureGroup, this.placementGhost);
     const ring = new THREE.BufferGeometry().setFromPoints(Array.from({ length: 48 }, (_, k) => new THREE.Vector3(Math.cos(k / 48 * Math.PI * 2), 0, Math.sin(k / 48 * Math.PI * 2))));
     this.brushRing = new THREE.LineLoop(ring, new THREE.LineBasicMaterial({ color: 0x66ddbb, depthTest: false, transparent: true }));
     this.brushRing.renderOrder = 30;
@@ -844,6 +849,8 @@ export class MapViewport extends ViewportCore {
       c.visible = !this.hiddenLayers.has(c.userData['layer']) && !this.hiddenModels.has(c.userData['source']);
     }
     this.pointGroup.visible = !this.hiddenLayers.has('points');
+    this.pathGroup.visible = !this.hiddenLayers.has('paths');
+    this.regionGroup.visible = !this.hiddenLayers.has('regions');
     this.updatePlacementGhost();
     this.refreshOverlay();
   }
@@ -1139,6 +1146,38 @@ export class MapViewport extends ViewportCore {
   }
 
   frameAll(): void { this.frameBox(this.worldBox); }
+
+  // ------------------------------------------------------------------ paths and regions
+
+  /** Draws a map's paths (lines through their nodes) and regions (wireframe shapes); empty lists clear them. */
+  setShapes(paths: MapPathWire[], regions: MapRegionWire[]): void {
+    for (const g of [this.pathGroup, this.regionGroup]) {
+      g.traverse(o => {
+        const m = o as THREE.Mesh;
+        m.geometry?.dispose();
+        const mat = m.material as THREE.Material | undefined;
+        mat?.dispose?.();
+      });
+      g.clear();
+    }
+    const dot = Math.max(1.5, this.extent * 0.002);
+    for (const p of paths) { if (p.nodes.length) { this.pathGroup.add(buildPathObject(p, dot)); } }
+    for (const r of regions) { this.regionGroup.add(buildRegionObject(r)); }
+    this.pathGroup.visible = !this.hiddenLayers.has('paths');
+    this.regionGroup.visible = !this.hiddenLayers.has('regions');
+  }
+
+  /** Frames a path or region by name (shown first when its layer is hidden). */
+  frameShape(layer: 'paths' | 'regions', name: string): boolean {
+    const group = layer === 'paths' ? this.pathGroup : this.regionGroup;
+    const obj = group.children.find(c => c.userData['shape'] === name);
+    if (!obj) { return false; }
+    obj.updateMatrixWorld(true);
+    const box = new THREE.Box3().setFromObject(obj);
+    if (box.isEmpty()) { return false; }
+    this.frameBox(box.expandByScalar(Math.max(4, this.extent * 0.01)));
+    return true;
+  }
 
   frameSelected(): void {
     const box = new THREE.Box3();

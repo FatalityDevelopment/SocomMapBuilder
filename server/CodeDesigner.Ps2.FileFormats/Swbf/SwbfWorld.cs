@@ -61,6 +61,37 @@ namespace CodeDesigner.Ps2.FileFormats.Swbf
             return list;
         }
 
+        /// <summary>A path: its nodes' world positions (x y z per node) and yaw-carrying quaternions (w x y z).</summary>
+        public sealed record Path(string Name, int Kind, float[] Positions, float[] Rotations);
+
+        /// <summary>A "PATH" container's "path" children: NAME, INFO {u16 nodes, u16 kind (2 = the map's boundary),
+        /// u16}, PROP, PNTS (per node f32 x y z, then a quaternion w x y z). Positions are in the world's frame.</summary>
+        public static List<Path> ParsePaths(Ucfb container)
+        {
+            var list = new List<Path>();
+            foreach (var p in container.Children)
+            {
+                if (p.Tag != "path" || p.Child("INFO") is not { Size: >= 4 } info || p.Child("PNTS") is not { } pnts) continue;
+                int n = Math.Min(info.U16(0), pnts.Size / 28);
+                var pos = new float[n * 3];
+                var rot = new float[n * 4];
+                for (int i = 0; i < n; i++)
+                {
+                    for (int k = 0; k < 3; k++) pos[i * 3 + k] = pnts.F32(i * 28 + k * 4);
+                    for (int k = 0; k < 4; k++) rot[i * 4 + k] = pnts.F32(i * 28 + 12 + k * 4);
+                }
+                list.Add(new Path(p.ChildText("NAME") ?? "", info.U16(2), pos, rot));
+            }
+            return list;
+        }
+
+        /// <summary>A record's PROP value by key name (case-insensitive, matched by its hash).</summary>
+        public static string? PropOf(Record r, string key)
+        {
+            uint h = Fnv1a(key);
+            return r.Props.FirstOrDefault(p => p.Key == h)?.Value;
+        }
+
         public static EntityClass ParseClass(Ucfb entc) =>
             new(entc.ChildText("TYPE") ?? "", entc.ChildText("BASE") ?? "",
                 Props(entc).FirstOrDefault(p => p.Key == GeometryName)?.Value is { Length: > 0 } g ? g : null);
