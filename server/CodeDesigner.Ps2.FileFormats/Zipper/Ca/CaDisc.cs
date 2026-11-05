@@ -52,11 +52,12 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         /// </summary>
         public static (string Archive, string? Mission)? Resolve(string path)
         {
-            var parts = path.Replace('/', '\\').TrimEnd('\\').Split('\\');
+            // Either separator in, the platform's out: rebuilding with '\' broke absolute paths on Linux (/tmp/… → \tmp\…).
+            var parts = path.TrimEnd('/', '\\').Split('/', '\\');
             for (int i = parts.Length - 1; i >= 1; i--)
             {
                 if (!parts[i - 1].Equals("RUN", StringComparison.OrdinalIgnoreCase) || i < parts.Length - 2) continue;
-                string run = string.Join('\\', parts.Take(i));
+                string run = string.Join(Path.DirectorySeparatorChar, parts.Take(i));
                 string archive = Path.Combine(run, CaPackage.ArchiveName(parts[i]));
                 if (!File.Exists(archive)) return null;
                 string? mission = i + 1 < parts.Length ? Path.GetFileNameWithoutExtension(parts[i + 1]).ToUpperInvariant() : null;
