@@ -60,6 +60,8 @@ namespace MapBuilder.Server.Services
         private static readonly (string, Dictionary<string, object>) Archive = F("archive", "string", "The model's *_MDL.ZED leaf.");
         private static readonly (string, Dictionary<string, object>) Model = F("model", "string", "The model (assets_list_models).");
         private static readonly (string, Dictionary<string, object>) Scene = F("scene", "string", "GEO namespace (default: the map's).");
+        private static readonly (string, Dictionary<string, object>) Mission = F("mission", "string", "CA mission id from the points or tables being edited. Rejects a stale selection.");
+        private static readonly (string, Dictionary<string, object>) CaRevision = Int("revision", "CA session revision when the placement was read.", 0);
         private static readonly (string, Dictionary<string, object>) Image1 = F("pngBase64", "string", "The image as base64 PNG.");
         private static readonly (string, Dictionary<string, object>) Image2 = F("imagePath", "string", "A PNG file (instead of pngBase64).");
         private static readonly (string, Dictionary<string, object>) Materials = Arr("materials", "object",
@@ -84,7 +86,8 @@ namespace MapBuilder.Server.Services
             new("moveClutter", "Move a clutter placement.", new[] { "clutterIndex" }, With(Placement, Int("clutterIndex", "From assets_map_scene.", 0))),
             new("addClutter", "Add a clutter placement (answers newClutterIndex).", new[] { "model" }, With(Placement, F("model", "string", "A package model."))),
             new("deleteClutter", "Remove a clutter placement.", new[] { "clutterIndex" }, new[] { Int("clutterIndex", "From assets_map_scene.", 0) }),
-            new("moveInstance", "Move a placed scene node (world space).", new[] { "geoIndex" }, With(Placement, Int("geoIndex", "From assets_map_scene.", 0), Scene)),
+            new("moveInstance", "Move a placed scene node in world space. Supply its geoIndex, or its instance id for Combined Assault.", Array.Empty<string>(),
+                With(Placement, Int("geoIndex", "From assets_map_scene.", 0), F("instance", "string", "CA instance id from assets_map_scene."), Scene, CaRevision)),
             new("duplicateInstance", "Copy a scene node as a sibling (answers newGeoIndex).", new[] { "geoIndex" },
                 With(Placement, Int("geoIndex", "From assets_map_scene.", 0), Scene, F("name", "string", "Name of the copy."))),
             new("placeInstance", "Place any package model as a new reference, copied from the nearest placed one (answers newGeoIndex).", new[] { "model" },
@@ -96,16 +99,16 @@ namespace MapBuilder.Server.Services
             new("traversalFace", "Apply a sampled traversal profile to a placed GEO face.", new[] { "geoIndex", "profile", "revision" },
                 new[] { Int("geoIndex", "Placed node."), Int("revision", "Revision from ASSET_MAP_ACTIONS."), Int("face", "An existing quad on the node."),
                     F("side", "string", "Local side for a new quad: +X, -X, +Z or -Z."), F("profile", "string", "climb or ladder") }),
-            new("mapTable", "Set the values of one field of a mission table in READERM.ZAR (same count and types; shared values are copied first).", new[] { "table", "path", "values", "revision" },
-                new[] { F("table", "string", "The .rdr, e.g. hudobjectives.rdr, vehicles.rdr, mission.rdr (assets_map_tables)."), Int("revision", "Revision from assets_map_tables or assets_status."),
+            new("mapTable", "Set one mission field. CA supports actor starts and headings, valve values and allowed weapon slots.", new[] { "table", "path", "values", "revision" },
+                new[] { Mission, F("table", "string", "The .rdr, e.g. hudobjectives.rdr, vehicles.rdr, mission.rdr (assets_map_tables)."), Int("revision", "Revision from assets_map_tables or assets_status."),
                     F("path", "array", "Field names and item numbers from the root, as assets_map_tables answers them, ending at the field, e.g. [\"HUD_OBJECTIVES\", 0, \"LOCATION\"]."),
                     F("values", "array", "The field's new values (numbers or text), as many as it has.") }),
             new("mapText", "Change a message's text in the map's language tables (*LOC.ZAR), e.g. an objective title.", new[] { "key", "text", "revision" },
                 new[] { F("key", "string", "The message key, e.g. _10035_MeetMallard_MSG."), F("text", "string", "Printable ASCII."), Int("revision", "Revision from assets_map_tables or assets_status.") }),
             new("movePoint", "Move an AIMAPS point (snaps to its grid cell).", new[] { "name", "position" },
-                new[] { F("name", "string", "From assets_map_points."), Vec("position", 3, "World [x, y, z]; y is ignored.") }),
+                new[] { Mission, CaRevision, F("name", "string", "From assets_map_points."), Vec("position", 3, "World [x, y, z]. CA stores y as the point height.") }),
             new("setPoint", "Rename, retype, change the team of or move an AIMAPS point.", new[] { "name" },
-                new[] { F("name", "string", "From assets_map_points."), F("newName", "string", "2-15 printable characters, unique."),
+                new[] { Mission, CaRevision, F("name", "string", "From assets_map_points."), F("newName", "string", "2-15 printable characters, unique."),
                     Int("team", "Team byte.", 0, 255), OneOf("kind", "Point kind.", "start", "waypoint", "other"), Vec("position", 3, "World [x, y, z].") }),
             new("applyCharacterPreset", "Apply a character preset (a saved body shape, skin or gear set: characters_presets lists them) to a skinned character, as one edit.", new[] { "preset", "archive", "model" },
                 new[] { F("preset", "string", "A preset name."), Archive, Model }),
@@ -238,14 +241,16 @@ namespace MapBuilder.Server.Services
             ["type"] = "object",
             ["description"] = "The edit: an object whose \"op\" names one of the branches below.",
             ["required"] = new[] { "op" },
-            ["oneOf"] = All.Select(spec => new Dictionary<string, object>
+            ["oneOf"] = All.Select(spec =>
             {
-                ["type"] = "object",
-                ["title"] = spec.Op,
-                ["description"] = spec.Summary,
-                ["properties"] = Properties(spec),
-                ["required"] = spec.Required.Prepend("op").ToArray(),
-                ["additionalProperties"] = false,
+                var branch = new Dictionary<string, object>
+                {
+                    ["type"] = "object", ["title"] = spec.Op, ["description"] = spec.Summary,
+                    ["properties"] = Properties(spec), ["required"] = spec.Required.Prepend("op").ToArray(),
+                    ["additionalProperties"] = false,
+                };
+                if (spec.Op == "moveInstance") branch["oneOf"] = new[] { new { required = new[] { "geoIndex" } }, new { required = new[] { "instance" } } };
+                return branch;
             }).ToList(),
         };
 
@@ -262,6 +267,8 @@ namespace MapBuilder.Server.Services
                     return $"{where} {name}: unknown field \"{f.Name}\" (takes {string.Join(", ", props.Keys.Where(k => k != "op").OrderBy(k => k))})";
             foreach (string r in spec.Required)
                 if (!op.TryGetProperty(r, out var v) || v.ValueKind == JsonValueKind.Null) return $"{where} {name}: \"{r}\" is required";
+            if (name == "moveInstance" && op.TryGetProperty("geoIndex", out _) == op.TryGetProperty("instance", out _))
+                return $"{where} {name}: choose one geoIndex or CA instance id";
             foreach (var f in op.EnumerateObject())
             {
                 if (f.Name == "op" || f.Value.ValueKind == JsonValueKind.Null) continue;

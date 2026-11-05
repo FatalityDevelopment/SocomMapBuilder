@@ -11,7 +11,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
     /// the location's ZDB v6 files) or a single ZDB v6 file. Every resource is indexed by (file, name, tag); the asset
     /// libraries (<c>ISLE</c> level data, <c>ASST</c> libraries: characters <c>clib</c>, vehicles, props, skies) give
     /// the models. In an <c>ISLE</c> library the model with the most nodes is the world (COMPOUND: 1,114 nodes, 740
-    /// mesh instances); the others are prop prototypes. Read-only for now.
+    /// mesh instances); the others are prop prototypes.
     /// </summary>
     public sealed class CaPackage
     {
@@ -24,7 +24,12 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         private readonly List<(Resource Res, CaLibrary Lib)> _libraries = new();
         private List<Model>? _models;
 
-        private CaPackage(string path) { SourcePath = path; }
+        // Index by physical archive and resource ordinal. A v6 can use the same filename for many tags.
+        // External GLOBAL resources and loose non-v6 files have no writable entry here.
+        private readonly Dictionary<int, (int Outer, int Inner)> _entryLocations = new();
+        private readonly byte[] _sourceBytes;
+
+        private CaPackage(string path, byte[] data) { SourcePath = path; _sourceBytes = data; }
 
         /// <summary>True when the file is CA's: a .ZAR whose entries are ZDB v6, or a ZDB v6 (header 0xC8, 0x58).</summary>
         public static bool IsCaPath(string path)
@@ -46,36 +51,47 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
 
         public static CaPackage Open(string path)
         {
-            var pkg = new CaPackage(Path.GetFullPath(path));
             byte[] data = File.ReadAllBytes(path);
-            if (BitConverter.ToUInt32(data, 0) == 0xC8) pkg.AddV6(Path.GetFileName(path), data);
+            var pkg = new CaPackage(Path.GetFullPath(path), data);
+            if (BitConverter.ToUInt32(data, 0) == 0xC8) pkg.AddV6(Path.GetFileName(path), data, -1);
             else
             {
                 // Weapons are not in the location archives: RUN/GLOBAL.ZDB (global_assets.rdr) holds them all.
                 string global = Path.Combine(Path.GetDirectoryName(Path.GetFullPath(path)) ?? ".", "GLOBAL.ZDB");
                 if (File.Exists(global)) pkg.AddV6(Path.GetFileName(global), File.ReadAllBytes(global));
                 using var zar = ZdbArchive.FromBytes(data);
-                foreach (var e in zar.Entries)
+                for (int i = 0; i < zar.EntryCount; i++)
+                {
+                    var e = zar.GetEntry(i);
                     if (e.Data.Length >= 8 && BitConverter.ToUInt32(e.Data, 0) == 0xC8 && BitConverter.ToUInt32(e.Data, 4) == 0x58)
-                        pkg.AddV6(e.FullPath, e.Data);
+                        pkg.AddV6(e.FullPath, e.Data, i);
                     else
                         pkg.Resources.Add(new Resource(e.FullPath, e.Name, "FILE", 0, e.Data));
+                }
             }
-            foreach (var r in pkg.Resources.Where(r => r.Tag is "ISLE" or "ASST"))
-            {
-                if (r.Data.Length < 0x60) continue;
-                var lib = new CaLibrary(r.Data);
-                if (lib.Version is < 1 or > 3 || lib.Models.Count == 0 && lib.Textures.Count == 0) continue;
-                pkg._libraries.Add((r, lib));
-                // A version-3 header's second library (global_assets.rdr: every weapon, 88 models).
-                if (lib.Nested() is { } nested && nested.Models.Count > 0)
-                    pkg._libraries.Add((r with { Name = r.Name + NestedSuffix }, nested));
-            }
+            pkg.IndexLibraries();
             // CodeDesigner's name list (packages converted from SOCOM II): the names behind this package's hashes.
             foreach (var r in pkg.Resources.Where(r => r.Tag == Conversion.Socom2ToCa.NamesTag))
                 foreach (var line in System.Text.Encoding.ASCII.GetString(r.Data).Split((char)10, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
                     pkg._names.TryAdd(CaNames.Crc32(line), line);
             return pkg;
+        }
+
+        private void IndexLibraries()
+        {
+            _libraries.Clear();
+            _models = null;
+            _objectMeshes.Clear();
+            foreach (var r in Resources.Where(r => r.Tag is "ISLE" or "ASST"))
+            {
+                if (r.Data.Length < 0x60) continue;
+                var lib = new CaLibrary(r.Data);
+                if (lib.Version is < 1 or > 3 || lib.Models.Count == 0 && lib.Textures.Count == 0) continue;
+                _libraries.Add((r, lib));
+                // A version-3 header's second library (global_assets.rdr: every weapon, 88 models).
+                if (lib.Nested() is { } nested && nested.Models.Count > 0)
+                    _libraries.Add((r with { Name = r.Name + NestedSuffix }, nested));
+            }
         }
 
         private readonly Dictionary<uint, string> _names = new();
@@ -86,11 +102,47 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         /// <summary>A bone's name: the package's name list, else the known CA bones, else bone_&lt;hash&gt;.</summary>
         public string BoneName(uint hash) => KnownName(hash) ?? CaBones.Name(hash);
 
-        private void AddV6(string file, byte[] data)
+        private void AddV6(string file, byte[] data, int? outer = null)
         {
             using var zdb = ZdbArchive.FromBytes(data);
-            foreach (var e in zdb.Entries)
-                if (e.Tag != "DEP_") Resources.Add(new Resource(file, e.FullPath, e.Tag, e.ResourceVersion, e.Data));
+            for (int i = 0; i < zdb.EntryCount; i++)
+            {
+                var e = zdb.GetEntry(i);
+                if (e.Tag == "DEP_") continue;
+                if (outer.HasValue) _entryLocations.Add(Resources.Count, (outer.Value, i));
+                Resources.Add(new Resource(file, e.FullPath, e.Tag, e.ResourceVersion, e.Data));
+            }
+        }
+
+        /// <summary>Install a validated fixed-size edit or history step, keeping resource indices stable.</summary>
+        public void ReplaceResources(IReadOnlyDictionary<int, byte[]> replacements)
+        {
+            foreach (var (index, bytes) in replacements)
+                if (!_entryLocations.ContainsKey(index) || Resources[index].Data.Length != bytes.Length
+                    || Resources[index].Tag is not ("AIMm" or "MSNv" or "MISN" or "VALV" or "ISLE"))
+                    throw new InvalidOperationException("Only fixed-size edits to local CA mission and world resources are supported");
+
+            foreach (var (index, bytes) in replacements)
+                Resources[index] = Resources[index] with { Data = bytes };
+            if (replacements.Keys.Any(i => Resources[i].Tag == "ISLE")) IndexLibraries();
+        }
+
+        /// <summary>Build a complete copy from the opened bytes, rewriting only the edited v6 entries.</summary>
+        public byte[] BuildCopy(IEnumerable<int> dirty)
+        {
+            using var archive = ZdbArchive.FromBytes(_sourceBytes);
+            foreach (var file in dirty.GroupBy(i => _entryLocations[i].Outer))
+            {
+                if (file.Key == -1)
+                {
+                    foreach (int index in file) archive.ReplaceEntryData(_entryLocations[index].Inner, Resources[index].Data);
+                    continue;
+                }
+                using var inner = ZdbArchive.FromBytes(archive.GetEntry(file.Key).Data);
+                foreach (int index in file) inner.ReplaceEntryData(_entryLocations[index].Inner, Resources[index].Data);
+                archive.ReplaceEntryData(file.Key, inner.ToBytes());
+            }
+            return archive.ToBytes();
         }
 
         public IReadOnlyList<(Resource Res, CaLibrary Lib)> Libraries => _libraries;
@@ -148,8 +200,10 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
 
         // ------------------------------------------------------------------ map scene
 
-        /// <summary>One placed mesh object of a world: the node's world transform and the object.</summary>
-        public sealed record Placement(string World, uint NodeHash, int LibraryIndex, int Object, float[] Matrix);
+        /// <summary>One placed mesh object of a world: the node's world transform and the object. A scatter instance's
+        /// pieces have <paramref name="NodeOffset"/> -1 (they are not nodes and cannot be moved as one).</summary>
+        public sealed record Placement(string World, uint NodeHash, int LibraryIndex, int Object, float[] Matrix,
+            string Instance, int NodeOffset, float[] ParentWorld);
 
         private readonly Dictionary<(int Lib, int Obj), ModelMesh> _objectMeshes = new();
 
@@ -223,12 +277,22 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         public List<Placement> MapScene()
         {
             var list = new List<Placement>();
+            // Some nodes share a hash; a single node can also draw multiple mesh objects.
+            var occurrences = new Dictionary<string, int>();
             foreach (var w in Models().Where(m => m.Kind == "world"))
             {
                 var lib = _libraries[w.LibraryIndex].Lib;
-                foreach (var node in lib.Nodes(w.Offset))
+                var nodes = lib.Nodes(w.Offset);
+                foreach (var node in nodes)
                     foreach (int obj in Drawn(w.LibraryIndex, lib, node))
-                        list.Add(new Placement(w.Name, node.Hash, w.LibraryIndex, obj, node.World));
+                    {
+                        string key = $"{w.Name}/{node.Hash:x8}";
+                        int count = occurrences.GetValueOrDefault(key);
+                        occurrences[key] = count + 1;
+                        list.Add(new Placement(w.Name, node.Hash, w.LibraryIndex, obj, node.World,
+                            count == 0 ? key : $"{key}~{count}", node.Offset,
+                            node.Parent < 0 ? Matrix4.Identity() : nodes[node.Parent].World));
+                    }
                 var prototypes = new Dictionary<int, List<(uint Hash, float[] World, List<int> Objects)>>();
                 var (min, max) = WorldBounds(lib, w.Offset);
                 foreach (var inst in lib.Instances())
@@ -239,15 +303,20 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
                     if (Enumerable.Range(0, 3).Any(k => inst.Matrix[12 + k] < min[k] - ParkedMargin || inst.Matrix[12 + k] > max[k] + ParkedMargin)) continue;
                     if (!prototypes.TryGetValue(inst.Model, out var parts))
                     {
-                        var nodes = lib.Nodes(inst.Model);
-                        var skip = LodSkip(w.LibraryIndex, lib, nodes);
-                        prototypes[inst.Model] = parts = nodes.Where(n => !skip.Contains(n.Offset))
+                        var protoNodes = lib.Nodes(inst.Model);
+                        var skip = LodSkip(w.LibraryIndex, lib, protoNodes);
+                        prototypes[inst.Model] = parts = protoNodes.Where(n => !skip.Contains(n.Offset))
                             .Select(n => (n.Hash, n.World, Drawn(w.LibraryIndex, lib, n))).Where(p => p.Item3.Count > 0).ToList();
                     }
+                    // Scatter pieces are not nodes (NodeOffset -1): their ids name the record, inst_<offset>.
+                    string key = $"{w.Name}/inst_{inst.Offset:x}";
+                    int piece = 0;
                     foreach (var (hash, world, objects) in parts)
                     {
                         float[] m = Matrix4.Multiply(inst.Matrix, world);
-                        foreach (int obj in objects) list.Add(new Placement(w.Name, hash, w.LibraryIndex, obj, m));
+                        foreach (int obj in objects)
+                            list.Add(new Placement(w.Name, hash, w.LibraryIndex, obj, m,
+                                piece++ == 0 ? key : $"{key}~{piece - 1}", -1, inst.Matrix));
                     }
                 }
             }
@@ -476,22 +545,11 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
             var info = FindMission(missionId) ?? throw new KeyNotFoundException($"No mission {missionId} in this location");
             var res = Resources.First(r => r.Tag == "AIMm" && r.File == info.File);
             var mission = CaMissions.ParseMission(res.Data);
-            var grids = new Dictionary<uint, (string Name, List<CaMissions.Grid> Grids)>();
-            foreach (var r in Resources.Where(r => r.Tag == "AIMi"))
-                try { var ai = CaMissions.ParseIslandAi(r.Data); grids.TryAdd(ai.Island, (Path.GetFileNameWithoutExtension(r.Name), ai.Grids)); }
-                catch (InvalidDataException) { }
+            var grids = CaMissions.ZoneGrids(mission, Resources);
             var list = new List<MissionPoint>();
             foreach (var zone in mission.Zones)
             {
-                var island = mission.Islands.FirstOrDefault(i => zone.Index >= i.FirstZone && zone.Index < i.FirstZone + i.ZoneCount);
-                CaMissions.Grid? grid = null;
-                string? islandName = null;
-                if (island != null && grids.TryGetValue(island.Hash, out var g))
-                {
-                    islandName = g.Name;
-                    int section = zone.Index - island.FirstZone;
-                    if (section < g.Grids.Count) grid = g.Grids[section];
-                }
+                var (islandName, grid) = grids.GetValueOrDefault(zone.Index);
                 foreach (var p in zone.Points)
                 {
                     var (x, z) = CaMissions.Position(p, zone, grid);
@@ -500,6 +558,22 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
             }
             return list;
         }
+
+        /// <summary>A model of <paramref name="kind"/> by its root hash (how character types and weapons name their
+        /// models), or null.</summary>
+        public Model? ModelByHash(uint hash, string kind) => hash == 0 ? null : Models()
+            .FirstOrDefault(m => m.Kind == kind && _libraries[m.LibraryIndex].Lib.ModelHash(m.Offset) == hash);
+
+        /// <summary>A mission's resource of <paramref name="tag"/> (in its own ZDB), or null.</summary>
+        public Resource? MissionResource(string missionId, string tag)
+        {
+            var info = FindMission(missionId) ?? throw new KeyNotFoundException($"No mission {missionId} in this location");
+            return Resources.FirstOrDefault(r => r.Tag == tag && r.File == info.File);
+        }
+
+        /// <summary>A resource of GLOBAL.ZDB (the shared weapon, vehicle and turret tables), or null.</summary>
+        public Resource? GlobalResource(string tag) =>
+            Resources.FirstOrDefault(r => r.Tag == tag && Path.GetFileName(r.File).Equals("GLOBAL.ZDB", StringComparison.OrdinalIgnoreCase));
 
         private static string PointKind(CaMissions.Point p)
         {

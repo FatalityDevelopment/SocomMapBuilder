@@ -67,6 +67,10 @@ Fit: image x = 11.4 + 0.1462 · world x, image y = −33 + 0.122 · world z. Che
 
 **Not measured yet:** M52, M53, M61–M63, M71–M73, M81–M83. Until they are, their minimap uses the top-down render. To add one: find two or three landmarks on `map_<map>_1_1/_1_2`, fit x and z separately, and add the entry.
 
+## Combined Assault
+
+Combined Assault's location archives contain 30 images named `RUN\RAW\MAPS\*.RAW`. Each contains 256 × 256 pixels in row-major order, with four bytes per pixel (red, green, blue, zero). They show perspective mission scenery. For example, `M_432.RAW` shows the facade of the church in COMPOUND. The Map Builder renders its CA minimap from the location's world geometry and draws mission markers using the viewport's world coordinates.
+
 ## ASSET_MAP_HUD
 
 `{ revision, map, icons: { <name>: { width, height, png } }, missing: [names], tacmap: { name, tiles: [left, right], world } | null }`. `icons` covers the names in `ZipperAssetService.HudTextures` (the table above); a package without HUD2 lists them under `missing` and the page draws vector stand-ins. `tacmap.world` is null when the map has page 1 but no measured placement. Tests: `MapHudTests`.

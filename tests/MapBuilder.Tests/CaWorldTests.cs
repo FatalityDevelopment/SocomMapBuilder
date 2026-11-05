@@ -114,6 +114,11 @@ public sealed class CaWorldTests
         Assert.Equal(499, island.Instances().Count);
         var scene = reservoir.MapScene();
         Assert.Equal(258 + 497, scene.Count);
+        // Scatter pieces are not nodes: they cannot be moved as one (world nodes can).
+        var scatter = scene.First(p => p.NodeOffset < 0);
+        Assert.Contains("/inst_", scatter.Instance);
+        Assert.Throws<NotSupportedException>(() => CaWorldEdits.Move(reservoir, scatter.Instance, m => m));
+        Assert.Equal(scene.Count, scene.Select(p => p.Instance).Distinct().Count());
 
         // Its water (a translucent ripple texture over the reservoir) blends, with no alpha test.
         var water = reservoir.FindTextureState("ca_34c168b2");

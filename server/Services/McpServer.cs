@@ -475,7 +475,7 @@ namespace MapBuilder.Server.Services
             {
                 case "moveClutter": return ("map", null, new { clutterIndex = IntOpt(op, "clutterIndex") });
                 case "addClutter": return ("map", null, new { clutterIndex = R("newClutterIndex") });
-                case "moveInstance": return ("map", null, new { geoIndex = IntOpt(op, "geoIndex") });
+                case "moveInstance": return ("map", null, new { geoIndex = IntOpt(op, "geoIndex"), instance = Str(op, "instance") });
                 case "duplicateInstance": return ("map", null, new { geoIndex = R("newGeoIndex") });
                 case "deleteClutter":
                 case "deleteInstance": return ("map", null, null);
@@ -568,8 +568,8 @@ namespace MapBuilder.Server.Services
 
             // ── sessions
             AddSync("assets_open", "Open package",
-                "Open a SOCOM II package (a .ZDB / .CDB, a loose .ZED / .ZAR, or an unpacked package folder; SOCOM 3 / Combined Assault and " +
-                "GTA: San Andreas open read-only) as an asset session, or join the one already open on it (the pages share it). Returns the " +
+                "Open a SOCOM package (.ZDB / .CDB, loose archives or package folder), a Combined Assault location archive or mission path, " +
+                "or a read-only GTA: San Andreas session. The pages share a session for each path. Returns the " +
                 "session id and a summary. The app opens it too: in the Map Builder when it is a map, else the Model Editor. Risk: changes " +
                 "only what the app shows.",
                 false, Schema(new[] { "path" }, P("path", "string", "Path to the package or its unpacked folder.")), a =>
@@ -742,7 +742,7 @@ namespace MapBuilder.Server.Services
             AddSync("assets_map_points", "Read map points",
                 "The AIMAPS spawn and waypoint points (name, team, kind, x, z, grid cell) and the AI grid's bounds. SOCOM 3 / CA: the " +
                 "points of one mission of the location (mission.rdr; kinds start, waypoint, marker, spectator, other), with its zone and " +
-                "island; `mission` (an id from assets_status `missions`, e.g. MP414CTR) switches the session to that mission. Risk: read-only.",
+                "island. Verified default demolition spawns appear separately in teamSpawns. The mission argument selects a mission by id.",
                 true, Schema(new[] { "session" }, session, P("mission", "string", "SOCOM 3 / CA only: the mission whose points to read (kept for later calls).")),
                 a => FromCommand(new CommandMessage { Command = "ASSET_MAP_POINTS", AssetSession = Session(a),
                     AssetJson = JsonSerializer.Serialize(new { mission = Str(a, "mission") }, Json) },
@@ -780,7 +780,7 @@ namespace MapBuilder.Server.Services
                 "- moveClutter {clutterIndex, position?, yaw?, scale?, matrix?}\n" +
                 "- addClutter {model, position, yaw?, scale?} (answers newClutterIndex)\n" +
                 "- deleteClutter {clutterIndex}\n" +
-                "- moveInstance {geoIndex, position?, yaw?, scale?, matrix?} (world space)\n" +
+                "- moveInstance {geoIndex, position?, yaw?, scale?, matrix?} (world space; Combined Assault uses the scene's string instance id instead of geoIndex)\n" +
                 "- duplicateInstance {geoIndex, position?, yaw?, scale?, name?} (answers newGeoIndex)\n" +
                 "- placeInstance {model, position, yaw?, scale?, matrix?, name?, templateGeoIndex?} (a new placed reference of any " +
                 "package model, e.g. a crate, turret or vehicle; copied from the placed reference nearest the position unless " +
@@ -859,7 +859,7 @@ namespace MapBuilder.Server.Services
                 ".bak); mode=pack writes a memory-card pack <NAME>.CDB (packName starts with 'm', at most 7 characters) to outputPath and, with " +
                 "folderCard (a PCSX2 folder memory card), installs it. Prefer a copy (outputPath) over the retail file, and save only when the " +
                 "user asks. Risk: writes disk.",
-                false, Schema(new[] { "session" }, session, E("mode", "zdb (default) or pack.", "zdb", "pack"), P("outputPath", "string", "zdb: output .ZDB path. pack: output folder."),
+                false, Schema(new[] { "session" }, session, E("mode", "zdb (default) or pack. CA uses zdb for a complete archive copy.", "zdb", "pack"), P("outputPath", "string", "zdb: output file. CA requires a separate .ZAR/.ZDB file or output folder. pack: output folder."),
                     P("packName", "string", "pack: the name, e.g. mfrst."), P("folderCard", "string", "pack: optional PCSX2 folder memory card to install into."),
                     P("archiveDir", "string", "pack from an unpacked folder: the files' folder in game, e.g. RUN\\MP\\M51 (default RUN\\MP\\<FOLDER>).")),
                 a => FromCommand(new CommandMessage
@@ -1176,15 +1176,15 @@ namespace MapBuilder.Server.Services
 
             AddSync("ui_focus", "Focus item",
                 "Select and frame an item in the Map Builder (bringing it forward): a placed instance by geoIndex, a clutter item by clutterIndex " +
-                "(from assets_map_scene) or an AIMAPS point by name. Risk: read-only.",
-                true, Schema(new[] { "session" }, session, P("geoIndex", "integer", "A placed instance."), P("clutterIndex", "integer", "A clutter item."), P("point", "string", "An AIMAPS point name.")), a =>
+                "(from assets_map_scene), a CA instance by its string id, or a map point by name. Risk: read-only.",
+                true, Schema(new[] { "session" }, session, P("geoIndex", "integer", "A placed instance."), P("instance", "string", "A CA instance id."), P("clutterIndex", "integer", "A clutter item."), P("point", "string", "A map point name.")), a =>
                 {
                     string id = Session(a);
                     string? path = Status(id) is { } st && st.TryGetProperty("path", out var p) ? p.GetString() : throw new ArgumentException($"No session '{id}'");
-                    var focus = new { geoIndex = IntOpt(a, "geoIndex"), clutterIndex = IntOpt(a, "clutterIndex"), point = Str(a, "point") };
-                    if (focus.geoIndex == null && focus.clutterIndex == null && focus.point == null) throw new ArgumentException("geoIndex, clutterIndex or point is required");
+                    var focus = new { geoIndex = IntOpt(a, "geoIndex"), instance = Str(a, "instance"), clutterIndex = IntOpt(a, "clutterIndex"), point = Str(a, "point") };
+                    if (focus.geoIndex == null && focus.instance == null && focus.clutterIndex == null && focus.point == null) throw new ArgumentException("geoIndex, instance, clutterIndex or point is required");
                     _ui.Publish(new { type = "show", page = "map", path, focus, force = true });
-                    return ToolResult.Text("Focused.", focus.point ?? (focus.geoIndex != null ? $"geo #{focus.geoIndex}" : $"clutter #{focus.clutterIndex}"));
+                    return ToolResult.Text("Focused.", focus.point ?? focus.instance ?? (focus.geoIndex != null ? $"geo #{focus.geoIndex}" : $"clutter #{focus.clutterIndex}"));
                 });
 
             AddSync("ui_view", "Change view",

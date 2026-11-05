@@ -79,6 +79,8 @@ export const SEAL_CLIPS = ['seal_stand', 'seal_p_stand', 'seal_stand_alert01'];
 // Without the game's animation sets: armed actors idle like the Guard set does (seal_stand), unarmed ones in civ_stand.
 export const GUARD_CLIPS = ['seal_stand', 'guard_stand02', 'guard_stand', 'civ_stand'];
 export const UNARMED_CLIPS = ['civ_stand', 'guard_stand02', 'seal_stand'];
+// AUX_GZAN's upright armed idle and its alternate both have a rifle track under rightHand.
+const CA_ARMED_CLIPS = ['guard_stand', 'seal_stand'];
 
 const COMPASS = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 /** A start's heading (vehicles.rdr setup: 0-7, eighths of a turn clockwise from north, -Z) as a compass word. */
@@ -104,7 +106,7 @@ export interface PointLike { name: string; x: number; z: number }
  * else its loadout's weapon; actors without a loadout fall back to the stand-ins (SEALs: the armory's weapons in turn).
  */
 export function planFigures(actors: ReadonlyArray<ActorLike>, points: ReadonlyArray<PointLike>, opts: {
-  clips: ReadonlyArray<string>; armory: ReadonlyArray<string>; chosen: Readonly<Record<string, string>>; multiplayer?: boolean;
+  clips: ReadonlyArray<string>; armory: ReadonlyArray<string>; chosen: Readonly<Record<string, string>>; multiplayer?: boolean; ca?: boolean;
 }): FigurePlan[] {
   const pointNames = new Map(points.map(p => [p.name.toLowerCase(), p]));
   const used = new Set<string>();
@@ -138,7 +140,7 @@ export function planFigures(actors: ReadonlyArray<ActorLike>, points: ReadonlyAr
     if (pick) { weapon = pick === 'none' ? null : pick; weaponSource = weapon ? 'picked' : 'none'; }
     else if (a.weapons) { weapon = a.weapon ?? null; weaponSource = weapon ? 'loadout' : 'none'; }
     else if (sealActor && opts.armory.length) { weapon = opts.armory[seal++ % opts.armory.length]; weaponSource = 'stand-in'; }
-    const fallback = sealActor ? SEAL_CLIPS : a.weapons && !a.weapon ? UNARMED_CLIPS : GUARD_CLIPS;
+    const fallback = opts.ca && weapon ? CA_ARMED_CLIPS : sealActor ? SEAL_CLIPS : a.weapons && !a.weapon ? UNARMED_CLIPS : GUARD_CLIPS;
     out.push({ point: start.p.name, actor: a.name ?? a.character, character: a.character, model: a.model,
       clip: pickClip(a.stand ? [a.stand, ...fallback] : fallback, opts.clips), weapon, weaponSource,
       heading: num(start.s.value), offset, withTeam });

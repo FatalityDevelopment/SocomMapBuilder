@@ -1,11 +1,12 @@
 # Game support
 
-SOCOM U.S. Navy SEALs II is the primary target and the only game Map Builder edits fully. Other PlayStation 2 titles that share its engine or formats open for reading and model conversion.
+SOCOM U.S. Navy SEALs II is the primary target. Combined Assault also supports selected map edits. Other PlayStation 2 titles that share its engine or formats open for reading and model conversion.
 
 | Game | Open | Edit | Convert |
 |---|---|---|---|
 | **SOCOM U.S. Navy SEALs II** | Packages (`.ZDB`, `.CDB`), loose `.ZED` / `.ZAR`, unpacked folders, the disc | Maps, models, textures, palettes, animations, mission tables and disc records | To SOCOM 3 / Combined Assault |
-| **SOCOM 3** and **SOCOM: Combined Assault** | Archives, read-only; Combined Assault maps by location name, with each mission's points | — | Combined Assault models to SOCOM II |
+| **SOCOM: Combined Assault** | Location archives by name, missions, world, actors, loadouts and named objective areas | Points, actor starts and headings, valve start values, allowed weapon slots and world placements. Save to a copy. | Models to SOCOM II |
+| **SOCOM 3** | Compatible asset archives | Map edits verified on the Combined Assault disc only | Compatible models to SOCOM II |
 | **Grand Theft Auto: San Andreas** | `.ISO` or `.IMG`, read-only | — | Models to SOCOM II (partial) |
 | **SOCOM: Fireteam Bravo** | Not tested | — | — |
 
@@ -31,9 +32,15 @@ Map, model and animation edits round-trip through save and reopen. Imported mode
 
 *A character asset from Combined Assault.*
 
-## SOCOM: Combined Assault (read-only)
+## SOCOM: Combined Assault
 
-Each location is one archive on the disc, `RUN\<hash>.ZAR`. The file browser shows the location's name next to it (`055146D2.ZAR  POLAND_RURAL`). You can also open a location or one of its missions by name: `G:\RUN\WHARF` or `G:\RUN\WHARF\SP422.ZDB`. The Map Builder draws the location's world, including its scatter props (rocks, trees, crates), with water and terrain blend layers drawn translucent as the game's GS state sets them ([Combined Assault worlds](formats/ca-worlds.md)), and the selected mission's points: squad starts and AI spawns, AI nav points, the markers named on the map screen, and doors and objective places. Pick another mission from **Mission** in the toolbar. Teams and mission tables are not read yet, and nothing can be edited or saved. Layouts: [Combined Assault missions](formats/ca-missions.md).
+Each location is a `RUN\<hash>.ZAR` archive. Open a location or mission by name, such as `G:\RUN\COMPOUND\SP432.ZDB`, then use **Mission** in the toolbar to switch missions. The map shows named points, squad starts and flags at named objective regions. Verified demolition layouts also show SEAL and Terrorist team starts. The **Mission** tab lists actors, their equipment and starts, allowed weapons and valves.
+
+Move a point within its current AI zone or rename it. The editor updates actor starts that use the old name. Check compiled actions and scripts in game after a rename. In the Mission tab, edit an existing actor start and heading, valve value or allowed weapon slot. Move a world object to reposition its node, attached meshes and children. The original AI navigation and baked visibility still apply.
+
+Undo and redo work across missions in the same archive. **Save copy** writes the complete archive into the selected folder. To see shared weapon models and labels when reopening, place the copy beside the game's `GLOBAL.ZDB`. In-game verification is pending. [File layouts and in-game check](formats/ca-missions.md#editing-and-saving)
+
+The world includes each island's scatter props (rocks, trees, crates), and water and terrain blend layers draw translucent as the game's GS state sets them ([Combined Assault worlds](formats/ca-worlds.md)). Scatter props cannot be moved yet.
 
 ## Grand Theft Auto: San Andreas (partial)
 

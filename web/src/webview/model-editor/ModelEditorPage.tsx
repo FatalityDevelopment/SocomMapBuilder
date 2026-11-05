@@ -58,7 +58,7 @@ export function ModelEditorPage() {
       {/* Menu bar */}
       <div className="me-menubar">
         <span className="me-brand"><Icon name="library" size={14} /> Model Editor</span>
-        {s && d && !s.readOnly && s.mapNamespace && <button className="lm-tool-btn" onClick={() => host.openMapActions(s.path, d.name)}>Placement actions…</button>}
+        {s && d && !s.game && !s.readOnly && s.mapNamespace && <button className="lm-tool-btn" onClick={() => host.openMapActions(s.path, d.name)}>Placement actions…</button>}
         {c.menus.map(menu => (
           <div key={menu.id} className={`me-menu${c.openMenu() === menu.id ? ' open' : ''}`}>
             <button className="me-menu-btn" onClick={() => c.toggleMenu(menu.id)} onMouseEnter={() => c.hoverMenu(menu.id)}>{menu.label}</button>
@@ -79,7 +79,7 @@ export function ModelEditorPage() {
         {s && (
           <>
             <span className="me-pkg" title={s.path}>{c.fileName(s.path)}</span>
-            {s.game && <span className="me-badge" title="Edits and saves are not available for this game yet">{s.game} · read-only</span>}
+            {s.game && <span className="me-badge">{s.game} · read-only models</span>}
             {target
               ? <button className="lm-tool-btn me-export-btn" disabled={c.busy()} onClick={() => void c.quickExport()}
                   title={`Convert ${c.current()?.name ?? ''} into a ${target} package and open it (Ctrl+E). File › Export with options… picks animations / names.`}>Export to {target}…</button>
@@ -362,7 +362,7 @@ export function ModelEditorPage() {
                       <button className="lm-tool-btn" disabled={!c.canRoundBox()} onClick={() => void c.addRoundedBox()}>Rounded box</button>
                       <button className="lm-tool-btn" disabled={c.busy() || !c.canAdd()} onClick={() => void c.importObj()}>Import OBJ…</button>
                     </div>
-                    {d?.skinned && !!d.skeleton?.length && !s?.readOnly && (
+                    {d?.skinned && !!d.skeleton?.length && !s?.game && !s?.readOnly && (
                       <form key={d.name} className="me-card" onSubmit={e => {
                         e.preventDefault();
                         const data = new FormData(e.currentTarget);

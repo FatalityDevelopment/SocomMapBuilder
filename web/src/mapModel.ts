@@ -35,13 +35,14 @@ export function layerOf(inst: MapInstanceWire): MapLayer {
   return 'reference';
 }
 
-// Props and clutter move; the world model and sky stay put.
+// CA draws individual ISLE nodes in the world layer.
 export function movable(inst: MapInstanceWire | undefined): boolean {
-  return !!inst && (inst.clutterIndex !== null || (inst.geoIndex !== null && layerOf(inst) === 'reference'));
+  return !!inst && (!!inst.caNode || inst.clutterIndex !== null || (inst.geoIndex !== null && layerOf(inst) === 'reference'));
 }
 
 // Bridge edit for one placement: clutter by index, GEO props by node index.
 export function placementOp(inst: MapInstanceWire, fields: Record<string, unknown>): Record<string, unknown> | null {
+  if (inst.caNode) { return { op: 'moveInstance', instance: inst.instance, ...fields }; }
   if (inst.clutterIndex !== null) { return { op: 'moveClutter', clutterIndex: inst.clutterIndex, ...fields }; }
   if (inst.geoIndex !== null) { return { op: 'moveInstance', geoIndex: inst.geoIndex, ...fields }; }
   return null;

@@ -56,6 +56,8 @@ export function MapPage() {
   const { client, instancesRef, statusRef, status, setStatus, sceneNs, counts, instances, points, models, setModels,
     busy, progress, loading, loadWarnings, connectionIssue, message, messageIsError, say,
     retryScene, edit, history, saveCopy, exportPack, openDialog, loadModel, texturePixels, jump, sceneReady, reload } = mapSession;
+  const ca = status?.game === 'SOCOM 3 / Combined Assault';
+  const canPlace = !!status && !status.readOnly && !ca;
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   // The Map tab's check: rerun while the tab is open whenever the session changes.
   const [check, setCheck] = useState<MapValidation | null>(null);
@@ -81,7 +83,7 @@ export function MapPage() {
   useEffect(() => { if (request?.actionsFor) setPropTab('actions'); }, [request]);
   // Each edit (and each package) gets a fresh check while the Map tab is open.
   useEffect(() => {
-    if (propTab === 'map' && status) { void runCheck(); }
+    if (propTab === 'map' && status && !ca) { void runCheck(); }
   }, [propTab, status?.session, status?.revision]);
   const [tool, setToolState] = useState<MapTool>('select');
   const [shading, setShadingState] = useState<Shading>(initialPreferences.shading);
@@ -163,7 +165,7 @@ export function MapPage() {
 
   const dirtyCount = status?.dirty.length ?? 0;
   const single = selection.length === 1 ? instances[selection[0]] ?? null : null;
-  const movableCount = selection.filter(i => movable(instances[i])).length;
+  const movableCount = ca && selection.length > 1 ? 0 : selection.filter(i => movable(instances[i])).length;
 
   const { commitTransforms, setField, movePointField, deleteSelection, duplicateSelection, copySelection, paste,
     editSelection, dropToGround, place, scatter, erase, arrange, clipboardRef } = useMapEdits(mapSession, viewportRef, selection,
@@ -198,7 +200,7 @@ export function MapPage() {
     try { setPrefabs((await client.listPrefabs()).prefabs); }
     catch (err) { say(`Could not list prefabs: ${errText(err)}`, true); }
   };
-  useEffect(() => { if (status?.session) { void refreshPrefabs(); } }, [status?.session]);
+  useEffect(() => { if (canPlace) { void refreshPrefabs(); } }, [status?.session, canPlace]);
 
   const pickModel = (m: ModelSummary) => {
     setPlacePrefab(null);
@@ -241,7 +243,7 @@ export function MapPage() {
   const dropAsset = async (e: React.DragEvent) => {
     const raw = e.dataTransfer.getData(ASSET_DRAG_TYPE);
     const vp = viewportRef.current;
-    if (!raw || !vp) { return; }
+    if (!raw || !vp || !canPlace) { return; }
     e.preventDefault();
     const drag = JSON.parse(raw) as AssetDrag;
     const at = vp.placementAt(e.clientX, e.clientY);
@@ -264,7 +266,7 @@ export function MapPage() {
   // Copies a model from another package and selects it for placement.
   const importFromPackage = async () => {
     const session = client.session;
-    if (!session || status?.readOnly) { return; }
+    if (!session || !canPlace) { return; }
     const result = await host.importModel(session);
     if (!result) { return; }
     const list = await client.listModels();
@@ -323,12 +325,14 @@ export function MapPage() {
 
   useEffect(() => {
     let live = true;
-    if (!status || status.readOnly) { setActionData(null); setTables(null); return; }
+    if (!status || ((ca || status.readOnly) && !status.missions?.length)) { setActionData(null); setTables(null); return; }
     setActionError(''); setTablesError('');
-    client.mapActions().then(r => { if (live) { setActionData(r); } }).catch(e => { if (live) { setActionData(null); setActionError(errText(e)); } });
+    if (ca || status.readOnly) { setActionData(null); } else {
+      client.mapActions().then(r => { if (live) { setActionData(r); } }).catch(e => { if (live) { setActionData(null); setActionError(errText(e)); } });
+    }
     client.mapTables().then(r => { if (live) { setTables(r); } }).catch(e => { if (live) { setTables(null); setTablesError(errText(e)); } });
     return () => { live = false; };
-  }, [status?.session, status?.revision, status?.readOnly]);
+  }, [status?.session, status?.revision, status?.readOnly, status?.mission]);
   useEffect(() => { setSelectedObjective(null); setActionNode(null); }, [status?.session]);
   useEffect(() => { if (selection.length) { setActionNode(null); } }, [selection]);
   useEffect(() => {
@@ -358,8 +362,8 @@ export function MapPage() {
         const clips = clipListRef.current.clips;
         const armory = (tables.mission?.valves ?? []).filter(v => v.name?.startsWith('Enable') && v.value === 1)
           .map(v => weaponForValve(v.name!, weaponModels)).filter((m): m is string => !!m);
-        const plans = planFigures(tables.actors, points, { clips: [...clips.keys()], armory, chosen: actorWeapons,
-          multiplayer: /^mp\d/i.test(status?.mapNamespace ?? '') });
+        const plans = planFigures(tables.actors, points, { ca, clips: [...clips.keys()], armory, chosen: actorWeapons,
+          multiplayer: /^mp\d/i.test(status?.mission ?? status?.mapNamespace ?? '') });
         if (live) { setFigurePlans(plans); }
         const figures = await Promise.all(plans.map(async plan => {
           const [character, weapon] = await Promise.all([loadModel(plan.model), plan.weapon ? loadModel(plan.weapon) : Promise.resolve(null)]);
@@ -397,7 +401,7 @@ export function MapPage() {
     if (!minimapOn || !status?.session) { return; }
     client.mapHud().then(h => { if (live) { setHud(h); } }).catch(() => { if (live) { setHud(null); } });
     return () => { live = false; };
-  }, [minimapOn, status?.session]);
+  }, [minimapOn, status?.session, status?.mission]);
   // The top-down picture: redrawn a moment after the scene settles (edits, layers), while the minimap is open.
   useEffect(() => {
     setTopDown(null);
@@ -461,10 +465,17 @@ export function MapPage() {
   // ------------------------------------------------------------------ view
 
   const setTool = (next: MapTool) => {
+    if (!canPlace && (next === 'place' || next === 'paint')) { return; }
     setToolState(next);
     if (viewportRef.current) { viewportRef.current.tool = next; }
     if (next === 'place' || next === 'paint') { setPropTab('place'); }
   };
+
+  useEffect(() => {
+    if (!ca) { return; }
+    if (tool === 'place' || tool === 'paint') { setTool('select'); }
+    if (propTab === 'place' || propTab === 'actions') { setPropTab('item'); }
+  }, [ca, propTab, tool]);
 
   const setShading = (s: Shading) => {
     setShadingState(s);
@@ -621,6 +632,18 @@ export function MapPage() {
   }, [selection, instances]);
 
   const pointInfo = points.find(p => p.name === selectedPoint) ?? null;
+  const renamePoint = async (name: string) => {
+    const mission = status?.mission;
+    const revision = status?.revision;
+    const session = status?.session;
+    const answer = await host.prompt('Rename point', [{
+      key: 'name', label: 'Point name', value: name, pattern: /^[!-~][ -~]{0,13}[!-~]$/, hint: 'Use 2–15 printable ASCII characters with spaces only between words.'
+    }], 'Rename');
+    if (!answer?.name || answer.name === name || session !== client.session) { return; }
+    if (await edit(`Rename ${name}`, { op: 'setPoint', name, newName: answer.name, mission, revision })) {
+      viewportRef.current?.selectPoint(answer.name);
+    }
+  };
   const countList = Object.entries(counts).map(([kind, count]) => ({ kind, count }));
 
   // ------------------------------------------------------------------ menus & keys
@@ -630,22 +653,22 @@ export function MapPage() {
       id: 'file', label: 'File', items: [
         { label: 'Open package…', shortcut: SHORTCUTS.open.label, action: () => void openDialog() },
         { label: 'Reload', action: () => void retryScene(), disabled: () => !status || busy || loading },
-        { label: 'Import from package…', action: () => void importFromPackage(), disabled: () => !status || !!status.readOnly || busy },
+        { label: 'Import from package…', action: () => void importFromPackage(), disabled: () => !canPlace || busy },
         { separator: true, label: '' },
-        { label: 'Save copy…', shortcut: SHORTCUTS.save.label, action: () => void saveCopy(), disabled: () => !dirtyCount },
-        { label: 'Export memory-card pack…', action: () => void exportPack(), disabled: () => !dirtyCount },
+        { label: 'Save copy…', shortcut: SHORTCUTS.save.label, action: () => void saveCopy(), disabled: () => busy || loading || !dirtyCount },
+        { label: 'Export memory-card pack…', action: () => void exportPack(), disabled: () => !canPlace || !dirtyCount },
       ],
     },
     {
       id: 'edit', label: 'Edit', items: [
-        { label: status?.canUndo ? `Undo ${status.canUndo}` : 'Undo', shortcut: SHORTCUTS.undo.label, action: () => void history(true), disabled: () => !status?.canUndo },
-        { label: status?.canRedo ? `Redo ${status.canRedo}` : 'Redo', shortcut: SHORTCUTS.redo.label, action: () => void history(false), disabled: () => !status?.canRedo },
+        { label: status?.canUndo ? `Undo ${status.canUndo}` : 'Undo', shortcut: SHORTCUTS.undo.label, action: () => void history(true), disabled: () => busy || loading || !status?.canUndo },
+        { label: status?.canRedo ? `Redo ${status.canRedo}` : 'Redo', shortcut: SHORTCUTS.redo.label, action: () => void history(false), disabled: () => busy || loading || !status?.canRedo },
         { separator: true, label: '' },
-        { label: 'Copy clutter', shortcut: SHORTCUTS.copy.label, action: copySelection, disabled: () => !movableCount },
-        { label: 'Paste clutter', shortcut: SHORTCUTS.paste.label, action: () => void paste(), disabled: () => !status || !!status.readOnly || busy },
+        { label: 'Copy clutter', shortcut: SHORTCUTS.copy.label, action: copySelection, disabled: () => !canPlace || !movableCount },
+        { label: 'Paste clutter', shortcut: SHORTCUTS.paste.label, action: () => void paste(), disabled: () => !canPlace || busy },
         { separator: true, label: '' },
-        { label: 'Duplicate', shortcut: SHORTCUTS.duplicate.label, action: () => void duplicateSelection(), disabled: () => !movableCount },
-        { label: 'Delete', shortcut: SHORTCUTS.delete.label, action: () => void deleteSelection(), disabled: () => !movableCount },
+        { label: 'Duplicate', shortcut: SHORTCUTS.duplicate.label, action: () => void duplicateSelection(), disabled: () => !canPlace || !movableCount },
+        { label: 'Delete', shortcut: SHORTCUTS.delete.label, action: () => void deleteSelection(), disabled: () => !canPlace || !movableCount },
         { label: 'Drop to ground', shortcut: SHORTCUTS.drop.label, action: () => void dropToGround(), disabled: () => !movableCount },
         { separator: true, label: '' },
         { label: 'Open model…', action: () => openModel(selection[0]), disabled: () => selection.length !== 1 || !single?.source },
@@ -712,8 +735,8 @@ export function MapPage() {
     save: () => void saveCopy(),
     open: () => void openDialog(),
     // Without a selection / clipboard the browser keeps Ctrl+C / Ctrl+V (copying the status text, say).
-    copy: () => { if (!selection.length) { return false; } copySelection(); },
-    paste: () => { if (!clipboardRef.current.length) { return false; } void paste(); },
+    copy: () => { if (!canPlace || !selection.length) { return false; } copySelection(); },
+    paste: () => { if (!canPlace || !clipboardRef.current.length) { return false; } void paste(); },
     front: () => void view('front'),
     right: () => void view('right'),
     top: () => void view('top'),
@@ -721,10 +744,10 @@ export function MapPage() {
     left: () => void view('left'),
     bottom: () => void view('bottom'),
     ortho: toggleOrtho,
-    duplicate: () => void duplicateSelection(),
+    duplicate: () => { if (canPlace) { void duplicateSelection(); } },
     selectSame: selectSameModel,
-    delete: () => void deleteSelection(),
-    drop: () => void dropToGround(),
+    delete: () => { if (canPlace) { void deleteSelection(); } },
+    drop: () => { if (movableCount) { void dropToGround(); } },
     frame: () => void frameSelected(),
     frameAll: () => void frameAll(),
     toolSelect: () => setTool('select'),
@@ -887,7 +910,7 @@ export function MapPage() {
 
   return (
     <div className="me-app mp-app has-header" onPointerDown={e => { if (!(e.target as HTMLElement).closest('.me-menu')) { setOpenMenu(null); } }}>
-      <PageHeader icon="globe" title="Map Builder" subtitle="Props, clutter and spawn points of SOCOM II maps" />
+      <PageHeader icon="globe" title="Map Builder" subtitle={ca ? 'Combined Assault maps and missions' : 'Props, clutter and spawn points of SOCOM II maps'} />
       <MenuBar {...menuBarProps} />
       {shortcutsOpen && <ShortcutReference onClose={() => setShortcutsOpen(false)} />}
       {paletteOpen && <CommandPalette commands={commandsFromMenus(menus)} onClose={() => setPaletteOpen(false)} />}
@@ -972,11 +995,11 @@ export function MapPage() {
             onDeletePrefab={name => void deletePrefab(name)}
             onRefreshPrefabs={() => void refreshPrefabs()}
             onImport={() => void importFromPackage()}
-            readOnly={!status || !!status.readOnly}
+            readOnly={!canPlace}
           />
         </aside>
         <nav className="me-tools">
-          {TOOLS.map(t => (
+          {TOOLS.filter(t => !ca || (t.id !== 'place' && t.id !== 'paint')).map(t => (
             <button key={t.id} className={`me-tool${tool === t.id ? ' on' : ''}`} onClick={() => setTool(t.id)} title={`${t.label} (${t.key})`}>
               <span className="me-tool-glyph">{t.glyph}</span>
             </button>
@@ -1031,13 +1054,14 @@ export function MapPage() {
             pickPoint={pickPoint}
           />
           <PropsPanel
-            actions={status && !status.readOnly ? <MapActionsPanel key={status.session} data={actionData} error={actionError} onFocusNode={focusNode}
+            actions={status && canPlace ? <MapActionsPanel key={status.session} data={actionData} error={actionError} onFocusNode={focusNode}
               revision={status.revision} client={client} selected={single?.geoIndex ?? actionNode} busy={busy || loading} edit={edit} path={status.path} model={request?.path === status.path ? request.actionsFor : undefined} /> :
               <div className="me-note">Open an editable SOCOM II map to manage its actions.</div>}
-            mission={status && !status.readOnly ? <MissionPanel tables={tables} error={tablesError} revision={status.revision} busy={busy || loading} edit={edit}
+            mission={status && (!status.readOnly || !!status.missions?.length) ? <MissionPanel tables={!ca || tables?.missionId === status.mission ? tables : null}
+              ca={ca} pointNames={ca ? [...new Set(points.filter(p => p.editable !== false).map(p => p.name))] : undefined} readOnly={!!status.readOnly} error={tablesError} revision={status.revision} busy={busy || loading} edit={edit}
               path={status.path} selectedObjective={selectedObjective} onSelectObjective={row => { setSelectedObjective(row); if (row !== null) { viewportRef.current?.frameObjective(row); } }}
               onShowObjective={showObjective} weaponModels={weaponModels} actorWeapons={actorWeapons} onChooseWeapon={chooseActorWeapon} figures={figurePlans}
-              multiplayer={/^mp\d/i.test(status.mapNamespace ?? '')} /> :
+              multiplayer={/^mp\d/i.test(status.mission ?? status.mapNamespace ?? '')} /> :
               <div className="me-note">Open an editable SOCOM II map to see its mission tables.</div>}
             tab={propTab}
             setTab={setPropTab}
@@ -1053,6 +1077,7 @@ export function MapPage() {
             movableCount={movableCount}
             busy={busy}
             onMovePoint={movePointField}
+            onRenamePoint={name => void renamePoint(name)}
             onSetField={setField}
             onEditSelection={editSelection}
             onDuplicate={() => void duplicateSelection()}

@@ -1,4 +1,6 @@
 using MapBuilder.Server.Services;
+using CodeDesigner.Ps2.FileFormats.Zipper.Ca;
+using CodeDesigner.Ps2.FileFormats.Zipper.ZDB;
 using MapBuilder.Tests.Fixtures;
 using Xunit;
 
@@ -33,6 +35,29 @@ namespace MapBuilder.Tests
             Assert.EndsWith(".autosave.CDB", ZipperAssetService.AutosavePath(Path.Combine(_folder, "MEDIT.CDB"), isZdb: true));
             // A loose folder's copy is a folder of files, so it is not named like an archive.
             Assert.Matches(@"TST-[0-9a-f]{8}\.autosave$", ZipperAssetService.AutosavePath(Path.Combine(_folder, "TST"), isZdb: false));
+        }
+
+        [Fact]
+        public void A_CA_recovery_archive_reopens_with_the_selected_missions_edits()
+        {
+            Directory.CreateDirectory(_folder);
+            var mission = CaMissionsTests.EditableMission(_folder);
+            using var outer = ZdbArchive.CreateNew(2);
+            outer.AddEntry(@"RUN\COMPOUND\SP414.ZDB", File.ReadAllBytes(mission.SourcePath));
+            string source = Path.Combine(_folder, "9EA6A33E.ZAR");
+            outer.Save(source);
+            string session = _b.Open(source);
+            _sessions.Add(session);
+            _b.Edit(session, new { op = "setPoint", name = "s_Able1", newName = "Recovery" });
+            string copy = ZipperAssetService.AutosavePath(source, true);
+            Assert.EndsWith(".ZAR", copy);
+            Assert.Contains(copy, ZipperAssetService.AutosaveNow());
+            Assert.Equal("Recovery", CaPackage.Open(copy).MissionPoints("SP414")[0].Name);
+            Assert.DoesNotContain(copy, ZipperAssetService.AutosaveNow());
+            Assert.Equal(copy, _b.Status(session).GetProperty("autosave").GetProperty("path").GetString());
+            _b.Undo(session);
+            Assert.Empty(_b.Status(session).GetProperty("dirty").EnumerateArray());
+            Assert.Equal("s_Able1", CaPackage.Open(source).MissionPoints("SP414")[0].Name);
         }
 
         [Fact]

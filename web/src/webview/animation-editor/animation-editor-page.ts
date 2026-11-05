@@ -104,7 +104,7 @@ export class AnimationEditorPageLogic {
   });
   readonly bones = computed(() => { this.boneVersion(); this.clip(); return this.viewport?.boneNames() ?? []; });
   readonly editable = computed(() => !!this.current()?.editable);
-  readonly canWrite = computed(() => !!this.status());
+  readonly canWrite = computed(() => !!this.status() && !this.status()?.readOnly && !this.status()?.game);
   readonly boneLocal = computed(() => { this.frame(); this.boneVersion(); this.selectedBone(); return this.viewport?.selectedLocal() ?? null; });
 
   readonly menus: Menu[] = [
@@ -113,7 +113,7 @@ export class AnimationEditorPageLogic {
         { label: 'Open package…', shortcut: 'Ctrl+O', action: () => this.pickPackage() },
         { separator: true, label: '' },
         { label: 'Save copy…', shortcut: 'Ctrl+S', action: () => void this.saveZdbCopy(), disabled: () => !this.dirtyCount() },
-        { label: 'Export memory-card pack…', action: () => void this.exportPack(), disabled: () => !this.dirtyCount() },
+        { label: 'Export memory-card pack…', action: () => void this.exportPack(), disabled: () => !!this.status()?.game || !this.dirtyCount() },
       ],
     },
     {
@@ -124,8 +124,8 @@ export class AnimationEditorPageLogic {
     },
     {
       id: 'anim', label: 'Animation', items: [
-        { label: 'New from seal_stand…', shortcut: 'Ctrl+N', action: () => void this.newClip(), disabled: () => !this.status() },
-        { label: 'Duplicate / copy into package…', shortcut: 'Ctrl+D', action: () => void this.duplicateClip(), disabled: () => !this.current() },
+        { label: 'New from seal_stand…', shortcut: 'Ctrl+N', action: () => void this.newClip(), disabled: () => !this.canWrite() },
+        { label: 'Duplicate / copy into package…', shortcut: 'Ctrl+D', action: () => void this.duplicateClip(), disabled: () => !this.current() || !this.canWrite() },
         { label: 'Rename…', shortcut: 'F2', action: () => void this.renameClip(), disabled: () => !this.editable() },
         { label: 'Delete', shortcut: 'Delete', action: () => void this.deleteClip(), disabled: () => !this.editable() },
         { separator: true, label: '' },
@@ -466,7 +466,7 @@ export class AnimationEditorPageLogic {
   }
 
   async newClip(): Promise<void> {
-    if (!this.status()) { return; }
+    if (!this.canWrite()) { return; }
     const name = await this.askName('New animation (a copy of seal_stand to start from)', this.uniqueName('my_anim'));
     if (!name) { return; }
     await this.edit(`add animation ${name}`, { op: 'addAnimation', name, from: 'seal_stand' }, { name, source: PACKAGE_SOURCE });
@@ -474,7 +474,7 @@ export class AnimationEditorPageLogic {
 
   async duplicateClip(): Promise<void> {
     const c = this.current();
-    if (!c) { return; }
+    if (!c || !this.canWrite()) { return; }
     const name = await this.askName(c.editable ? `Duplicate ${c.name} as` : `Copy ${c.name} into the package as`, this.uniqueName(c.editable ? `${c.name}_copy` : c.name));
     if (!name) { return; }
     await this.edit(`${c.editable ? 'duplicate' : 'copy'} ${c.name} as ${name}`, { op: 'addAnimation', name, from: c.name, fromSource: c.source, after: c.editable ? c.name : undefined },
@@ -557,10 +557,8 @@ export class AnimationEditorPageLogic {
   async saveZdbCopy(): Promise<void> {
     const s = this.status();
     if (!s || !this.dirtyCount()) { return; }
-    // A .CDB pack keeps its name (the game mounts mc0:/BASCUS-97275<NAME>/<NAME>.CDB); a .ZDB gets an _edit copy.
-    const picked = await host.pickSavePath('zdb', /\.cdb$/i.test(s.path) ? s.path : s.path.replace(/(\.zdb)$/i, '_edit$1'));
-    if (!picked.path) { return; }
-    await this.save({ mode: 'zdb', outputPath: picked.path });
+    const path = await host.pickPackageCopy(s);
+    if (path) { await this.save({ mode: 'zdb', outputPath: path }); }
   }
 
   async exportPack(): Promise<void> {

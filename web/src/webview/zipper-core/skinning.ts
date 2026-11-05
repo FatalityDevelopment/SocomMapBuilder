@@ -45,6 +45,18 @@ export function poseBones(skeleton: BoneWire[], clip: PoseClip | null, time: num
   return world;
 }
 
+/** A held model's first-frame transform: the posed right hand followed by the clip's weapon mount. */
+export function heldWeaponMatrix(skeleton: BoneWire[], world: THREE.Matrix4[], clip: PoseClip | null): THREE.Matrix4 | null {
+  const hand = skeleton.findIndex(b => ['rhand', 'righthand'].includes(b.name.toLowerCase()));
+  if (hand < 0) { return null; }
+  const track = clip?.bones.find(b => ['rifle', 'weapon', 'pistol'].includes(b.name.toLowerCase()));
+  const grip = world[hand].clone();
+  if (!track) { return grip; }
+  const p = track.positions[0] ? new THREE.Vector3().fromArray(track.positions[0]) : new THREE.Vector3();
+  const q = track.rotations[0] ? new THREE.Quaternion().fromArray(track.rotations[0]) : new THREE.Quaternion();
+  return grip.multiply(new THREE.Matrix4().compose(p, q, new THREE.Vector3(1, 1, 1)));
+}
+
 /** The chunk's vertices (and normals) through `world`, written into `positions` / `normals` (3 per vertex). */
 export function skinChunk(chunk: EditorChunk, influences: number, world: THREE.Matrix4[], positions: Float32Array, normals: Float32Array): void {
   const skin = chunk.skin;

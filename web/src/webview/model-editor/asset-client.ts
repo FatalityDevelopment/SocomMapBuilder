@@ -15,7 +15,7 @@ export interface SessionStatus {
   canRedo: string | null;
   entries: number;
   models: Record<string, number>;
-  // Set for sessions of another game (SOCOM 3 / Combined Assault), which are read-only for now.
+  // Set for packages from another game. CA supports a subset of Map Builder edits.
   game?: string;
   readOnly?: boolean;
   // The last autosave (a recovery copy of unsaved edits), if any.
@@ -23,6 +23,7 @@ export interface SessionStatus {
   // SOCOM 3 / CA: the location the archive holds, its missions and the one whose points ASSET_MAP_POINTS returns.
   location?: string | null;
   mission?: string | null;
+  packageKind?: string;
   missions?: MissionSummary[];
 }
 
@@ -105,6 +106,7 @@ export interface EditResult {
 }
 
 export interface MapInstanceWire {
+  caNode?: boolean;
   kind: string;
   model: string;
   instance: string;
@@ -145,7 +147,10 @@ export interface MapSceneResult {
 }
 
 // y: the floor of the point's cell in the AI grid (null where the grid has no cell).
-export interface MapPointWire { name: string; team: number; kind: string; x: number; y?: number | null; z: number; cellX: number; cellZ: number }
+export interface MapPointWire {
+  name: string; team: number; kind: string; x: number; y?: number | null; z: number; cellX: number; cellZ: number;
+  island?: string | null; faction?: string; editable?: boolean; canMove?: boolean;
+}
 
 export interface AnimationSummary { name: string; source: string; editable: boolean; duration: number; frames: number; samples: number; fps: number; bones: number }
 
@@ -221,6 +226,7 @@ export interface MapActor {
   ai: Array<{ name: string; value: number | string | null }> | null;
 }
 export interface MapTables {
+  missionId?: string | null;
   revision: number;
   hasReader: boolean;
   objectives: MapObjective[];
@@ -230,6 +236,10 @@ export interface MapTables {
   mission: {
     description: string | null; satchelTimer: number | null; elevation: { min: number | null; max: number | null } | null;
     ai: Array<{ name: string; value: number | string | null }>; valves: Array<{ index: number; name: string | null; value: number | string | null }>;
+    // SOCOM 3 / CA: the briefing key, the map screen image and the weapons the mission allows (by name).
+    briefing?: string | null; mapImage?: string | null; weapons?: string[];
+    weaponSlots?: Array<{ index: number; hash: number; name: string }>;
+    weaponChoices?: Array<{ hash: number; name: string }>;
   } | null;
   world: {
     record: string; metersPerUnit: number | null; defaultMaterial: string | null; nightMission: number | null; nightVision: number[] | null;
@@ -303,7 +313,7 @@ export class AssetClient {
   }
 
   // A SOCOM 3 / CA session reads one mission's points; naming one switches the session to it.
-  mapPoints(mission?: string): Promise<{ points: MapPointWire[] }> {
+  mapPoints(mission?: string): Promise<{ points: MapPointWire[]; mission?: string | null; teamSpawns?: MapPointWire[] }> {
     return mission ? this.withJson('ASSET_MAP_POINTS', { mission }) : this.call('ASSET_MAP_POINTS');
   }
   mapActions(): Promise<MapActions> { return this.call('ASSET_MAP_ACTIONS'); }

@@ -212,7 +212,7 @@ export class ModelEditorPageLogic {
     for (const c of m.chunks) { v += c.vertexCount; t += c.triangles.length / 3; }
     return `${m.chunks.length} chunks · ${v} verts · ${t} tris`;
   });
-  readonly canAdd = computed(() => !!this.mesh() && !!this.targetVisual() && !!this.targetTexture().trim());
+  readonly canAdd = computed(() => this.canImport() && !!this.mesh() && !!this.targetVisual() && !!this.targetTexture().trim());
   readonly canRoundBox = computed(() => this.canImport() && !!this.mesh() && !!this.targetTexture().trim()
     && (!!this.description()?.skinned || !!this.targetVisual()));
   readonly pendingActive = computed(() => this.pendingRot().some(v => v !== 0) || this.pendingScale().some(v => v !== 1));
@@ -224,7 +224,7 @@ export class ModelEditorPageLogic {
         { label: 'Import from package…', action: () => void this.importFromPackage(), disabled: () => !this.canImport() },
         { separator: true, label: '' },
         { label: 'Save copy…', shortcut: 'Ctrl+S', action: () => void this.saveZdbCopy(), disabled: () => !this.dirtyCount() },
-        { label: 'Export memory-card pack…', action: () => void this.exportPack(), disabled: () => !this.dirtyCount() },
+        { label: 'Export memory-card pack…', action: () => void this.exportPack(), disabled: () => !!this.status()?.game || !this.dirtyCount() },
         { separator: true, label: '' },
         { label: 'Export model as OBJ…', action: () => void this.exportObj(), disabled: () => !this.mesh() },
         { label: 'Export rounded model as OBJ…', action: () => void this.exportObj(true), disabled: () => !this.mesh() || this.busy() },
@@ -641,7 +641,7 @@ export class ModelEditorPageLogic {
 
   canImport(): boolean {
     const s = this.status();
-    return !!s && !s.readOnly && !this.busy();
+    return !!s && !s.game && !s.readOnly && !this.busy();
   }
 
   // Copies a model from another package into this one (importModel: MDL, GEO, textures, palettes) and selects it.
@@ -745,7 +745,7 @@ export class ModelEditorPageLogic {
   // As edit, answering the server's reply (null when the edit failed).
   private async editResult(label: string, op: Record<string, unknown>): Promise<Record<string, unknown> | null> {
     const m = this.current();
-    if (!m) { return null; }
+    if (!m || this.status()?.game || this.status()?.readOnly) { return null; }
     this.busy.set(true);
     try {
       const raw = await this.client.edit({ archive: m.archive, model: m.name, label, ...op }) as unknown as { result?: { revision: number; description?: string }; newChunks?: number[]; revision?: number; description?: string };
@@ -1315,10 +1315,8 @@ export class ModelEditorPageLogic {
   async saveZdbCopy(): Promise<void> {
     const s = this.status();
     if (!s || !this.dirtyCount()) { return; }
-    // A .CDB pack keeps its name (the game mounts mc0:/BASCUS-97275<NAME>/<NAME>.CDB); a .ZDB gets an _edit copy.
-    const picked = await host.pickSavePath('zdb', /\.cdb$/i.test(s.path) ? s.path : s.path.replace(/(\.zdb)$/i, '_edit$1'));
-    if (!picked.path) { return; }
-    await this.save({ mode: 'zdb', outputPath: picked.path });
+    const path = await host.pickPackageCopy(s);
+    if (path) { await this.save({ mode: 'zdb', outputPath: path }); }
   }
 
   async exportPack(): Promise<void> {

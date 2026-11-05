@@ -76,11 +76,11 @@ namespace MapBuilder.Server.Services
             reg.Add(c => WithSession(c.AssetSession, "ASSET_CHARACTER_CHECK", s => CharacterCheckOf(s, c.AssetJson)), "ASSET_CHARACTER_CHECK");
             reg.Add(c => WithSession(c.AssetSession, "ASSET_UV_LAYOUT", s => UvLayout(s, c.AssetJson)), "ASSET_UV_LAYOUT");
             reg.Add(c => CaRoute(c, "ASSET_SAVE") ?? WithSession(c.AssetSession, "ASSET_SAVE", s => Save(s, c.AssetJson)), "ASSET_SAVE");
-            reg.Add(c => WithSession(c.AssetSession, "ASSET_HISTORY", s => History(s)), "ASSET_HISTORY");
+            reg.Add(c => CaRoute(c, "ASSET_HISTORY") ?? WithSession(c.AssetSession, "ASSET_HISTORY", s => History(s)), "ASSET_HISTORY");
             RegisterPrefabs(reg);
             reg.Add(c => WithSession(c.AssetSession, "ASSET_MAP_ACTIONS", MapActions), "ASSET_MAP_ACTIONS");
-            reg.Add(c => WithSession(c.AssetSession, "ASSET_MAP_TABLES", MapTables), "ASSET_MAP_TABLES");
-            reg.Add(c => WithSession(c.AssetSession, "ASSET_MAP_HUD", MapHud), "ASSET_MAP_HUD");
+            reg.Add(c => CaRoute(c, "ASSET_MAP_TABLES") ?? WithSession(c.AssetSession, "ASSET_MAP_TABLES", MapTables), "ASSET_MAP_TABLES");
+            reg.Add(c => CaRoute(c, "ASSET_MAP_HUD") ?? WithSession(c.AssetSession, "ASSET_MAP_HUD", MapHud), "ASSET_MAP_HUD");
             RegisterCharacterPresets(reg);
             RegisterViewer(reg);
             RegisterMovies(reg);
@@ -1325,6 +1325,9 @@ namespace MapBuilder.Server.Services
         internal static string? UnsavedSessionOn(string path)
         {
             string full = Path.GetFullPath(path);
+            var ca = CaSessions.Values.FirstOrDefault(s => s.Package.SourcePath.Equals(full, StringComparison.OrdinalIgnoreCase));
+            if (ca != null)
+                lock (ca.Gate) { if (ca.Dirty.Count != 0) return ca.Id; }
             return Sessions.Values.FirstOrDefault(s => s.Dirty.Count > 0 &&
                 (s.OpenPath.Equals(full, StringComparison.OrdinalIgnoreCase) || s.Package.SourcePath.Equals(full, StringComparison.OrdinalIgnoreCase)))?.Id;
         }
@@ -1391,7 +1394,7 @@ namespace MapBuilder.Server.Services
             try
             {
                 string full = Path.GetFullPath(inputPath);
-                // SOCOM 3 / Combined Assault archives open as read-only CA sessions.
+                // SOCOM 3 / Combined Assault location archives and v6 ZDBs.
                 if (TryOpenCa(full) is string ca) return ca;
                 // GTA: San Andreas (the disc image or GTA3.IMG) opens as a read-only GTA session.
                 if (Assets.GtaAssetService.TryOpen(full) is string gta) return gta;
@@ -1439,7 +1442,17 @@ namespace MapBuilder.Server.Services
 
         private static string HandleClose(string? id)
         {
-            if (id != null && (CloseCa(id) || Assets.GtaAssetService.Close(id))) return Ok("ASSET_CLOSE", new { session = id, discardedEdits = 0 });
+            if (id != null && CaSessions.TryGetValue(id, out var ca))
+            {
+                lock (OpenGate)
+                lock (ca.Gate)
+                {
+                    CaSessions.TryRemove(id, out _);
+                    LastAutosave.TryRemove(id, out _);
+                    return Ok("ASSET_CLOSE", new { session = id, discardedEdits = ca.Dirty.Count });
+                }
+            }
+            if (id != null && Assets.GtaAssetService.Close(id)) return Ok("ASSET_CLOSE", new { session = id, discardedEdits = 0 });
             if (Find(id) is not { } s) return Responses.Error($"No asset session '{id}'");
             // Wait for an edit in progress on it to finish.
             lock (s.Gate) Sessions.TryRemove(s.Id, out _);
@@ -1490,7 +1503,7 @@ namespace MapBuilder.Server.Services
                 canRedo = s.Redo.Count > 0 ? s.Redo.Peek().Description : null,
                 entries = s.Package.Entries.Count,
                 models = models.GroupBy(m => m.Kind).ToDictionary(g => g.Key, g => g.Count()),
-                autosave = AutosaveOf(s),
+                autosave = AutosaveOf(s.Id),
             };
         }
 

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { paintWeight, poseBones, skinChunk, weightColor, weightOf } from './skinning';
+import { heldWeaponMatrix, paintWeight, poseBones, skinChunk, weightColor, weightOf } from './skinning';
 import type { BoneWire, EditorChunk } from '../model-editor/mesh-data';
 
 const bone = (name: string, parent: number, at: number[]): BoneWire => {
@@ -48,6 +48,16 @@ describe('weight paint', () => {
 });
 
 describe('posing', () => {
+  it.each(['rhand', 'rightHand'])('mounts the rifle in the posed %s frame', name => {
+    const skeleton = [bone('root', -1, [10, 0, 0]), bone(name, 0, [0, 3, 0])];
+    const clip = { duration: 1, samples: 1, bones: [
+      { name, positions: [], rotations: [[0, 0, Math.SQRT1_2, Math.SQRT1_2]] },
+      { name: 'rifle', positions: [[2, 0, 0]], rotations: [] },
+    ] };
+    const grip = heldWeaponMatrix(skeleton, poseBones(skeleton, clip, 0), clip)!;
+    expect(new THREE.Vector3().setFromMatrixPosition(grip).toArray().map(Math.round)).toEqual([10, 5, 0]);
+  });
+
   it('bends a vertex with the bones it follows', () => {
     // A root and an elbow 10 up; a clip turns the elbow a quarter about Z.
     const skeleton = [bone('root', -1, [0, 0, 0]), bone('elbow', 0, [0, 10, 0])];
