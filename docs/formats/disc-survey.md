@@ -139,7 +139,7 @@ Two fixes in the same pass, both found here:
 
 | Where | What | Use |
 |---|---|---|
-| **`RUN\UI\MM<n>_TXR.ZED`** (SP, in the map ZDB) | 9 textures `map_m51_<page>_<part>.tif`. Page 1 is the **area map**: two 512×512 annotated satellite halves (`_1_1` left, `_1_2` right) and a 128×128 overview (`_1_3`). Pages 2 and 3 are the general and specific intel boards | Area map backdrop. `UI/READERC.ZAR › dlg_Map51.rdr` places the halves on screen (`MAPCONTROL`, `UPPERLEFT [15, 66]`, `LOWERRIGHT [625, 405]`, element `XSIZE 512`); **nothing found ties them to world coordinates**, so they would need fitting by hand (objective `LOCATION`s and nav points are the obvious control points) |
+| **`RUN\UI\MM<n>_TXR.ZED`** (SP, in the map ZDB) | 9 textures `map_m51_<page>_<part>.tif`. Page 1 is the **area map**: two 512×512 annotated satellite halves (`_1_1` left, `_1_2` right) and a 128×128 overview (`_1_3`). Pages 2 and 3 are the general and specific intel boards | Area map backdrop. `UI/READERC.ZAR › dlg_Map51.rdr` places the halves on screen (`MAPCONTROL`, `UPPERLEFT [15, 66]`, `LOWERRIGHT [625, 405]`, element `XSIZE 512`); **nothing on the disc ties them to world coordinates**; they are fitted by hand ([hud.md](hud.md): M51 measured, kept in `server/data/tacmaps.json`) |
 | `RUN\UI\BF<n>_TXR.ZED` (SP) | Briefing art: `m51_overview.tif` and `m51_1..3.tif` (512×128 strips), `deploy_m51.tif` (512×256), AOP picture | Not plan views |
 | **`RUN\READERC.ZAR › hud.rdr › TacMap`** | The in-game tactical map's style: `Polygons` and `Lines`, nine types each (`Type 0..8` with `Color [r,g,b]` and `Opacity`; e.g. type 4 blue 87,112,176 at 0.5). The shapes it draws are per map, and **where they are stored is not found yet**: not a named record in any map archive. `hudobjectives.rdr › LINE_IDS` (1–5) look like ids of its lines. Candidates: the undecoded `AIMAPS.MPS` sections, or flags on GEO `di` faces | The SOCOM-style radar's colours; the shapes are the top unknown |
 | `RUN\COMMON\HUD2_TXR.ZED` | Radar / compass art: `compass_bkrnd` (32²), `compass_lo`, `small_compass` (16²), `FOV.tif` (64², the view cone), `ret_nav_01..24`, `ret_objective`, `ret_friendly`, `ret_hostage`, `ret_extraction`, `ret_base`, `ret_bomb`, `ret_able`, `ret_bravo`, `teammate_health` | Minimap icons |
@@ -165,7 +165,7 @@ Two fixes in the same pass, both found here:
 | Lights | `<map>.rdr` lighting, fog | Which copy the game reads (rdr or `.ZED`) |
 | Sound | `sndjukeboxm.rdr` (Asset Viewer) | `sounds.rdr`, `BNKSTORE` / `VAGSTORE` |
 | Textures | All TXR/PAL; **scrolling** (`TextureScroll_Object`) | `dyntex.rdr` boundaries |
-| Minimap / HUD | Map screen pages, HUD icons, TacMap colours | **TacMap shapes**, image-to-world fit |
+| Minimap / HUD | Map screen pages, HUD icons, TacMap colours, M51's map placement ([hud.md](hud.md)) | **TacMap shapes**, placement of the other 11 SP maps |
 | Pickups | — | `PICKUP AMMO/WEAPON` records in `AIMAPS.MPS` |
 | Memory | `DBUFFER.ZAR` values | Whether the game needs it updated after an archive grows |
 
@@ -174,7 +174,7 @@ Two fixes in the same pass, both found here:
 1. **TacMap shapes.** Find where the per-map polygons and lines live (start with the `AIMAPS.MPS` sections after the points and the `di` face flags; `LINE_IDS` 1–5 should match). This is what a SOCOM-style minimap needs, for MP maps above all, which have no map image.
 2. **`AIMAPS.MPS` named records and pickups.** The 28-byte records (likely script trigger areas, with what look like cell coordinates) and the `PICKUP` records (weapons and ammo on the ground). Both are map content a builder should show and move.
 3. **Show character types in the Mission tab** and give the 3D figures their real weapons: the data is now in `ASSET_MAP_TABLES` (`actors[].chartype.weapons[].model`); the weapon session can load `WEAP_MDL.ZED` models by that name and attach them at the `rifle` / `pistol` body items (`character.rdr › body_items`).
-4. **Map screen fit.** Register `map_<map>_1_1/_1_2` to world x/z with two or three control points per map and store the transform (for SP minimaps).
+4. **Map screen fit** for the other 11 SP maps: M51 is measured ([hud.md](hud.md)); add each map to `server/data/tacmaps.json` from two or three control points (objective `LOCATION`s, nav points).
 5. **`DBUFFER.ZAR` after edits.** Test in game whether an archive that grows past its listed size loads; if needed, update the map's table on save (the map's own `DBUFFER.ZAR` must then be reached by full path, not leaf).
 6. **`di` face params**: material byte against `materials.rdr › SOILS`, vertex count, flag bits (ladders and climb faces are already sampled in [map-interactions.md](../map-interactions.md)).
 7. Smaller tables: `lod.rdr` / `LOD_Object`, `net_000.rdr`, `lensflare.rdr`, `Material_Palette`, `missionlist.rdr`.

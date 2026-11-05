@@ -1,0 +1,7 @@
+{
+  // Where each single-player map's tactical map (RUN\UI\MM<nn>_TXR.ZED: map_<map>_1_1 and _1_2 side by side,
+  // 1024 x 512) sits in the world: [x at the left edge, x at the right edge, z at the top edge, z at the bottom edge].
+  // Nothing in a package says this; each entry was measured by hand against the map's points and its top-down view
+  // (docs/formats/hud.md). Maps without an entry show a top-down render on the minimap instead.
+  "m51": { "world": [-78, 6926, 270, 4467] }
+}

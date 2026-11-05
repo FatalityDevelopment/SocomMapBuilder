@@ -890,6 +890,74 @@ export class MapViewport extends ViewportCore {
 
   get isWalking(): boolean { return !!this.walking; }
 
+  // ------------------------------------------------------------------ minimap
+
+  /**
+   * For the minimap: the ground point the view is centred on (what the camera looks at; the walker in walk mode), which
+   * way it faces, and where the camera itself is.
+   */
+  viewHeading(): { x: number; z: number; forwardX: number; forwardZ: number; cameraX: number; cameraZ: number } {
+    const dir = this.camera.getWorldDirection(new THREE.Vector3());
+    const p = this.walking ? this.camera.position : this.controls.target;
+    // Straight down, the top of the screen says which way the view faces.
+    if (Math.abs(dir.y) > 0.999) { dir.set(0, 1, 0).applyQuaternion(this.camera.quaternion); }
+    return { x: p.x, z: p.z, forwardX: dir.x, forwardZ: dir.z, cameraX: this.camera.position.x, cameraZ: this.camera.position.z };
+  }
+
+  /** Moves the view (camera and what it looks at, or the walker) over the ground point x / z, keeping its height and facing. */
+  jumpTo(x: number, z: number): void {
+    const p = this.walking ? this.camera.position : this.controls.target;
+    const dx = x - p.x, dz = z - p.z;
+    this.camera.position.x += dx; this.camera.position.z += dz;
+    this.controls.target.x += dx; this.controls.target.z += dz;
+    this.controls.update();
+  }
+
+  /** The drawn map's ground extent (x / z), or null before a scene is built. */
+  sceneExtent(): { minX: number; maxX: number; minZ: number; maxZ: number } | null {
+    if (this.worldBox.isEmpty()) { return null; }
+    return { minX: this.worldBox.min.x, maxX: this.worldBox.max.x, minZ: this.worldBox.min.z, maxZ: this.worldBox.max.z };
+  }
+
+  /**
+   * The map seen straight down (north, -Z, up; +X right) over `area`, as a PNG data URL `size` pixels square: the
+   * minimap's picture for maps without a tactical map. Only the map itself is drawn (no points, markers, helpers, sky).
+   */
+  renderTopDown(area: { minX: number; maxX: number; minZ: number; maxZ: number }, size = 1024): string | null {
+    if (!this.content.children.length || this.worldBox.isEmpty()) { return null; }
+    const hidden: THREE.Object3D[] = [];
+    for (const child of this.scene.children) { if (child !== this.content && child.visible) { child.visible = false; hidden.push(child); } }
+    for (const child of this.content.children) { if (child.visible && child.userData['layer'] === 'sky') { child.visible = false; hidden.push(child); } }
+    const cam = new THREE.OrthographicCamera((area.minX - area.maxX) / 2, (area.maxX - area.minX) / 2, (area.maxZ - area.minZ) / 2, (area.minZ - area.maxZ) / 2, 1, 1e6);
+    cam.up.set(0, 0, -1);
+    cam.position.set((area.minX + area.maxX) / 2, this.worldBox.max.y + 100, (area.minZ + area.maxZ) / 2);
+    cam.lookAt(cam.position.x, this.worldBox.min.y, cam.position.z);
+    cam.updateProjectionMatrix();
+    const target = new THREE.WebGLRenderTarget(size, size, { samples: 4 });
+    const background = this.scene.background;
+    this.scene.background = new THREE.Color(0x101418);
+    const pixels = new Uint8Array(size * size * 4);
+    try {
+      this.renderer.setRenderTarget(target);
+      this.renderer.render(this.scene, cam);
+      this.renderer.readRenderTargetPixels(target, 0, 0, size, size, pixels);
+    } finally {
+      this.renderer.setRenderTarget(null);
+      this.scene.background = background;
+      for (const o of hidden) { o.visible = true; }
+      target.dispose();
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) { return null; }
+    const image = ctx.createImageData(size, size);
+    // WebGL rows run bottom-up.
+    for (let y = 0; y < size; y++) { image.data.set(pixels.subarray((size - 1 - y) * size * 4, (size - y) * size * 4), y * size * 4); }
+    ctx.putImageData(image, 0, 0);
+    return canvas.toDataURL('image/png');
+  }
+
   /**
    * Walk mode: the camera stands at a player's eye height (16 units) on the ground under the view's centre and keeps
    * to the ground as WASD moves it (Shift runs); dragging looks round. Escape or setWalk(false) gives the free

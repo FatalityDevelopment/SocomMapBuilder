@@ -17,6 +17,7 @@ All values are little-endian. Offsets are in hex. "Confirmed in game" means a fi
 | [RDR tables](rdr.md) | `.rdr` typed tables (READERM.ZAR, ZWEAPON …) | `RDR/RdrFile.cs` |
 | [Map mission tables](map-tables.md) | What READERM.ZAR's tables mean: objectives, actors, mission settings, world settings, valves | `Services/AssetService.MapTables.cs`, `RDR/RdrDocument.cs` |
 | [Disc survey](disc-survey.md) | Every map file on the disc, what each holds, known vs unknown, what to decode next; character types and weapons (`character.rdr`), scrolling textures, DBUFFER, map screens and the TacMap | `RDR/CharacterTypes.cs`, `Geo/TextureScroll.cs`, `ZAR/BufferTable.cs`, `Services/AssetService.MapExtras.cs` |
+| [HUD radar and tactical maps](hud.md) | `HUD2_TXR.ZED` radar art, `MM<nn>_TXR.ZED` map pages and where they sit in the world | `Services/AssetService.MapHud.cs`, `web/src/viewport/minimap.ts` |
 | [Animations](animations.md) | Motion clips (MOTION_S / MOTION_P) and ZANIM effect scripts | `Anim/MotionClip.cs`, `Anim/ZanimFile.cs` |
 
 ## Conventions used throughout
