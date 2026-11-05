@@ -5,7 +5,7 @@
 import { command } from '../../api/client';
 
 export type ItemKind =
-  | 'folder' | 'package' | 'models' | 'textures' | 'palettes' | 'geo' | 'clips' | 'archive' | 'group'
+  | 'folder' | 'disc' | 'level' | 'package' | 'models' | 'textures' | 'palettes' | 'geo' | 'clips' | 'archive' | 'group'
   | 'model' | 'texture' | 'palette' | 'clip'
   | 'rdr' | 'mps' | 'sound' | 'bank' | 'movie' | 'image' | 'icon' | 'iconsys' | 'program' | 'text' | 'binary';
 

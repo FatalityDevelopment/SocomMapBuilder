@@ -8,6 +8,7 @@ SOCOM U.S. Navy SEALs II is the primary target. Combined Assault also supports s
 | **SOCOM: Combined Assault** | Location archives by name, missions, world, actors, loadouts and named objective areas | Points, actor starts and headings, valve start values, allowed weapon slots and world placements. Save to a copy. | Models to SOCOM II |
 | **SOCOM 3** | Compatible asset archives | Map edits verified on the Combined Assault disc only | Compatible models to SOCOM II |
 | **Grand Theft Auto: San Andreas** | `.ISO` or `.IMG`, read-only | — | Models to SOCOM II (partial) |
+| **Star Wars: Battlefront** | `.ISO` or a `.LVL`, read-only: models and textures | — | — |
 | **SOCOM: Fireteam Bravo** | Not tested | — | — |
 
 ## SOCOM II
@@ -49,6 +50,15 @@ Character and prop models open and convert, along with some vehicles. Support is
 <img src="screenshots/gta-character.png" alt="CJ from GTA: San Andreas open read-only in the Model Editor" width="850">
 
 *CJ from `PLAYER.IMG`, open read-only in the Model Editor with **Export to SOCOM II** in the header.*
+
+## Star Wars: Battlefront (read-only)
+
+Open the disc image (`Star Wars - Battlefront (USA).iso`) or a loose `.LVL` in the Model Editor or Asset Viewer. Every level under `DATA/_LVL_PS2` except the streamed sound and movie stores is indexed when the disc opens, which takes a few seconds. Models are named by their level, such as `SIDE/IMP.LVL` for `imp_inf_stormtrooper`.
+
+- **Model Editor:** characters, vehicles, weapons, first-person models, props and sky domes, textured. Characters show in their bind pose; animations are not read yet.
+- **Asset Viewer:** a `.ISO` lists its files by disc path, and a `.LVL` lists its models and textures for preview.
+
+Maps (terrain, sky, placed objects), paths, regions and command posts, editing and conversion to SOCOM II are planned. The PS2 position quantisation and bone-space vertices follow research by the [openbf](https://github.com/sprucey149/openbf) project (MIT).
 
 ## Not included
 

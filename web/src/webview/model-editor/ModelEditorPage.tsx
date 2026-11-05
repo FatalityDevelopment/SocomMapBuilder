@@ -181,7 +181,7 @@ export function ModelEditorPage() {
               ))}
             </div>
             <div className="me-list">
-              {!s && <div className="me-empty">File › Open package… to load a .ZDB, a .CDB pack, a loose .ZED, or a GTA: San Andreas .ISO / .IMG.</div>}
+              {!s && <div className="me-empty">File › Open package… to load a .ZDB, a .CDB pack, a loose .ZED, a GTA: San Andreas .ISO / .IMG, or a Star Wars: Battlefront .ISO / .LVL.</div>}
               {c.groups().map(group => (
                 <div key={group.kind}>
                   <div className="me-group-title">{c.kindLabel(group.kind)} <span className="lm-muted">{group.models.length}</span></div>

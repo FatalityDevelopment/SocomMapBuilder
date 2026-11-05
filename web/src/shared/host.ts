@@ -92,6 +92,7 @@ export function modalOpen(): boolean {
 export const PACKAGE_FILTERS: FileFilter[] = [
   { label: 'SOCOM packages and archives', extensions: ['zdb', 'cdb', 'zar', 'zed'] },
   { label: 'GTA: San Andreas disc or IMG', extensions: ['iso', 'img'] },
+  { label: 'Star Wars: Battlefront disc or level', extensions: ['iso', 'lvl'] },
 ];
 
 const LAST_FOLDER = 'mapbuilder.lastFolder.';
@@ -155,7 +156,7 @@ export const host = {
     });
   },
 
-  // A package for ASSET_OPEN: a SOCOM .ZDB / .CDB / .ZAR / .ZED or an unpacked package folder; GTA: San Andreas .ISO / .IMG.
+  // A package for ASSET_OPEN: a SOCOM .ZDB / .CDB / .ZAR / .ZED or an unpacked package folder; GTA: San Andreas .ISO / .IMG; Star Wars: Battlefront .ISO / .LVL.
   async pickPackage(title = 'Open package'): Promise<string | null> {
     const path = await host.browse({ mode: 'open', title, filters: PACKAGE_FILTERS, allowFolder: true, key: 'package', start: remembered() || undefined, submitLabel: 'Open' });
     if (path) { remember(path); }

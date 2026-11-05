@@ -76,7 +76,7 @@ namespace MapBuilder.Server.Services
         /// <summary>Answers <paramref name="command"/> when the message names a CA session; null otherwise.</summary>
         private static string? CaRoute(CommandMessage c, string command)
         {
-            if (c.AssetSession == null || !CaSessions.TryGetValue(c.AssetSession, out var s)) return Assets.GtaAssetService.Route(c, command);
+            if (c.AssetSession == null || !CaSessions.TryGetValue(c.AssetSession, out var s)) return Assets.GtaAssetService.Route(c, command) ?? Assets.SwbfAssetService.Route(c, command);
             try
             {
                 object result;
