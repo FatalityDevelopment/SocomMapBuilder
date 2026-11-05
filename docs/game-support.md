@@ -40,6 +40,8 @@ Move a point within its current AI zone or rename it. The editor updates actor s
 
 Undo and redo work across missions in the same archive. **Save copy** writes the complete archive into the selected folder. To see shared weapon models and labels when reopening, place the copy beside the game's `GLOBAL.ZDB`. In-game verification is pending. [File layouts and in-game check](formats/ca-missions.md#editing-and-saving)
 
+The world includes each island's scatter props (rocks, trees, crates), and water and terrain blend layers draw translucent as the game's GS state sets them ([Combined Assault worlds](formats/ca-worlds.md)). Scatter props cannot be moved yet.
+
 ## Grand Theft Auto: San Andreas (PS2)
 
 In the **Model Editor**, choose **File → Open package**, select the mounted GTA disc and click **Open folder**. You can also open its ISO, a single IMG archive or a loose DFF. Opening the disc gives the editor access to the game's model definitions, texture dictionaries, vehicle paint schemes, clothing and animation banks. Filter the model list by name or kind. The archive label distinguishes models with the same name, such as the Coach bus and CJ's coach jacket.
