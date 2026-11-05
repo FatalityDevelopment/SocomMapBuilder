@@ -73,7 +73,7 @@ public sealed class GtaModelEditorTests
     {
         string? disc = Environment.GetEnvironmentVariable("MAPBUILDER_GTA_DISC");
         if (string.IsNullOrEmpty(disc)) return;
-        string input = Path.Combine(disc, "MODELS", "PLAYER.IMG");
+        string input = DiscFiles.Gta(disc, "MODELS/PLAYER.IMG");
         var img = new GtaImg(new FileSpan(input, 0, new FileInfo(input).Length));
         var entry = img.Find("vest.dff")!;
         var b = new Backend();
@@ -117,7 +117,7 @@ public sealed class GtaModelEditorTests
         string? disc = Environment.GetEnvironmentVariable("MAPBUILDER_GTA_DISC");
         if (string.IsNullOrEmpty(disc)) return;
         const string archive = "CUTSCENE.IMG", model = "csbravura";
-        string input = Path.Combine(disc, "MODELS", archive);
+        string input = DiscFiles.Gta(disc, "MODELS/" + archive);
         var b = new Backend();
         string session = b.Open(input);
         var folder = Directory.CreateTempSubdirectory("mb-gta-material-");

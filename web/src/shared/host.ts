@@ -176,6 +176,22 @@ export const host = {
     return (await host.pickSavePath('zdb', suggested)).path;
   },
 
+  // Where a disc-image copy goes: the image the session came from (asked for when it was not opened as an .ISO), then
+  // the new .ISO. The server runs the game's own save and patches the files into a copy of that image.
+  async pickDiscCopy(s: { path: string }): Promise<{ outputPath: string; sourceIso?: string } | null> {
+    let sourceIso: string | undefined;
+    if (!/\.iso$/i.test(s.path)) {
+      const picked = await host.browse({ mode: 'open', title: 'The disc image this package came from', filters: [{ label: 'Disc image', extensions: ['iso'] }],
+        key: 'disc-source', submitLabel: 'Use this disc' });
+      if (!picked) { return null; }
+      sourceIso = picked;
+    }
+    const from = sourceIso ?? s.path;
+    const outputPath = await host.browse({ mode: 'save', title: 'Save the patched disc image as', filters: [{ label: 'Disc image', extensions: ['iso'] }],
+      fileName: baseOf(from).replace(/(\.iso)$/i, '_edit$1'), key: 'disc-save', submitLabel: 'Save disc' });
+    return outputPath ? { outputPath, sourceIso } : null;
+  },
+
   // Where to save: a .ZDB / .CDB copy, a folder, or a memory-card pack (name, then its folder).
   async pickSavePath(kind: 'zdb' | 'folder' | 'pack', suggested?: string): Promise<{ path: string | null; packName: string | null }> {
     if (kind === 'pack') {

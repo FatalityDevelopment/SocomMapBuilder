@@ -225,6 +225,58 @@ public sealed class SwbfTests : IDisposable
     }
 
     [Fact]
+    public void Turn_MovesForwardOntoSocomAxes()
+    {
+        Assert.Equal(new[] { 0f, 1f, -1f }, SwbfToSocom2.Turn(new[] { 0f, 1f, 1f }, SwbfToSocom2.TurnFor("character")));   // +Z -> -Z
+        Assert.Equal(new[] { 1f, 1f, 0f }, SwbfToSocom2.Turn(new[] { 0f, 1f, 1f }, SwbfToSocom2.TurnFor("weapon")));      // +Z -> +X
+    }
+
+    /// <summary>
+    /// The disc (MAPBUILDER_SWBF_DISC) and SOCOM II's templates (MAPBUILDER_SOCOM2_RUN, a RUN folder or the disc image):
+    /// a soldier, a weapon, a vehicle and a building convert to SOCOM II packs that reopen with their triangles; the
+    /// soldier stands upright facing -Z.
+    /// </summary>
+    [Fact]
+    public void Retail_ModelsConvertToSocom2Packs()
+    {
+        string? iso = Environment.GetEnvironmentVariable("MAPBUILDER_SWBF_DISC"), run = Environment.GetEnvironmentVariable("MAPBUILDER_SOCOM2_RUN");
+        if (string.IsNullOrEmpty(iso) || !File.Exists(iso) || string.IsNullOrEmpty(run)) return;
+        var b = new Backend();
+        string session = b.Open(iso);
+        string folder = Path.Combine(_root, "packs");
+        try
+        {
+            foreach (var (archive, name, kind) in new[] { ("SIDE/IMP.LVL", "imp_inf_stormtrooper", "character"), ("SIDE/ALL.LVL", "all_weap_inf_rifle", "weapon"),
+                ("SIDE/IMP.LVL", "imp_hover_speederbike", "vehicle"), ("TAT/TAT2.LVL", "tat2_bldg_medium1", "prop") })
+            {
+                var converted = b.Ok(new CommandMessage { Command = "ASSET_EXPORT", AssetSession = session, AssetArchive = archive, AssetName = name,
+                    AssetJson = System.Text.Json.JsonSerializer.Serialize(new { outputDir = folder, socom2Run = run }) });
+                _out.WriteLine(converted.ToString());
+                Assert.Equal(kind, converted.GetProperty("kind").GetString());
+                Assert.True(converted.GetProperty("triangles").GetInt32() > 0, name);
+                if (kind == "weapon") Assert.DoesNotContain(converted.GetProperty("warnings").EnumerateArray(), w => w.GetString()!.Contains("muzzle"));
+                string opened = b.Open(converted.GetProperty("path").GetString()!);
+                try
+                {
+                    var target = converted.GetProperty("open");
+                    var mesh = b.Ok(new CommandMessage { Command = "ASSET_MODEL_MESH", AssetSession = opened, AssetArchive = target.GetProperty("archive").GetString(),
+                        AssetName = target.GetProperty("name").GetString(), AssetJson = """{"arrays":false}""" });
+                    Assert.True(mesh.GetProperty("chunks").EnumerateArray().Sum(c => c.GetProperty("triangleCount").GetInt32()) > 0, name);
+                    if (kind == "character")
+                    {
+                        float[] lo = mesh.GetProperty("boundsMin").EnumerateArray().Select(v => v.GetSingle()).ToArray();
+                        float[] hi = mesh.GetProperty("boundsMax").EnumerateArray().Select(v => v.GetSingle()).ToArray();
+                        _out.WriteLine($"  trooper bounds {string.Join(",", lo)} .. {string.Join(",", hi)}");
+                        Assert.True(hi[1] - lo[1] > 2 * (hi[2] - lo[2]), "The soldier should stand upright");
+                    }
+                }
+                finally { b.Close(opened); }
+            }
+        }
+        finally { b.Close(session); }
+    }
+
+    [Fact]
     public void World_PropKeysAreFnv1aOfTheirNames() => Assert.Equal(0x447C6DB0u, SwbfWorld.Fnv1a("ControlZone"));
 
     [Fact]

@@ -136,6 +136,7 @@ export class ModelEditorPageLogic {
     if (!s || !m) { return null; }
     if (s.game) {
       if (/GTA/.test(s.game)) { return ['character', 'weapon', 'vehicle', 'prop', 'model'].includes(m.kind) ? 'SOCOM II' : null; }
+      if (/Battlefront/.test(s.game)) { return ['character', 'weapon', 'vehicle', 'prop', 'sky', 'first-person'].includes(m.kind) ? 'SOCOM II' : null; }
       return /Combined Assault/.test(s.game) && ['character', 'weapon', 'prop'].includes(m.kind) ? 'SOCOM II' : null;
     }
     const skinned = m.kind === 'character' && /^MESH_/i.test(m.name);
@@ -145,7 +146,8 @@ export class ModelEditorPageLogic {
   readonly exportModelPlaceholder = computed(() => {
     const n = this.current()?.name ?? '';
     if (this.exportToCa()) { return n.replace(/^MESH_/i, ''); }
-    return /GTA/.test(this.status()?.game ?? '') ? 'gta_' + n.toLowerCase() : 'ca_' + n.replace(/^clib_/, '');
+    const game = this.status()?.game ?? '';
+    return /GTA/.test(game) ? 'gta_' + n.toLowerCase() : /Battlefront/.test(game) ? 'swbf_' + n.toLowerCase() : 'ca_' + n.replace(/^clib_/, '');
   });
   readonly shownExportClips = computed(() => {
     const q = this.exportClipQuery().trim().toLowerCase();
@@ -227,6 +229,7 @@ export class ModelEditorPageLogic {
         { separator: true, label: '' },
         { label: () => this.gta() ? 'Save model as DFF…' : 'Save copy…', shortcut: 'Ctrl+S', action: () => void this.saveZdbCopy(), disabled: () => this.busy() || (this.gta() ? !this.description()?.gta : !this.dirtyCount()) },
         { label: 'Save edited IMG archive…', action: () => void this.saveGta('img'), disabled: () => !this.canSaveImg() },
+        { label: 'Save to disc image…', action: () => void this.saveDisc(), disabled: () => this.busy() || (this.gta() ? !this.canSaveImg() : !this.dirtyCount()) },
         { label: 'Export memory-card pack…', action: () => void this.exportPack(), disabled: () => !!this.status()?.game || !this.dirtyCount() },
         { separator: true, label: '' },
         { label: 'Export model as OBJ…', action: () => void this.exportObj(), disabled: () => !this.mesh() },
@@ -1380,17 +1383,29 @@ export class ModelEditorPageLogic {
     await this.save({ mode, outputPath: path, archive: m.archive, model: m.name });
   }
 
+  // The edited files written into a copy of the disc image: a GTA model's whole IMG archive, else the package's files.
+  async saveDisc(): Promise<void> {
+    const s = this.status(), m = this.current();
+    if (!s || this.busy()) { return; }
+    const picked = await host.pickDiscCopy(s);
+    if (!picked) { return; }
+    if (this.gta()) {
+      if (!m || !this.canSaveImg()) { return; }
+      await this.save({ mode: 'img', archive: m.archive, model: m.name, ...picked });
+    } else { await this.save({ mode: 'zdb', ...picked }); }
+  }
+
   async exportPack(): Promise<void> {
     const picked = await host.pickSavePath('pack', 'MEDIT');
     if (!picked.packName) { return; }
     await this.save({ mode: 'pack', packName: picked.packName, outputPath: picked.path ?? undefined });
   }
 
-  private async save(args: { mode: 'zdb' | 'pack' | 'dff' | 'img'; outputPath?: string; packName?: string; archive?: string; model?: string }): Promise<void> {
+  private async save(args: { mode: 'zdb' | 'pack' | 'dff' | 'img'; outputPath?: string; packName?: string; archive?: string; model?: string; sourceIso?: string }): Promise<void> {
     this.busy.set(true);
     try {
       const r = await this.client.save(args);
-      this.say(`Wrote ${r.written.join(', ')} (${r.leaves.join(', ')})`);
+      this.say(`Wrote ${r.written.join(', ')} (${r.leaves.join(', ')})${r.patched ? `: ${r.patched.map(p => p.discPath + (p.moved ? ' (moved to the end)' : '')).join(', ')}` : ''}${r.warnings?.length ? '. ' + r.warnings.join(' ') : ''}`);
     } catch (err) {
       this.say(`Save failed: ${errText(err)}`, true);
     } finally {

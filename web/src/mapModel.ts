@@ -97,7 +97,8 @@ export function pointColor(kind: string): number {
 const MISSION_KINDS: Record<string, string> = { SP: 'campaign', MP: 'online', IA: 'instant action', TR: 'training' };
 
 /** A SOCOM 3 / CA mission for the picker: "MP414CTR · online CTR", "SP414 · campaign". */
-export function missionLabel(m: { id: string; kind: string; mode: string }): string {
+export function missionLabel(m: { id: string; kind: string; mode: string; label?: string }): string {
+  if (m.label) { return m.label; }
   const kind = MISSION_KINDS[m.kind];
   return kind ? `${m.id} · ${kind}${m.mode ? ` ${m.mode}` : ''}` : m.id;
 }

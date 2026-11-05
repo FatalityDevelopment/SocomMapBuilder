@@ -13,6 +13,8 @@ import { aiChange, samePath, type AiFocus } from './shared/aiBridge';
 
 // CA and Battlefront edits change placements and points only, so an undo keeps the decoded meshes.
 const placementsOnly = (game?: string) => game === 'SOCOM 3 / Combined Assault' || game === 'Star Wars: Battlefront';
+// GTA: San Andreas' map is view-only; its session stays editable for the Model Editor.
+export const mapViewOnly = (s: SessionStatus | null | undefined) => !!s?.readOnly || s?.game === 'GTA: San Andreas';
 
 // Callbacks are read through refs, so the page can mirror selection without coupling session logic to its UI.
 export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
@@ -149,7 +151,7 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
       if (reloadingRef.current === 0) {
         setProgress('');
         setLoading(false);
-        if (viewportRef.current) { viewportRef.current.editable = sceneReadyRef.current && !busyRef.current && !statusRef.current?.readOnly; }
+        if (viewportRef.current) { viewportRef.current.editable = sceneReadyRef.current && !busyRef.current && !mapViewOnly(statusRef.current); }
       }
     }
   }, [loadScene]);
@@ -279,7 +281,7 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
 
   // The gizmo and Place tool are off while an edit runs or the session is read-only.
   useEffect(() => {
-    if (viewportRef.current) { viewportRef.current.editable = sceneReady && !busy && !loading && !status?.readOnly; }
+    if (viewportRef.current) { viewportRef.current.editable = sceneReady && !busy && !loading && !mapViewOnly(status); }
   }, [busy, loading, sceneReady, status]);
 
   // Closing the tab with edits made since the last save asks first.
@@ -307,8 +309,8 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
   const edit = useCallback(async (label: string, op: Record<string, unknown>): Promise<Record<string, unknown> | null> => {
     // One edit at a time, and none on a read-only session.
     if (!sceneReadyRef.current) { say('Reload the map before editing; its scene is not ready.', true); return null; }
-    if (busyRef.current || reloadingRef.current > 0 || statusRef.current?.readOnly) {
-      say(statusRef.current?.readOnly ? `${label}: this package is read-only.` : `${label}: wait for the previous change to finish.`, true);
+    if (busyRef.current || reloadingRef.current > 0 || mapViewOnly(statusRef.current)) {
+      say(mapViewOnly(statusRef.current) ? `${label}: this package is read-only.` : `${label}: wait for the previous change to finish.`, true);
       return null;
     }
     setBusyFlag(true);
@@ -333,7 +335,7 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
   }, [reload, say, setBusyFlag, setStatus]);
 
   const history = async (undo: boolean) => {
-    if (!clientRef.current.session || busyRef.current || reloadingRef.current > 0 || statusRef.current?.readOnly) { return; }
+    if (!clientRef.current.session || busyRef.current || reloadingRef.current > 0 || mapViewOnly(statusRef.current)) { return; }
     setBusyFlag(true);
     try {
       const r = undo ? await clientRef.current.undo() : await clientRef.current.redo();
@@ -350,7 +352,7 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
 
   // Back or forward several steps at once (the History list): that many undos or redos, then one reload.
   const jump = async (undoSteps: number, redoSteps: number) => {
-    if (!clientRef.current.session || busyRef.current || reloadingRef.current > 0 || statusRef.current?.readOnly) { return; }
+    if (!clientRef.current.session || busyRef.current || reloadingRef.current > 0 || mapViewOnly(statusRef.current)) { return; }
     setBusyFlag(true);
     try {
       let last: { description?: string; revision: number } | null = null;
@@ -368,13 +370,14 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
 
   // ------------------------------------------------------------------ save
 
-  const save = async (args: { mode: 'zdb' | 'pack'; outputPath?: string; packName?: string }) => {
+  const save = async (args: { mode: 'zdb' | 'pack'; outputPath?: string; packName?: string; sourceIso?: string }) => {
     if (!clientRef.current.session || busyRef.current || reloadingRef.current > 0) { return; }
     setBusyFlag(true);
     try {
       const r = await clientRef.current.save(args);
       savedRevisionRef.current = r.revision ?? statusRef.current?.revision ?? null;
-      say(`Wrote ${r.written.join(', ')} (${r.leaves.join(', ')})`);
+      const patched = r.patched ? `: ${r.patched.map(p => p.discPath + (p.moved ? ' (moved to the end)' : '')).join(', ')}` : '';
+      say(`Wrote ${r.written.join(', ')} (${r.leaves.join(', ')})${patched}${r.warnings?.length ? '. ' + r.warnings.join(' ') : ''}`);
     } catch (err) {
       say(`Save failed: ${errText(err)}`, true);
     } finally {
@@ -387,6 +390,14 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
     if (!s || !s.dirty.length) { return; }
     const path = await host.pickPackageCopy(s);
     if (path) { await save({ mode: 'zdb', outputPath: path }); }
+  };
+
+  // The edited files written into a copy of the disc image (any game).
+  const saveDisc = async () => {
+    const s = statusRef.current;
+    if (!s || !s.dirty.length) { return; }
+    const picked = await host.pickDiscCopy(s);
+    if (picked) { await save({ mode: 'zdb', ...picked }); }
   };
 
   const exportPack = async () => {
@@ -412,7 +423,7 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
     client: clientRef.current, instancesRef, pointsRef, statusRef,
     status, setStatus, sceneNs, counts, instances, points, shapes, models, setModels, busy, progress, loading, sceneReady,
     loadWarnings, connectionIssue, message, messageIsError, say,
-    reload, retryScene, edit, history, saveCopy, exportPack, openDialog,
+    reload, retryScene, edit, history, saveCopy, saveDisc, exportPack, openDialog,
     loadModel, texturePixels: pixelCacheRef.current, jump,
   };
 }
