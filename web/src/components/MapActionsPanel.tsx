@@ -5,8 +5,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ActionFields, AssetClient, MapActions } from '../webview/model-editor/asset-client';
 import { host } from '../shared';
-import { ACTION_KINDS, ACTION_TYPES, actionIconUrl, actionKind, type ActionKind } from '../shared/actionIcons';
-import { FIELD_HELP, checkAction, cleanFields, defaultsFor, groupRows } from './mapActionsModel';
+import { turretHolders } from '../viewport/actionMarkers';
+import { ACTION_CHOICES, ACTION_KINDS, ACTION_TYPES, actionIconUrl, actionKind, promptName, type ActionKind } from '../shared/actionIcons';
+import { FIELD_HELP, checkAction, cleanFields, defaultsFor, groupRows, withKind } from './mapActionsModel';
 
 interface Props {
   client: AssetClient;
@@ -32,6 +33,28 @@ export function MapActionsPanel(p: Props) {
 function Icon({ kind, size = 18 }: { kind: ActionKind; size?: number }) {
   const url = actionIconUrl(kind);
   return url ? <img className="mb-act-icon" src={url} width={size} height={size} alt="" /> : null;
+}
+
+const TURRET_PROMPTS = ['action_mount_turret.tif', 'action_dismount_turret.tif'];
+
+/** What a placed turret offers: the game's own Mount and Dismount prompts, shown with their HUD pictures. */
+function TurretCard({ client, data, name }: { client: AssetClient; data: MapActions; name: string }) {
+  const [art, setArt] = useState<Record<string, string>>({});
+  useEffect(() => {
+    let live = true;
+    for (const want of TURRET_PROMPTS) {
+      const icon = data.icons.find(i => i.toLowerCase() === want);
+      if (icon) { client.texture(icon, 'hud').then(t => { if (live) { setArt(a => ({ ...a, [want]: 'data:image/png;base64,' + t.png })); } }).catch(() => {}); }
+    }
+    return () => { live = false; };
+  }, [client, data]);
+  return <div className="me-card">
+    <div className="me-card-title"><Icon kind="TURRET" size={16} /> Turret</div>
+    <p className="me-note">The game gives every placed turret model these prompts by itself (its aim limits and gun are in READERC.ZAR › ai_turrets.rdr under a name like “{name}”). No action row is needed.</p>
+    <div className="mb-act-chips">{TURRET_PROMPTS.map(p => <span key={p} className="mb-act-chip">
+      {art[p] ? <img className="mb-act-icon" src={art[p]} alt="" width={22} height={22} /> : <Icon kind="TURRET" size={14} />} {promptName(p)}
+    </span>)}</div>
+  </div>;
 }
 
 function Hint({ text, tone }: { text?: string; tone?: 'error' | 'warn' }) {
@@ -71,6 +94,9 @@ function ActionInspector({ data, selected, busy, path, edit, model, client, focu
   const name = target?.name ?? String(data.rows[row]?.node[0] ?? '');
   const ambiguous = !!target && data.targets.some(t => t.index !== index && t.name.toLowerCase() === name.toLowerCase());
   const rename = row < 0 && ambiguous && !!target?.model;
+  // A turret's prompts come from the game, not actions.rdr: the chosen node, a model under it or the node above it.
+  const turret = target && data.targets.find(t => t.turret && (t.index === target.index || t.path.startsWith(target.path + '/') || target.path.startsWith(t.path + '/')));
+  const turrets = useMemo(() => turretHolders(data.targets), [data.targets]);
   const kind = actionKind(fields);
   const check = useMemo(() => checkAction(fields, data), [fields, data]);
   const groups = useMemo(() => groupRows(data.rows), [data.rows]);
@@ -102,7 +128,7 @@ function ActionInspector({ data, selected, busy, path, edit, model, client, focu
   function setKind(next: ActionKind) {
     setTouched(true);
     if (row < 0 && !touched) { setFields(defaultsFor(next, data, name)); return; }
-    setFields(old => { const n = { ...old }; if (next === 'ANIM') { delete n.type; } else { n.type = [next]; } return n; });
+    setFields(old => withKind(old, actionKind(old), next, data));
   }
   function submit() {
     if (blocked) { return; }
@@ -150,6 +176,8 @@ function ActionInspector({ data, selected, busy, path, edit, model, client, focu
       </details>
     </div>
 
+    {turret && <TurretCard client={client} data={data} name={turrets.find(h => turret.path === h.path || turret.path.startsWith(h.path + '/'))?.name ?? turret.name} />}
+
     <fieldset disabled={busy || !data.hasReader || (!target && row < 0)} className="me-card mb-act-form">
       <legend>{row < 0 ? 'New action' : `Action ${row + 1} of ${data.rows.length}`}</legend>
       {row >= 0 && target?.name !== String(data.rows[row].node[0]) && <p className="me-note">Bound to “{String(data.rows[row].node[0])}”, which no placed node is named. Choose a prop above to rebind it.</p>}
@@ -163,7 +191,7 @@ function ActionInspector({ data, selected, busy, path, edit, model, client, focu
 
       <div className="mb-act-group"><div className="mb-act-group-title">{FIELD_HELP.type.label}</div>
         <div className="mb-act-kinds" role="radiogroup" aria-label="Action type">
-          {[...ACTION_TYPES, 'ANIM' as ActionKind].map(k => <button type="button" role="radio" aria-checked={kind === k} key={k} className={`mb-act-kind${kind === k ? ' on' : ''}`}
+          {[...ACTION_CHOICES, 'ANIM' as ActionKind].map(k => <button type="button" role="radio" aria-checked={kind === k} key={k} className={`mb-act-kind${kind === k ? ' on' : ''}`}
             title={ACTION_KINDS[k].description} onClick={() => setKind(k)}><Icon kind={k} size={22} /><span>{k === 'ANIM' ? 'No prompt' : ACTION_KINDS[k].label}</span></button>)}
         </div>
         <div className="mb-act-sub">{ACTION_KINDS[kind].description}{kind === 'OTHER' && ` (${text('type')})`}</div>
@@ -175,7 +203,7 @@ function ActionInspector({ data, selected, busy, path, edit, model, client, focu
           <div className="mb-act-row">
             <select value={data.icons.find(i => i.toLowerCase() === bitmap.toLowerCase()) ?? (bitmap ? '__custom' : '')} onChange={e => setField('bitmap', e.target.value && e.target.value !== '__custom' ? [e.target.value] : undefined)}>
               <option value="">None</option>
-              {data.icons.map(i => <option key={i} value={i}>{i.replace(/^action_/i, '').replace(/\.tif$/i, '').replace(/_/g, ' ')}</option>)}
+              {data.icons.map(i => <option key={i} value={i}>{promptName(i)}</option>)}
               {bitmap && !data.icons.some(i => i.toLowerCase() === bitmap.toLowerCase()) && <option value="__custom">{bitmap}</option>}
             </select>
             {preview && <img className="mb-act-preview" src={preview} alt={bitmap} width={40} height={40} />}
@@ -240,6 +268,11 @@ function ActionInspector({ data, selected, busy, path, edit, model, client, focu
         <div className="mb-act-list-head"><Icon kind={g.kind} size={16} /> {ACTION_KINDS[g.kind].label} <span className="lm-muted">{g.rows.length}</span></div>
         <div className="mb-act-list">{g.rows.map(r => <button type="button" key={r.row} className={r.row === row ? 'on' : ''} onClick={() => chooseRow(r.row)}>{r.node}</button>)}</div>
       </div>)}
+      {turrets.length > 0 && <div className="mb-act-list-group">
+        <div className="mb-act-list-head"><Icon kind="TURRET" size={16} /> {ACTION_KINDS.TURRET.label} · mount / dismount <span className="lm-muted">{turrets.length}</span></div>
+        <div className="mb-act-list">{turrets.map(t => <button type="button" key={t.index} className={t.index === index ? 'on' : ''}
+          onClick={() => { chooseTarget(t.index); onFocusNode?.(t.index); }}>{t.name}</button>)}</div>
+      </div>}
     </div>
 
     <details className="me-card"><summary>Climb and ladder surfaces · experimental</summary>

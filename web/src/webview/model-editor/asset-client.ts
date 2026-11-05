@@ -181,7 +181,8 @@ export type ActionFields = Record<string, (string | number)[]>;
 export interface MapActions {
   revision: number;
   hasReader: boolean;
-  targets: { index: number; name: string; path: string; model: string; faces: number[]; anchor?: number[] | null }[];
+  /** turret: the node places a turret model, which the game gives Mount / Dismount prompts without an action row. */
+  targets: { index: number; name: string; path: string; model: string; faces: number[]; anchor?: number[] | null; turret?: boolean }[];
   rows: ActionFields[];
   tables: string[];
   valves: string[];

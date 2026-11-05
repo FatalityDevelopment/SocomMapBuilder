@@ -77,7 +77,7 @@ internal sealed partial class ZipperAssetService
         {
             revision = s.Revision, hasReader = reader != null, rows, valves, animations = animations.Distinct(),
             targets = ActionTargets(map.Scene.MapRoot).Select(t => new { index = t.Node.Index, name = t.Node.Name, path = t.Path, model = t.Node.ModelReference,
-                anchor = NodeAnchor(t.Node),
+                anchor = NodeAnchor(t.Node), turret = IsTurretModel(s.Package, t.Node.ModelReference),
                 faces = t.Node.Child("di")?.Children.Where(n => n.Name == "di" && n.Child("points")?.Data.Length == 64 && n.Child("params")?.Data.Length == 12)
                     .Select(n => n.Index).ToArray() ?? Array.Empty<int>() }).ToArray(),
             tables = records.Where(n => n.Name.EndsWith(".rdr", StringComparison.OrdinalIgnoreCase)).Select(n => n.Name).ToArray(),
@@ -85,6 +85,14 @@ internal sealed partial class ZipperAssetService
                 .Select(n => n.Name).Where(n => n.StartsWith("action_", StringComparison.OrdinalIgnoreCase)).Distinct().ToArray()
         };
     }
+
+    // The shared turret archives (RUN\COMMON copies). The game offers Mount and Dismount on a placed model from these
+    // by itself (ai_turrets.rdr MANUAL), with action_mount_turret.tif / action_dismount_turret.tif; actions.rdr has no rows for them.
+    private static readonly HashSet<string> TurretNamespaces = new(StringComparer.OrdinalIgnoreCase) { "turr", "trmg", "tlrm", "tlmg", "tllm", "t30m" };
+
+    private static bool IsTurretModel(CodeDesigner.Ps2.FileFormats.Zipper.Package.ZipperPackage package, string model) =>
+        model.Length > 0 && model.Contains("turret", StringComparison.OrdinalIgnoreCase)
+        && package.ResolveModel(model) is { } found && TurretNamespaces.Contains(found.Namespace);
 
     // Where a node's marker stands in the map (top middle of its world bounds, else its origin), for nodes that draw
     // nothing of their own: retail doors and breach points are bare scene nodes whose geometry is in the world model.

@@ -1,7 +1,11 @@
 // What each kind of map object action (actions.rdr `type`) means, and the icon that stands for it. The Actions panel
 // and the 3D markers above props both draw these, so one kind always has one icon.
 
-export type ActionKind = 'DOOR' | 'SWITCH' | 'ITEM' | 'SATCHEL' | 'MPBOMB' | 'DEFUSE' | 'ACT_BREACH' | 'ANIM' | 'OTHER';
+// AIRSTRIKE is a SWITCH row with the helicopter prompt (MP61, MP62, MP73 and MP82 call air strikes from a radio), told
+// apart so it has its own icon. TURRET is not an actions.rdr row at all: the game gives every placed turret model
+// (TURR, TRMG, TLRM, TLMG, TLLM and T30M archives; MANUAL in READERC.ZAR › ai_turrets.rdr) its own mount and dismount
+// prompts (action_mount_turret.tif / action_dismount_turret.tif).
+export type ActionKind = 'DOOR' | 'SWITCH' | 'ITEM' | 'SATCHEL' | 'MPBOMB' | 'DEFUSE' | 'ACT_BREACH' | 'AIRSTRIKE' | 'TURRET' | 'ANIM' | 'OTHER';
 
 export interface ActionKindInfo {
   kind: ActionKind;
@@ -20,6 +24,8 @@ export const ACTION_KINDS: Record<ActionKind, ActionKindInfo> = {
   MPBOMB: { kind: 'MPBOMB', label: 'Bomb (multiplayer)', description: 'A multiplayer demolition bomb site: plant or carry the bomb.', color: '#d6409f' },
   DEFUSE: { kind: 'DEFUSE', label: 'Defuse', description: 'The player defuses a bomb or charge.', color: '#12a594' },
   ACT_BREACH: { kind: 'ACT_BREACH', label: 'Breach', description: 'The player breaches (blows open) a door or wall.', color: '#f76b15' },
+  AIRSTRIKE: { kind: 'AIRSTRIKE', label: 'Air strike', description: 'The player radios in an air strike: a switch with the helicopter prompt that plays the strike animation.', color: '#6e56cf' },
+  TURRET: { kind: 'TURRET', label: 'Turret', description: 'A mounted gun. The game offers Mount and Dismount on every placed turret model by itself; it needs no action row.', color: '#5b7a2e' },
   ANIM: { kind: 'ANIM', label: 'Animation', description: 'No prompt type: the row only plays map animations or sets a valve.', color: '#8e8c99' },
   OTHER: { kind: 'OTHER', label: 'Other', description: 'A type this editor does not know yet.', color: '#8e8c99' },
 };
@@ -27,10 +33,43 @@ export const ACTION_KINDS: Record<ActionKind, ActionKindInfo> = {
 /** The named types seen on the retail disc, in the order the panel offers them. */
 export const ACTION_TYPES: ActionKind[] = ['DOOR', 'SWITCH', 'ITEM', 'SATCHEL', 'MPBOMB', 'DEFUSE', 'ACT_BREACH'];
 
+/** What the panel offers for a row: the named types plus presets written as one of them. */
+export const ACTION_CHOICES: ActionKind[] = [...ACTION_TYPES, 'AIRSTRIKE'];
+
+/** The actions.rdr `type` a preset is written as. */
+export const ACTION_KIND_TYPE: Partial<Record<ActionKind, string>> = { AIRSTRIKE: 'SWITCH' };
+
+/** The HUD prompt (HUD_TXR.ZED) each kind shows by default, as the retail rows use them. */
+export const DEFAULT_PROMPT: Partial<Record<ActionKind, string>> = {
+  DOOR: 'action_door_open.tif', SWITCH: 'action_pull_lever.tif', ITEM: 'action_pickup_item.tif', SATCHEL: 'action_MP_Bomb.tif',
+  MPBOMB: 'action_MP_bomb.tif', DEFUSE: 'action_defuse.tif', AIRSTRIKE: 'action_helo.tif',
+};
+
+/** Plain names for the HUD prompt pictures (HUD_TXR.ZED `action_*`), by lower-case file name. */
+export const PROMPT_NAMES: Record<string, string> = {
+  'action_door_open.tif': 'Open door', 'action_door_close.tif': 'Close door', 'action_pull_lever.tif': 'Pull lever',
+  'action_pickup_item.tif': 'Pick up item', 'action_pickup_item1.tif': 'Pick up item (2)', 'action_pickup_item2.tif': 'Pick up item (3)',
+  'action_place_c4.tif': 'Place C4', 'action_mp_bomb.tif': 'Bomb', 'action_drop_mp_bomb.tif': 'Drop bomb', 'action_defuse.tif': 'Defuse',
+  'action_helo.tif': 'Air strike (helicopter)', 'action_mount_turret.tif': 'Mount turret', 'action_dismount_turret.tif': 'Dismount turret',
+  'action_climb.tif': 'Climb', 'action_slide.tif': 'Slide', 'action_restrain.tif': 'Restrain', 'action_conceal_body.tif': 'Conceal body',
+  'action_close_combat.tif': 'Close combat', 'action_knife.tif': 'Knife', 'action_escortee.tif': 'Escort', 'action_talk.tif': 'Talk',
+  'action_ok_talk.tif': 'Can talk', 'action_ok_talk2.tif': 'Can talk (2)', 'action_no_talk2.tif': 'Cannot talk', 'action_channel_busy.tif': 'Channel busy',
+  'action_dead_zone.tif': 'Dead zone', 'action_tcm.tif': 'TCM', 'action_victory_dance.tif': 'Victory dance',
+  'action_tune_team.tif': 'Radio: team', 'action_tune_offense.tif': 'Radio: offense', 'action_tune_defense.tif': 'Radio: defense',
+  'action_tune_spectators.tif': 'Radio: spectators', 'action_button.tif': 'Button', 'action_x.tif': 'X button', 'action_circle.tif': 'Circle button',
+  'action_square.tif': 'Square button', 'action_triangle.tif': 'Triangle button',
+};
+
+/** A prompt picture's plain name, else its file name tidied. */
+export function promptName(bitmap: string): string {
+  return PROMPT_NAMES[bitmap.toLowerCase()] ?? bitmap.replace(/^action_/i, '').replace(/\.tif$/i, '').replace(/_/g, ' ');
+}
+
 /** The kind of an actions.rdr row (its fields as the server sends them). */
 export function actionKind(fields: Record<string, ReadonlyArray<string | number>> | undefined): ActionKind {
   const type = String(fields?.type?.[0] ?? '').trim().toUpperCase();
   if (!type) { return 'ANIM'; }
+  if (type === 'SWITCH' && String(fields?.bitmap?.[0] ?? '').toLowerCase() === 'action_helo.tif') { return 'AIRSTRIKE'; }
   return (ACTION_TYPES as string[]).includes(type) ? type as ActionKind : 'OTHER';
 }
 
@@ -76,6 +115,19 @@ const GLYPHS: Record<ActionKind, (c: Ctx) => void> = {
       if (k) { c.lineTo(x, y); } else { c.moveTo(x, y); }
     }
     c.closePath(); c.fill();
+  },
+  AIRSTRIKE: c => {
+    // A jet seen from above: fuselage, swept wings and tail.
+    c.beginPath(); c.moveTo(0.5, 0.1); c.lineTo(0.56, 0.3); c.lineTo(0.9, 0.56); c.lineTo(0.9, 0.64); c.lineTo(0.56, 0.52); c.lineTo(0.55, 0.74);
+    c.lineTo(0.68, 0.86); c.lineTo(0.68, 0.92); c.lineTo(0.5, 0.86); c.lineTo(0.32, 0.92); c.lineTo(0.32, 0.86); c.lineTo(0.45, 0.74);
+    c.lineTo(0.44, 0.52); c.lineTo(0.1, 0.64); c.lineTo(0.1, 0.56); c.lineTo(0.44, 0.3); c.closePath(); c.fill();
+  },
+  TURRET: c => {
+    // A machine gun on a tripod.
+    c.fillRect(0.3, 0.36, 0.3, 0.14);
+    c.beginPath(); c.moveTo(0.6, 0.43); c.lineTo(0.92, 0.43); c.moveTo(0.3, 0.42); c.lineTo(0.14, 0.5); c.stroke();
+    c.beginPath(); c.moveTo(0.44, 0.5); c.lineTo(0.44, 0.62); c.lineTo(0.24, 0.9); c.moveTo(0.44, 0.62); c.lineTo(0.64, 0.9);
+    c.moveTo(0.44, 0.62); c.lineTo(0.44, 0.92); c.stroke();
   },
   ANIM: c => {
     c.beginPath(); c.moveTo(0.36, 0.24); c.lineTo(0.76, 0.5); c.lineTo(0.36, 0.76); c.closePath(); c.fill();
