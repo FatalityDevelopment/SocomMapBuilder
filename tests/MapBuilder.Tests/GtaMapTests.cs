@@ -32,6 +32,18 @@ public sealed class GtaMapTests
     }
 
     [Fact]
+    public void Water_polygons_clip_to_an_area_rectangle()
+    {
+        // A 100 m square of sea at z 2, half inside a rectangle that ends at x = 50.
+        float[] square = { 0, 0, 2, 100, 0, 2, 100, 100, 2, 0, 100, 2 };
+        var clipped = GtaPackage.ClipToRectangle(square, -10, -10, 50, 200);
+        Assert.Equal(12, clipped.Length);
+        Assert.Equal(50f, Enumerable.Range(0, 4).Max(i => clipped[3 * i]));
+        Assert.All(Enumerable.Range(0, 4), i => Assert.Equal(2f, clipped[3 * i + 2]));
+        Assert.Empty(GtaPackage.ClipToRectangle(square, 200, 200, 300, 300));
+    }
+
+    [Fact]
     public void Retail_placements_resolve_to_models_and_group_into_areas()
     {
         string? root = Environment.GetEnvironmentVariable("MAPBUILDER_GTA_DISC");
@@ -60,6 +72,16 @@ public sealed class GtaMapTests
         double near = linked.Count(x => MathF.Abs(x.p.X - x.lod!.X) < 300 && MathF.Abs(x.p.Y - x.lod.Y) < 300) / (double)linked.Count;
         _out.WriteLine($"LOD links within 300 m: {near:P1} of {linked.Count}");
         Assert.True(near > 0.95);
+
+        // DATA/WATER.DAT: the sea and lakes, a few hundred quads and triangles.
+        var water = pkg.WaterPolygons();
+        _out.WriteLine($"{water.Count} water polygons");
+        Assert.True(water.Count > 250);
+        // Night-lit windows (tobj, 21:00 to 06:00) are off at noon and on at midnight.
+        var windows = all.Select(p => p.Model).OfType<GtaPackage.Model>().Where(m => !pkg.ShowsAt(m, 12)).Distinct().ToList();
+        _out.WriteLine($"{windows.Count} models off at noon, e.g. {string.Join(", ", windows.Take(3).Select(m => m.Name))}");
+        Assert.NotEmpty(windows);
+        Assert.All(windows, m => Assert.True(pkg.ShowsAt(m, 0)));
     }
 
     [Fact]
@@ -90,6 +112,10 @@ public sealed class GtaMapTests
             int detail = scene.GetProperty("counts").GetProperty("placement").GetInt32(), distant = scene.GetProperty("counts").GetProperty("distant LOD").GetInt32();
             _out.WriteLine($"LAE2: {detail} placements, {distant} distant LOD blocks, {sample.Count} meshes checked");
             Assert.True(detail > 1000 && distant > 100);
+            // Grove Street's zone reaches the sea: its water is one mesh the session builds.
+            var water = Assert.Single(instances, i => i.GetProperty("model").GetString() == "water").GetProperty("source").GetString()!;
+            var waterMesh = b.Ok(new CommandMessage { Command = "ASSET_MODEL_MESH", AssetSession = session, AssetArchive = water[..water.IndexOf(':')], AssetName = water[(water.IndexOf(':') + 1)..] });
+            Assert.True(waterMesh.GetProperty("chunks")[0].GetProperty("triangles").GetString()!.Length > 0);
 
             b.Ok(new CommandMessage { Command = "ASSET_MAP_POINTS", AssetSession = session, AssetJson = "{\"mission\":\"vegase\"}" });
             Assert.Equal("vegase", b.Status(session).GetProperty("mission").GetString());
@@ -98,6 +124,14 @@ public sealed class GtaMapTests
             // Las Venturas lies north-east: game y > 500, so the editors' z < -500.
             Assert.All(vegas, i => Assert.True(i.GetProperty("position")[2].GetSingle() < -400));
             b.Fails(new CommandMessage { Command = "ASSET_MAP_POINTS", AssetSession = session, AssetJson = "{\"mission\":\"nowhere\"}" });
+
+            // The Los Santos overview: only LOD blocks (lod*, laelod* ...), all of them within Los Santos' corner of the map (game x > 0, y < 0).
+            b.Ok(new CommandMessage { Command = "ASSET_MAP_POINTS", AssetSession = session, AssetJson = "{\"mission\":\"lod-la\"}" });
+            var la = FullScene(b, session).GetProperty("instances").EnumerateArray().Where(i => i.GetProperty("model").GetString() != "water").ToList();
+            _out.WriteLine($"Los Santos overview: {la.Count} LOD blocks");
+            Assert.True(la.Count > 500);
+            Assert.All(la, i => Assert.Contains("lod", i.GetProperty("model").GetString(), StringComparison.OrdinalIgnoreCase));
+            Assert.True(la.Count(i => i.GetProperty("position")[0].GetSingle() > 0 && i.GetProperty("position")[2].GetSingle() > 0) > la.Count * 0.95);
         }
         finally { b.Close(session); }
     }

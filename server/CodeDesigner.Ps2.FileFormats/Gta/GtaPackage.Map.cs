@@ -177,4 +177,75 @@ public sealed partial class GtaPackage
 
     // The inverse of ZUpToYUp: (x, y, z) -> (x, -z, y).
     private static readonly float[] YUpToZUp = { 1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1 };
+
+    // ------------------------------------------------------------------ timed objects
+
+    private readonly Dictionary<string, (int On, int Off)> _timedHours = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Whether a model shows at <paramref name="hour"/> (0-23): always, unless the IDE lists it as a timed
+    /// object (tobj) whose hours, which may wrap past midnight, leave that hour out.</summary>
+    public bool ShowsAt(Model model, int hour)
+    {
+        if (!_timedHours.TryGetValue(model.Name, out var t) || t.On == t.Off) return true;
+        return t.On < t.Off ? hour >= t.On && hour < t.Off : hour >= t.On || hour < t.Off;
+    }
+
+    // ------------------------------------------------------------------ water
+
+    private List<float[]>? _water;
+
+    /// <summary>
+    /// DATA/WATER.DAT: after its "processed" line, one quad (4 vertices) or triangle (3) per line, each vertex
+    /// "x y z flowX flowY bigWave smallWave" in game space, then a flag. A polygon comes back as its game-space
+    /// corners (x, y, z per vertex) in order round its rim (a quad lists its corners as a 2x2 grid: re-ordered).
+    /// </summary>
+    public IReadOnlyList<float[]> WaterPolygons() => _water ??= ReadWater();
+
+    private List<float[]> ReadWater()
+    {
+        var result = new List<float[]>();
+        var data = _disc.GetValueOrDefault("DATA/WATER.DAT")?.Read();
+        if (data == null) return result;
+        foreach (var raw in System.Text.Encoding.ASCII.GetString(data).Split('\n'))
+        {
+            var v = raw.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+            int corners = v.Length switch { 29 => 4, 22 => 3, _ => 0 };
+            if (corners == 0) continue;
+            var poly = new float[corners * 3];
+            bool ok = true;
+            for (int c = 0; c < corners && ok; c++)
+                for (int k = 0; k < 3 && ok; k++)
+                    ok = float.TryParse(v[c * 7 + k], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out poly[c * 3 + k]);
+            if (!ok) continue;
+            if (corners == 4) poly = new[] { poly[0], poly[1], poly[2], poly[3], poly[4], poly[5], poly[9], poly[10], poly[11], poly[6], poly[7], poly[8] };
+            result.Add(poly);
+        }
+        return result;
+    }
+
+    /// <summary>A convex polygon (x, y, z per vertex) clipped to the game-space rectangle [minX, maxX] x [minY, maxY]
+    /// (Sutherland-Hodgman; z follows linearly). Empty when nothing is left.</summary>
+    public static float[] ClipToRectangle(float[] poly, float minX, float minY, float maxX, float maxY)
+    {
+        var pts = new List<(float X, float Y, float Z)>();
+        for (int i = 0; i + 2 < poly.Length; i += 3) pts.Add((poly[i], poly[i + 1], poly[i + 2]));
+        foreach (var (axis, limit, keepAbove) in new[] { (0, minX, true), (0, maxX, false), (1, minY, true), (1, maxY, false) })
+        {
+            if (pts.Count == 0) break;
+            var next = new List<(float X, float Y, float Z)>();
+            bool Inside((float X, float Y, float Z) p) => keepAbove ? (axis == 0 ? p.X : p.Y) >= limit : (axis == 0 ? p.X : p.Y) <= limit;
+            for (int i = 0; i < pts.Count; i++)
+            {
+                var a = pts[i];
+                var b = pts[(i + 1) % pts.Count];
+                bool ina = Inside(a), inb = Inside(b);
+                if (ina) next.Add(a);
+                if (ina == inb) continue;
+                float da = (axis == 0 ? a.X : a.Y) - limit, db = (axis == 0 ? b.X : b.Y) - limit, t = da / (da - db);
+                next.Add((a.X + (b.X - a.X) * t, a.Y + (b.Y - a.Y) * t, a.Z + (b.Z - a.Z) * t));
+            }
+            pts = next;
+        }
+        return pts.Count < 3 ? Array.Empty<float>() : pts.SelectMany(p => new[] { p.X, p.Y, p.Z }).ToArray();
+    }
 }
