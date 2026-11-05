@@ -169,9 +169,10 @@ namespace MapBuilder.Server.Services
                 return new { revision = s.Revision, missionId = s.Mission, hasReader = false, objectives = Array.Empty<object>(), actors = Array.Empty<object>(), loadoutSource = (string?)null,
                     mission = (object?)null, world = (object?)null, extents = (object?)null, cams = Array.Empty<object>(), valves = Array.Empty<object>(), texts = new Dictionary<string, string>() };
 
-            var actors = p.MissionResource(s.Mission, "MSNv") is { } vehiclesRes ? CaMissionTables.ParseActors(vehiclesRes.Data) : new List<CaMissionTables.Actor>();
-            var types = p.MissionResource(s.Mission, "CHAR") is { } charRes ? CaMissionTables.ParseCharacterTypes(charRes.Data) : new List<CaMissionTables.CharacterType>();
-            var header = p.MissionResource(s.Mission, "MISN") is { } misn ? CaMissionTables.ParseHeader(misn.Data) : null;
+            var actors = p.MissionResource(s.Mission, "MSNv") is { } vehiclesRes ? CaMissionTables.ParseActors(vehiclesRes.Data, p.IsPsp) : new List<CaMissionTables.Actor>();
+            // Fireteam Bravo 2's character.rdr and mission header are laid out differently and are not read yet.
+            var types = !p.IsPsp && p.MissionResource(s.Mission, "CHAR") is { } charRes ? CaMissionTables.ParseCharacterTypes(charRes.Data) : new List<CaMissionTables.CharacterType>();
+            var header = !p.IsPsp && p.MissionResource(s.Mission, "MISN") is { } misn ? CaMissionTables.ParseHeader(misn.Data) : null;
             var valveValues = p.MissionResource(s.Mission, "VALV") is { } valv ? CaMissionTables.ParseValves(valv.Data) : new List<(uint Hash, int Value)>();
             var weaponTable = p.GlobalResource("WEAP")?.Data;
             var weapons = weaponTable == null ? new Dictionary<uint, CaMissionTables.Weapon>()

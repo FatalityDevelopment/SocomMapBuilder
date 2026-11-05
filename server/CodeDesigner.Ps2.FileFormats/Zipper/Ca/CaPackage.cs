@@ -631,13 +631,16 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         public List<MissionInfo> Missions()
         {
             if (_missions != null) return _missions;
-            // Fireteam Bravo 2 mission files (DEM.ZDB, SUP.ZDB ...) are not read yet.
-            if (IsPsp) return _missions = new List<MissionInfo>();
+            // Fireteam Bravo 2: a map folder's game modes (DEM.ZDB, SUP.ZDB ...) or campaign missions (SP.ZDB,
+            // DYNAMIC.ZDB) each hold a mission.rdr in CA's layout; the folder says which (FORT_SP, VILLAGE_SP2).
+            string pspKind = System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(Path.TrimEndingDirectorySeparator(
+                Directory.Exists(SourcePath) ? SourcePath : Path.GetDirectoryName(SourcePath) ?? "")), "_SP[0-9]*$", System.Text.RegularExpressions.RegexOptions.IgnoreCase) ? "SP" : "MP";
             int Rank(string kind) => kind switch { "SP" => 0, "IA" => 1, "MP" => 2, "TR" => 3, _ => 4 };
             return _missions = Resources.Where(r => r.Tag == "AIMm")
                 .Select(r =>
                 {
                     string id = Path.GetFileNameWithoutExtension(r.File.Replace('\\', '/')).ToUpperInvariant();
+                    if (IsPsp) return new MissionInfo(id, r.File, pspKind, "");
                     var m = System.Text.RegularExpressions.Regex.Match(id, @"^(SP|MP|IA|TR)\d+([A-Z]*)$");
                     return new MissionInfo(id, r.File, m.Success ? m.Groups[1].Value : "other", m.Success ? m.Groups[2].Value : "");
                 })

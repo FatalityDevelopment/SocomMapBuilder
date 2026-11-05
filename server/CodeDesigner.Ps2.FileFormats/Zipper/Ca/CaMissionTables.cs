@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using System.Text.RegularExpressions;
 
 namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
@@ -65,24 +65,31 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         /// char[32], type hash (+0x40), group (+0x54), start count (+0x58), starts from +0x5C (32 bytes: point char[28],
         /// heading u32).
         /// </summary>
-        public static List<Actor> ParseActors(byte[] data)
+        /// <remarks>Fireteam Bravo 2 (<paramref name="psp"/>): 0x1BC-byte records without the display key: type hash
+        /// +0x20, group +0x30, start count +0x34, starts from +0x38. Its player actor leaves the start's name empty
+        /// (a position follows instead), which is not read.</remarks>
+        public static List<Actor> ParseActors(byte[] data, bool psp = false)
         {
+            int size = psp ? PspActorSize : ActorSize;
+            int hash = psp ? 0x20 : 0x40, group = psp ? 0x30 : 0x54, count = psp ? 0x34 : 0x58, first = psp ? 0x38 : 0x5C;
             int b = (int)U32(data, 0), e = (int)U32(data, 4);
-            if (b < 8 || e > data.Length || e < b || (e - b) % ActorSize != 0) throw new InvalidDataException("vehicles.rdr: bad actor table");
+            if (b < 8 || e > data.Length || e < b || (e - b) % size != 0) throw new InvalidDataException("vehicles.rdr: bad actor table");
             var list = new List<Actor>();
-            for (int o = b, row = 0; o < e; o += ActorSize, row++)
+            for (int o = b, row = 0; o < e; o += size, row++)
             {
-                int n = (int)Math.Min(U32(data, o + 0x58), 8);
+                int n = (int)Math.Min(U32(data, o + count), 8);
                 var starts = new List<Start>();
                 for (int i = 0; i < n; i++)
                 {
-                    int offset = o + 0x5C + i * 32;
+                    int offset = o + first + i * 32;
                     if (Str(data, offset, 28) is { } point) starts.Add(new Start(point, (int)U32(data, offset + 28), offset));
                 }
-                list.Add(new Actor(row, Str(data, o, 32) ?? $"actor{row}", Str(data, o + 0x20, 32), U32(data, o + 0x40), (int)U32(data, o + 0x54), starts));
+                list.Add(new Actor(row, Str(data, o, 32) ?? $"actor{row}", psp ? null : Str(data, o + 0x20, 32), U32(data, o + hash), (int)U32(data, o + group), starts));
             }
             return list;
         }
+
+        private const int PspActorSize = 0x1BC;
 
         /// <summary>
         /// character.rdr: +0x08 / +0x0C a list of record offsets. A record: hash, model (+0x04), low-detail model

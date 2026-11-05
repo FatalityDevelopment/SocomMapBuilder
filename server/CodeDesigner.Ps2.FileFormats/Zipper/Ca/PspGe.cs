@@ -25,8 +25,10 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         /// <summary>
         /// A texture record: +0x08 name hash, +0x0C pixels (from the record, 0x30), +0x10 GE format (2 RGBA4444,
         /// 3 RGBA8888, 4 CLUT4, 5 CLUT8, 8 DXT1), +0x14 width (low half) and height, +0x18 buffer width in pixels (low
-        /// half), +0x1C CLUT (from the record), +0x24 low byte the CLUT entry size (0x20: 32-bit RGBA8888, else 16-bit
-        /// RGB565). Pixels are swizzled in 16-byte × 8-row blocks.
+        /// half), +0x1C CLUT (from the record), +0x20 how it draws (<see cref="TextureState"/>), +0x24 a layout word:
+        /// low byte the CLUT's size in 32-byte units (so 16- or 32-bit entries), second byte bits per pixel / 4, top
+        /// byte bit 0x04 RGBA5551 colours (1-bit alpha; else RGB565). Pixels are swizzled in 16-byte × 8-row blocks;
+        /// DXT1 is not.
         /// </summary>
         public static CaLibrary.Texture? DecodeTexture(CaLibrary lib, int rec)
         {
@@ -37,6 +39,9 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
             int bufw = (int)(lib.U32(rec + 0x18) & 0xFFFF);
             int pix = rec + (int)lib.U32(rec + 0x0C), clut = rec + (int)lib.U32(rec + 0x1C);
             if (w is <= 0 or > 1024 || h is <= 0 or > 1024) return null;
+            uint layout = lib.U32(rec + 0x24);
+            bool alpha1 = ((layout >> 24) & 0x04) != 0;
+            if (fmt == 8) return Dxt1(lib, rec, pix, w, h);
             int bpp = fmt switch { 0 or 1 or 2 => 16, 3 => 32, 4 => 4, 5 => 8, _ => 0 };
             if (bpp == 0) return null;
             bufw = Math.Max(bufw, w);
@@ -48,8 +53,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
                 if (pix < 0 || pix + stride * h > d.Length) return null;
             }
             var lin = Unswizzle(d, pix, stride, h);
-            bool wide = (lib.U32(rec + 0x24) & 0xFF) == 0x20;
             int entries = fmt == 4 ? 16 : 256;
+            bool wide = (layout & 0xFF) * 32 >= entries * 4;
             uint[]? lut = null;
             if (fmt is 4 or 5)
             {
@@ -58,7 +63,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
                 {
                     int o = clut + i * (wide ? 4 : 2);
                     if (o < 0 || o + (wide ? 4 : 2) > d.Length) break;
-                    lut[i] = wide ? lib.U32(o) : Rgb565(BitConverter.ToUInt16(d, o));
+                    lut[i] = wide ? lib.U32(o) : alpha1 ? Rgba5551(BitConverter.ToUInt16(d, o)) : Rgb565(BitConverter.ToUInt16(d, o));
                 }
             }
             var rgba = new byte[w * h * 4];
@@ -82,6 +87,59 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
                 }
             return new CaLibrary.Texture(lib.U32(rec + 0x08), w, h, fmt, rgba, alpha, 0);
         }
+
+        /// <summary>
+        /// DXT1 as the GE stores it: each 4×4 block is 8 bytes, the 2-bit indices (u32, row by row, low bits first) then
+        /// colour 0 and colour 1 (RGB565); the PC order is the other way round. Blocks run left to right, then down.
+        /// </summary>
+        private static CaLibrary.Texture? Dxt1(CaLibrary lib, int rec, int pix, int w, int h)
+        {
+            var d = lib.Data;
+            int bw = (w + 3) / 4, bh = (h + 3) / 4;
+            if (pix < 0 || pix + bw * bh * 8 > d.Length) return null;
+            var rgba = new byte[w * h * 4];
+            bool alpha = false;
+            var c = new uint[4];
+            for (int by = 0; by < bh; by++)
+                for (int bx = 0; bx < bw; bx++)
+                {
+                    int o = pix + (by * bw + bx) * 8;
+                    uint bits = BitConverter.ToUInt32(d, o);
+                    ushort c0 = BitConverter.ToUInt16(d, o + 4), c1 = BitConverter.ToUInt16(d, o + 6);
+                    c[0] = Rgb565(c0); c[1] = Rgb565(c1);
+                    if (c0 > c1) { c[2] = Mix(c[0], c[1], 2, 1); c[3] = Mix(c[0], c[1], 1, 2); }
+                    else { c[2] = Mix(c[0], c[1], 1, 1); c[3] = 0; }
+                    for (int i = 0; i < 16; i++)
+                    {
+                        int x = bx * 4 + (i & 3), y = by * 4 + (i >> 2);
+                        if (x >= w || y >= h) continue;
+                        uint v = c[(bits >> (2 * i)) & 3];
+                        int at = (y * w + x) * 4;
+                        rgba[at] = (byte)v; rgba[at + 1] = (byte)(v >> 8); rgba[at + 2] = (byte)(v >> 16); rgba[at + 3] = (byte)(v >> 24);
+                        if ((v >> 24) < 0xFF) alpha = true;
+                    }
+                }
+            return new CaLibrary.Texture(lib.U32(rec + 0x08), w, h, 8, rgba, alpha, 0);
+        }
+
+        private static uint Mix(uint a, uint b, int wa, int wb)
+        {
+            uint r = 0;
+            for (int s = 0; s < 24; s += 8) r |= (uint)((((a >> s) & 0xFF) * wa + ((b >> s) & 0xFF) * wb) / (wa + wb)) << s;
+            return r | 0xFF000000u;
+        }
+
+        /// <summary>
+        /// How a texture draws, from its record's +0x20: 1 cut-out (alpha tested; RGBA5551 foliage and fences), 3
+        /// blended (RGBA8888 glows, glass, water), 0 opaque.
+        /// </summary>
+        public static CaLibrary.TextureGs? TextureState(CaLibrary lib, int rec) => lib.U32(rec + 0x20) switch
+        {
+            0 => new CaLibrary.TextureGs(false, null, false, false),
+            1 => new CaLibrary.TextureGs(false, 0.5f, false, false),
+            3 => new CaLibrary.TextureGs(true, null, false, false),
+            _ => null,
+        };
 
         /// <summary>Texels in row order from the GE's swizzle: blocks of 16 bytes × 8 rows, left to right, then down.</summary>
         public static byte[] Unswizzle(byte[] d, int src, int stride, int height)
@@ -216,6 +274,10 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
             }
             int count = pos.Count / 3;
             if (count == 0 || tris.Count == 0) return null;
+            // The material turns back-face culling off (GE command 0x1D, argument 0): the game shows both sides, so the
+            // triangles are added again the other way round for viewers that cull.
+            if (!Culled(d, batch))
+                for (int i = 0, n = tris.Count; i < n; i += 3) { tris.Add(tris[i]); tris.Add(tris[i + 2]); tris.Add(tris[i + 1]); }
             var uvs = uv.ToArray();
             for (int i = 1; i < uvs.Length; i += 2) uvs[i] = 1f - uvs[i];
             return new ModelMesh.MeshChunk
@@ -225,6 +287,14 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
                 Positions = pos.ToArray(), Uvs = uvs, Normals = nrm.ToArray(), Colors = hasColour ? col.ToArray() : null,
                 Triangles = tris.ToArray(),
             };
+        }
+
+        /// <summary>Whether a batch's material leaves back-face culling on (GE command 0x1D in its first 0x74 bytes).</summary>
+        public static bool Culled(byte[] d, Batch batch)
+        {
+            for (int p = batch.Offset; p + 4 <= batch.Offset + 0x74 && p + 4 <= d.Length; p += 4)
+                if (d[p + 3] == 0x1D) return (d[p] & 1) != 0;
+            return true;
         }
 
         /// <summary>

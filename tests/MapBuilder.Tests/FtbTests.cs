@@ -131,6 +131,55 @@ public sealed class FtbTests
         Assert.False(t.HasAlpha);
     }
 
+    [Fact]
+    public void Rgba5551_cluts_and_alpha_modes_make_cut_outs()
+    {
+        // A 16x8 CLUT4 texture whose 16-bit CLUT has the RGBA5551 bit (top byte 0x06): entry 0 clear, entry 1 opaque red.
+        const int r = 0x40;
+        var d = new byte[r + 0x30 + 64 + 32];
+        Put(d, r + 0x0C, 0x30); Put(d, r + 0x10, 4); Put(d, r + 0x14, (8u << 16) | 16); Put(d, r + 0x18, 32);
+        Put(d, r + 0x1C, 0x30 + 128); Put(d, r + 0x20, 1); Put(d, r + 0x24, 0x06010101);
+        Array.Resize(ref d, r + 0x30 + 128 + 32);
+        d[r + 0x30] = 0x10; // texel 0 → entry 0, texel 1 → entry 1
+        BitConverter.GetBytes((ushort)0x0000).CopyTo(d, r + 0x30 + 128);
+        BitConverter.GetBytes((ushort)0x801F).CopyTo(d, r + 0x30 + 128 + 2);
+        var lib = new CaLibrary(d, vectorsAt: 0, psp: true);
+        var t = PspGe.DecodeTexture(lib, r)!;
+        Assert.Equal(0, t.Rgba[3]);
+        Assert.Equal(new byte[] { 255, 0, 0, 255 }, t.Rgba[4..8]);
+        Assert.Equal(0.5f, lib.TextureState(r)!.AlphaTest);
+        Put(d, r + 0x20, 3);
+        Assert.True(lib.TextureState(r)!.Blend);
+    }
+
+    [Fact]
+    public void A_batch_without_back_face_culling_is_drawn_from_both_sides()
+    {
+        var d = new byte[0x400];
+        int obj = 0x10, b = obj + PspGe.FirstBatch, dl = b + PspGe.BatchSize, vtx = dl + 0x20;
+        Put(d, obj, PspGe.StaticObjectType); Put(d, obj + 0x70, 1);
+        Put(d, b + 0x0C, 0x1D000000); // BCE off
+        Put(d, b + 0xE0, (uint)(vtx - b)); Put(d, b + 0xE8, (uint)(dl - b)); Put(d, b + 0xF4, (3u << 16) | (24u << 8));
+        Put(d, dl, 0x120001BE); Put(d, dl + 4, 0x01000000); Put(d, dl + 8, 0x04030003); Put(d, dl + 12, 0x0B000000);
+        for (int i = 0; i < 3; i++) { PutF(d, vtx + 24 * i + 12, i); PutF(d, vtx + 24 * i + 20, i == 2 ? 1 : 0); }
+        var lib = new CaLibrary(d, vectorsAt: 0x200, psp: true);
+        Assert.Equal(new[] { 0, 1, 2, 0, 2, 1 }, Assert.Single(PspGe.Chunks(lib, obj, Matrix4.Identity(), "x", 0)).Triangles);
+    }
+
+    [Fact]
+    public void Fireteam_Bravo_2_actors_have_no_display_key()
+    {
+        // One 0x1BC-byte actor at 0x10: name, type hash +0x20, group +0x30, one start at +0x38.
+        var d = new byte[0x10 + 0x1BC];
+        Put(d, 0, 0x10); Put(d, 4, 0x10 + 0x1BC);
+        System.Text.Encoding.ASCII.GetBytes("lonestar").CopyTo(d, 0x10);
+        Put(d, 0x10 + 0x20, 0x0490A2A8); Put(d, 0x10 + 0x30, 1); Put(d, 0x10 + 0x34, 1);
+        System.Text.Encoding.ASCII.GetBytes("s_bravo2").CopyTo(d, 0x10 + 0x38); Put(d, 0x10 + 0x38 + 28, 3);
+        var a = Assert.Single(CaMissionTables.ParseActors(d, psp: true));
+        Assert.Equal(("lonestar", (string?)null, 0x0490A2A8u, "character"), (a.Name, a.Display, a.Type, a.Kind));
+        Assert.Equal(("s_bravo2", 3), (a.Starts[0].Point, a.Starts[0].Heading));
+    }
+
     // ------------------------------------------------------------------ retail
 
     private static string? Disc => Environment.GetEnvironmentVariable("MAPBUILDER_FTB2_DISC") is { Length: > 0 } d
@@ -166,13 +215,16 @@ public sealed class FtbTests
                 tris += c.Triangles.Length / 3;
                 if (c.Texture != null && pkg.FindTexture(c.Texture) == null) missing.Add(c.Texture);
             }
-        Assert.InRange(tris, 21000, 23000);
+        Assert.InRange(tris, 27000, 28500); // 21,848 drawn, plus the back faces of unculled batches (the trees)
         Assert.Empty(missing);
         Assert.Contains(scene, p => p.World == CaPackage.SkyWorld);
         // Every display list in the island belongs to a batch.
         var (_, lib) = pkg.Libraries.First(l => l.Res.Tag == "ISLE");
         int lists = lib.Objects.Sum(o => PspGe.Batches(lib, o).Count);
         Assert.Equal(683, lists);
+        // Each game mode is a mission whose points are in CA's mission.rdr layout.
+        Assert.Contains(pkg.Missions(), m => m.Id == "DEM" && m.Kind == "MP");
+        Assert.Contains(pkg.MissionPoints("DEM"), p => p.Name == "seal_tent");
         var ak = pkg.Models().First(m => m.Name == "ak47");
         Assert.True(pkg.BuildMesh(ak).Chunks.Count > 0);
     }

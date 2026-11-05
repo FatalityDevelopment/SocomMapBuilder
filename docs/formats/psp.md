@@ -40,7 +40,7 @@ Type `0x00945EA4` (static) or `0x0090C640` (skinned: characters, weapons). `+0x0
 | +0xF4 | Vertex count (high half), stride (bits 8–15) |
 | +0xF8 | Vertex bytes |
 
-A display list is `VTYPE`, `BASE`, `VADDR 0`, one or more `PRIM` (triangle strips on this disc), then `RET`. Primitives draw consecutive vertices from the batch's vertex block. The world and props use VTYPE `0x1BE`: u16 UV (/32768), RGBA8888 colour (0xFF = 1.0), s8 normal and float position, 24 bytes in all. Skinned batches add weights (stride 28) and a bone palette. These are read in bind pose; weights are not used yet. All 683 display lists on Fort belong to a batch.
+A display list is `VTYPE`, `BASE`, `VADDR 0`, one or more `PRIM` (triangle strips on this disc), then `RET`. Primitives draw consecutive vertices from the batch's vertex block. Strips wind counter-clockwise (99.5% of Village's triangles agree with their stored normals). A material whose back-face culling is off (GE `0x1D 0`, in its first 0x74 bytes; trees and some cards) is drawn from both sides. The world and props use VTYPE `0x1BE`: u16 UV (/32768), RGBA8888 colour (0xFF = 1.0), s8 normal and float position, 24 bytes in all. Skinned batches add weights (stride 28) and a bone palette. These are read in bind pose; weights are not used yet. All 683 display lists on Fort belong to a batch.
 
 ### Textures
 
@@ -52,9 +52,10 @@ A display list is `VTYPE`, `BASE`, `VADDR 0`, one or more `PRIM` (triangle strip
 | +0x14 | Width (low half), height |
 | +0x18 | Buffer width in pixels (low half) |
 | +0x1C | CLUT, from the record |
-| +0x24 | Low byte `0x20`: 32-bit RGBA8888 CLUT; otherwise 16-bit RGB565 |
+| +0x20 | How it draws: 0 opaque, 1 cut-out (alpha tested), 3 blended |
+| +0x24 | Layout: low byte the CLUT's size in 32-byte units (so 16- or 32-bit entries), second byte bits per pixel / 4, top byte bit `0x04` RGBA5551 colours (1-bit alpha), else RGB565 |
 
-Pixels are swizzled in blocks of 16 bytes × 8 rows. RGBA8888 textures with all-black colour are alpha masks.
+Pixels are swizzled in blocks of 16 bytes × 8 rows. DXT1 is not swizzled; each 8-byte block stores its 2-bit indices before its two RGB565 colours (the PC order is the reverse). RGBA8888 textures with all-black colour are alpha masks. Foliage, fences and tree-line billboards are RGBA5551 CLUTs drawn as cut-outs; read as RGB565 they were solid green cards.
 
 ## Worlds
 
@@ -68,10 +69,17 @@ Sky domes (an object whose bounds enclose the others on x and z), cloud layers a
 
 Coverage on the disc (2026-11-05): 27 maps draw, with 14,000–88,000 triangles each. At most one texture name per map is not found. `BORDER_TOWN_MP` and `UI_MOVIE` have no world model yet.
 
+## Missions
+
+Each game mode of an online map (`DEM.ZDB`, `SUP.ZDB` … and `DEFAULT.ZDB`) and each campaign file (`SP.ZDB`, `DYNAMIC.ZDB`) is a mission, named after its file. A folder ending `_SP` or `_SP<n>` holds campaign missions; the others are online. All 164 `AIMm` (`mission.rdr`) and `AIMi` resources on the disc read with CA's layouts ([Combined Assault missions](ca-missions.md)), so named points (1,971 in all) are placed on the island's AI grid as in CA.
+
+`vehicles.rdr` (`MSNv`) actors are 0x1BC bytes, not CA's 0x1EC: name `char[32]` (no display key follows), type hash `+0x20`, group `+0x30`, start count `+0x34`, starts from `+0x38` (32 bytes: point `char[28]`, heading). The player's start leaves its name empty and is followed by a position, which is not read.
+
+`character.rdr` (`CHAR`) and the mission header (`MISN`) are laid out differently from CA's and are not read, so actors show no model, weapons or mission text. Team spawns are not read.
+
 ## Not done yet
 
-- A few foliage cards and edge billboards draw bright green or striped: some CLUTs are probably in another colour format (with alpha) than the two read here.
-- Missions (`MISN`, `AIMm`, `CHAR`, `MSNv`): points, actors, objectives.
+- Character types, mission headers, objectives and team spawns.
 - Skinning, animations (`BONE`, `ZANM`) and the terrain tiles' own records.
 - Editing, saving and conversion to and from SOCOM II and Combined Assault.
 - Fireteam Bravo and Fireteam Bravo 3.

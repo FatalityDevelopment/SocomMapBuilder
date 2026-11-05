@@ -246,7 +246,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
 
         public TextureGs? TextureState(int rec)
         {
-            if (Psp) return null;
+            if (Psp) return PspGe.TextureState(this, rec);
             int packet = (int)U32(rec + 0x14);
             if (packet <= 0 || packet + 16 > Data.Length) return null;
             var regs = AdRegisters(packet, Data.Length - packet);

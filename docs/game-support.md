@@ -81,7 +81,7 @@ The terrain's blended texture layers, map edits that change sizes (adding or del
 
 ## SOCOM: Fireteam Bravo 2 (PSP)
 
-Open a map folder from the UMD, such as `K:\PSP_GAME\USRDIR\RUN\FORT_MP`, or any `.ZDB` in it. The Map Builder draws the island's terrain, buildings and placed props, textured, with the sky in the **Sky** layer. The Model Editor lists the island's props, the characters in their bind pose and the weapons from `RUN\GLOBAL.ZDB`. Everything is read-only: missions, animations, editing and conversion are not done yet. [File layouts](formats/psp.md)
+Open a map folder from the UMD, such as `K:\PSP_GAME\USRDIR\RUN\FORT_MP`, or any `.ZDB` in it. The Map Builder draws the island's terrain, buildings and placed props, textured, with the sky in the **Sky** layer. Pick a game mode or campaign mission from **Mission** to show its named points (starts, bomb and sabotage places, doors, extraction) and, in the Mission tab, its actors and their starts. The Model Editor lists the island's props, the characters in their bind pose and the weapons from `RUN\GLOBAL.ZDB`. Everything is read-only; character types, mission text, animations, editing and conversion are not done yet. [File layouts](formats/psp.md)
 
 ## Saving to a disc image
 
