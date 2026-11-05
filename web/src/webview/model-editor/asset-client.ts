@@ -29,7 +29,7 @@ export interface SessionStatus {
 }
 
 // kind: SP (campaign), MP (online), IA (instant action), TR (training) or other; mode: the letters after the number.
-export interface MissionSummary { id: string; kind: string; mode: string }
+export interface MissionSummary { id: string; kind: string; mode: string; label?: string }
 
 export interface ModelSummary {
   archive: string;

@@ -34,7 +34,7 @@ import { activePage, host, openRequest } from './shared';
 import { aiView, applyAiCamera, provideAiState } from './shared/aiBridge';
 import { SHORTCUTS, TOOLS } from './mapShortcuts';
 import { useMapKeys } from './useMapKeys';
-import { useMapSession } from './useMapSession';
+import { mapViewOnly, useMapSession } from './useMapSession';
 import { useMapEdits } from './useMapEdits';
 
 const SHADINGS: Array<{ id: Shading; label: string }> = [
@@ -59,7 +59,9 @@ export function MapPage() {
     retryScene, edit, history, saveCopy, saveDisc, exportPack, openDialog, loadModel, texturePixels, jump, sceneReady, reload } = mapSession;
   const ca = status?.game === 'SOCOM 3 / Combined Assault';
   const battlefront = status?.game === 'Star Wars: Battlefront';
-  const canPlace = !!status && !status.readOnly && !ca && status.game !== 'Star Wars: Battlefront';
+  const gta = status?.game === 'GTA: San Andreas';
+  const viewOnly = mapViewOnly(status);
+  const canPlace = !!status && !viewOnly && !ca && !battlefront;
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   // The Map tab's check: rerun while the tab is open whenever the session changes.
   const [check, setCheck] = useState<MapValidation | null>(null);
@@ -299,8 +301,8 @@ export function MapPage() {
       await client.mapPoints(mission);
       setStatus(await client.status());
       setSelectedPoint(null);
-      // A Battlefront "mission" is a whole map elsewhere: frame it. CA missions share the location's models.
-      await reload(!battlefront, false);
+      // A Battlefront "mission" (a GTA area) is a whole map elsewhere: frame it. CA missions share the location's models.
+      await reload(!battlefront && !gta, false);
       say(`${mission}: ${mapSession.pointsRef.current.length} points.`);
     } catch (error) {
       say(`Mission ${mission} could not be read: ${errText(error)}`, true);
@@ -328,14 +330,14 @@ export function MapPage() {
 
   useEffect(() => {
     let live = true;
-    if (!status || ((ca || status.readOnly) && !status.missions?.length)) { setActionData(null); setTables(null); return; }
+    if (!status || ((ca || viewOnly) && !status.missions?.length)) { setActionData(null); setTables(null); return; }
     setActionError(''); setTablesError('');
-    if (ca || status.readOnly) { setActionData(null); } else {
+    if (ca || viewOnly) { setActionData(null); } else {
       client.mapActions().then(r => { if (live) { setActionData(r); } }).catch(e => { if (live) { setActionData(null); setActionError(errText(e)); } });
     }
     client.mapTables().then(r => { if (live) { setTables(r); } }).catch(e => { if (live) { setTables(null); setTablesError(errText(e)); } });
     return () => { live = false; };
-  }, [status?.session, status?.revision, status?.readOnly, status?.mission]);
+  }, [status?.session, status?.revision, viewOnly, status?.mission]);
   useEffect(() => { setSelectedObjective(null); setActionNode(null); }, [status?.session]);
   useEffect(() => { if (selection.length) { setActionNode(null); } }, [selection]);
   useEffect(() => {
@@ -927,14 +929,14 @@ export function MapPage() {
 
   return (
     <div className="me-app mp-app has-header" onPointerDown={e => { if (!(e.target as HTMLElement).closest('.me-menu')) { setOpenMenu(null); } }}>
-      <PageHeader icon="globe" title="Map Builder" subtitle={ca ? 'Combined Assault maps and missions' : battlefront ? 'Star Wars: Battlefront maps: move props, command posts and vehicle spawns' : 'Props, clutter and spawn points of SOCOM II maps'} />
+      <PageHeader icon="globe" title="Map Builder" subtitle={ca ? 'Combined Assault maps and missions' : battlefront ? 'Star Wars: Battlefront maps: move props, command posts and vehicle spawns' : gta ? 'GTA: San Andreas map areas (view only)' : 'Props, clutter and spawn points of SOCOM II maps'} />
       <MenuBar {...menuBarProps} />
       {shortcutsOpen && <ShortcutReference onClose={() => setShortcutsOpen(false)} />}
       {paletteOpen && <CommandPalette commands={commandsFromMenus(menus)} onClose={() => setPaletteOpen(false)} />}
 
       <div className="me-header">
         {!!status?.missions?.length && (
-          <label className="me-toggle" title={battlefront ? `The map drawn: the disc holds ${status.missions.length}` : `The mission whose points are shown: ${status.location ?? 'this location'} holds ${status.missions.length}`}>{battlefront ? 'Map' : 'Mission'}
+          <label className="me-toggle" title={gta ? `The area drawn (an IPL zone, with the nearby zones' low-detail blocks): the disc holds ${status.missions.length}` : battlefront ? `The map drawn: the disc holds ${status.missions.length}` : `The mission whose points are shown: ${status.location ?? 'this location'} holds ${status.missions.length}`}>{gta ? 'Area' : battlefront ? 'Map' : 'Mission'}
             <select aria-label="Mission" value={status.mission ?? ''} disabled={busy || loading} onChange={e => void pickMission(e.target.value)}>
               {status.missions.map(m => <option key={m.id} value={m.id}>{missionLabel(m)}</option>)}
             </select>
@@ -1076,8 +1078,8 @@ export function MapPage() {
             actions={status && canPlace ? <MapActionsPanel key={status.session} data={actionData} error={actionError} onFocusNode={focusNode}
               revision={status.revision} client={client} selected={single?.geoIndex ?? actionNode} busy={busy || loading} edit={edit} path={status.path} model={request?.path === status.path ? request.actionsFor : undefined} /> :
               <div className="me-note">Open an editable SOCOM II map to manage its actions.</div>}
-            mission={status && (!status.readOnly || !!status.missions?.length) ? <MissionPanel tables={!ca || tables?.missionId === status.mission ? tables : null}
-              ca={ca} pointNames={ca ? [...new Set(points.filter(p => p.editable !== false).map(p => p.name))] : undefined} readOnly={!!status.readOnly} error={tablesError} revision={status.revision} busy={busy || loading} edit={edit}
+            mission={status && (!viewOnly || !!status.missions?.length) ? <MissionPanel tables={!ca || tables?.missionId === status.mission ? tables : null}
+              ca={ca} pointNames={ca ? [...new Set(points.filter(p => p.editable !== false).map(p => p.name))] : undefined} readOnly={viewOnly} error={tablesError} revision={status.revision} busy={busy || loading} edit={edit}
               path={status.path} selectedObjective={selectedObjective} onSelectObjective={row => { setSelectedObjective(row); if (row !== null) { viewportRef.current?.frameObjective(row); } }}
               onShowObjective={showObjective} weaponModels={weaponModels} actorWeapons={actorWeapons} onChooseWeapon={chooseActorWeapon} figures={figurePlans}
               multiplayer={/^mp\d/i.test(status.mission ?? status.mapNamespace ?? '')} /> :

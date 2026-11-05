@@ -19,6 +19,8 @@ namespace MapBuilder.Server.Services.Assets
             public required GtaPackage Package { get; init; }
             public object Gate { get; } = new();
             public int Revision { get; set; }
+            /// <summary>The Map Builder area drawn (a <see cref="GtaPackage.MapArea"/> id); null until the map is first read.</summary>
+            public string? Area { get; set; }
             public Dictionary<GtaPackage.Model, byte[]> Originals { get; } = new();
             public HashSet<GtaPackage.Model> Dirty { get; } = new();
             public Stack<Step> Undo { get; } = new();
@@ -78,7 +80,12 @@ namespace MapBuilder.Server.Services.Assets
                         "ASSET_HISTORY" => History(s),
                         "ASSET_SAVE" => Save(s, c.AssetJson),
                         "ASSET_TEXTURE" => Texture(s, c.AssetName),
-                        "ASSET_MAP_POINTS" => new { points = Array.Empty<object>() },
+                        "ASSET_MAP_POINTS" => Points(s, c.AssetJson),
+                        "ASSET_MAP_SCENE" => MapScene(s, c.AssetJson),
+                        "ASSET_MAP_TABLES" => new { revision = s.Revision, missionId = CurrentArea(s), hasReader = false, objectives = Array.Empty<object>(), actors = Array.Empty<object>(),
+                            loadoutSource = (string?)null, mission = (object?)null, world = (object?)null, extents = (object?)null, cams = Array.Empty<object>(),
+                            valves = Array.Empty<object>(), texts = new Dictionary<string, string>() },
+                        "ASSET_MAP_HUD" => new { revision = s.Revision, map = CurrentArea(s), icons = new Dictionary<string, object>(), missing = Array.Empty<string>(), tacmap = (object?)null },
                         "ASSET_LIST_ANIMATIONS" => ListAnimations(s, c.AssetJson),
                         "ASSET_ANIMATION" => Animation(s, c.AssetName, c.AssetArchive),
                         "ASSET_WEAPONS" => s.Package.Models.Where(m => m.Kind == "weapon")
@@ -104,6 +111,8 @@ namespace MapBuilder.Server.Services.Assets
             {
                 session = s.Id, path = s.Package.SourcePath, game = Game, readOnly = false,
                 initialModel = s.Package.InitialModel, isZdb = true, mapNamespace = (string?)null,
+                // The disc's map areas (IPL zones) as the Map Builder's "missions"; the map itself is view-only.
+                packageKind = HasMap(s) ? "map" : "assets", location = CurrentArea(s), mission = CurrentArea(s), missions = Missions(s),
                 revision = s.Revision, dirty = s.Dirty.Select(Label).Order().ToArray(),
                 canUndo = s.Undo.TryPeek(out var undo) ? undo.Description : null,
                 canRedo = s.Redo.TryPeek(out var redo) ? redo.Description : null,

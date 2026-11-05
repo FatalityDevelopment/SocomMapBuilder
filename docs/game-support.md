@@ -7,7 +7,7 @@ SOCOM U.S. Navy SEALs II is the primary target. Combined Assault also supports s
 | **SOCOM U.S. Navy SEALs II** | Packages (`.ZDB`, `.CDB`), loose `.ZED` / `.ZAR`, unpacked folders, the disc | Maps, models, textures, palettes, animations, mission tables and disc records | To SOCOM 3 / Combined Assault |
 | **SOCOM: Combined Assault** | Location archives by name, missions, world, actors, loadouts and named objective areas | Points, actor starts and headings, valve start values, allowed weapon slots and world placements. Save to a copy. | Models to SOCOM II |
 | **SOCOM 3** | Compatible asset archives | Map edits verified on the Combined Assault disc only | Compatible models to SOCOM II |
-| **Grand Theft Auto: San Andreas (PS2)** | Mounted disc, ISO, IMG or DFF | Frame positions, geometry transforms and material properties. Save DFF or IMG copies. | Models and selected character clips to SOCOM II |
+| **Grand Theft Auto: San Andreas (PS2)** | Mounted disc, ISO, IMG or DFF; the map (view only) by area | Frame positions, geometry transforms and material properties. Save DFF or IMG copies. | Models and selected character clips to SOCOM II |
 | **Star Wars: Battlefront** | `.ISO` or a `.LVL`: models, textures and maps | Move and turn props, command posts and vehicle spawns. Save `.LVL` copies or a patched `.ISO`. | Soldiers, weapons, vehicles and props to SOCOM II |
 | **SOCOM: Fireteam Bravo** | Not tested | — | — |
 
@@ -56,6 +56,12 @@ In the **Item** tab, select a frame to change its position relative to its paren
 On the US PS2 disc (SLUS-20946), the editor produces geometry for all 15,208 source DFFs and the assembled CJ preview. All 32,555 texture records decode. The loader uses declared texture dictionaries, their parents, placement links to higher-detail models, and exact raster names. When it searches across archives it requires all candidates to agree on the pixels and keeps the player clothing separate. Of the original 219 unresolved material references, 47 now resolve. The remaining 172 appear in the editor for manual repair.
 
 <img src="screenshots/gta-character.png" alt="CJ from PLAYER.IMG in the Model Editor" width="850">
+
+### The map (view only)
+
+Open the disc image or the mounted disc in the **Map Builder** to see San Andreas' buildings and props where the game places them. The map is read from every IPL placement on the disc: the text IPLs under `DATA/MAPS` and the binary `<zone>_stream<n>.ipl` files in the IMGs, 48,584 placements in all, every one resolved to its model through the IDE ids. It is split into **areas**, one per IPL zone (Los Santos · LAE2, San Fierro · SFS, Las Venturas · VEGASE, Countryside · COUNTRYN and so on, with each zone's interiors apart); pick one from **Area** in the header. The disc opens on Grove Street's zone (LAE2). An area draws its detailed placements in the Props layer and the low-detail (`lod*`) blocks of the neighbouring zones, up to 600 m past its edge, in the World layer; the zone's own LOD blocks are hidden, as the game swaps them out up close. An area takes about a minute to load the first time (one LA zone is around 800 models); models already loaded stay cached when you switch areas. Placements cannot be moved or saved.
+
+<img src="screenshots/gta-map-grove-street.png" alt="Grove Street in the Map Builder: CJ's house selected in the cul-de-sac" width="850">
 
 ## Star Wars: Battlefront
 
