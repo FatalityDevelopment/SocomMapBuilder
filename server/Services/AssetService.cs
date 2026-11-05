@@ -80,6 +80,7 @@ namespace MapBuilder.Server.Services
             RegisterPrefabs(reg);
             reg.Add(c => WithSession(c.AssetSession, "ASSET_MAP_ACTIONS", MapActions), "ASSET_MAP_ACTIONS");
             reg.Add(c => WithSession(c.AssetSession, "ASSET_MAP_TABLES", MapTables), "ASSET_MAP_TABLES");
+            reg.Add(c => WithSession(c.AssetSession, "ASSET_MAP_HUD", MapHud), "ASSET_MAP_HUD");
             RegisterCharacterPresets(reg);
             RegisterViewer(reg);
             RegisterMovies(reg);

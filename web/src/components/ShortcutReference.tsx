@@ -25,6 +25,7 @@ export const MAP_SHORTCUTS = [
   ['View', 'Numpad 1 / 3 / 7', 'Front / Right / Top view'],
   ['View', 'Ctrl + Numpad 1 / 3 / 7', 'Back / Left / Bottom view'],
   ['View', 'Numpad 5 / Z', 'Toggle orthographic / Cycle shading'],
+  ['View', 'N', 'Show / hide the minimap: the SOCOM II HUD radar (wheel zooms, click moves the view)'],
   ['General', 'Escape', 'Cancel placement or tool; clear selection when using Select'],
   ['General', '?', 'Open keyboard shortcuts'],
 ] as const;

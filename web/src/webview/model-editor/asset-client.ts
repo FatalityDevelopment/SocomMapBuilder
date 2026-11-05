@@ -235,6 +235,19 @@ export interface MapTables {
   texts: Record<string, string>;
 }
 
+/** A HUD texture as ASSET_MAP_HUD sends it. */
+export interface HudImage { width: number; height: number; png: string }
+/** The game's HUD art for the minimap (RUN\COMMON\HUD2_TXR.ZED) and the map's tactical map, when it has one. */
+export interface MapHud {
+  revision: number;
+  map: string | null;
+  icons: Record<string, HudImage>;
+  /** HUD textures the package does not have (drawn with stand-ins). */
+  missing: string[];
+  /** map_<map>_1_1 and _1_2 side by side; world = [x left, x right, z top, z bottom], null when not measured yet. */
+  tacmap: { name: string; tiles: Array<HudImage | null>; world: [number, number, number, number] | null } | null;
+}
+
 export class AssetClient {
   session: string | null = null;
 
@@ -284,6 +297,7 @@ export class AssetClient {
   mapPoints(): Promise<{ points: MapPointWire[] }> { return this.call('ASSET_MAP_POINTS'); }
   mapActions(): Promise<MapActions> { return this.call('ASSET_MAP_ACTIONS'); }
   mapTables(): Promise<MapTables> { return this.call('ASSET_MAP_TABLES'); }
+  mapHud(): Promise<MapHud> { return this.call('ASSET_MAP_HUD'); }
 
   validate(vramBudget?: number): Promise<MapValidation> { return this.withJson('ASSET_VALIDATE', { vramBudget }); }
 

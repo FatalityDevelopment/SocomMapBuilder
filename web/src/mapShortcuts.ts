@@ -40,6 +40,7 @@ export const SHORTCUTS = {
   hide: key('H', false, (e, k) => k === 'h' && !e.shiftKey && !e.altKey),
   isolate: key('Shift+H', false, (e, k) => k === 'h' && e.shiftKey),
   unhide: key('Alt+H', false, (e, k) => k === 'h' && e.altKey),
+  minimap: key('N', false, (e, k) => k === 'n' && !e.shiftKey && !e.altKey),
   walk: key('Shift+F', false, (e, k) => k === 'f' && e.shiftKey),
   shading: key('Z', false, (_, k) => k === 'z'),
   help: key('?', false, e => e.key === '?'),
