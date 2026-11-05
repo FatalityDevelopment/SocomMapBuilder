@@ -61,7 +61,8 @@ export function MapPage() {
   const battlefront = status?.game === 'Star Wars: Battlefront';
   const gta = status?.game === 'GTA: San Andreas';
   const viewOnly = mapViewOnly(status);
-  const canPlace = !!status && !viewOnly && !ca && !battlefront;
+  // CA, Battlefront and GTA placements move and turn; new ones cannot be added.
+  const canPlace = !!status && !viewOnly && !ca && !battlefront && !gta;
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   // The Map tab's check: rerun while the tab is open whenever the session changes.
   const [check, setCheck] = useState<MapValidation | null>(null);
@@ -332,7 +333,7 @@ export function MapPage() {
     let live = true;
     if (!status || ((ca || viewOnly) && !status.missions?.length)) { setActionData(null); setTables(null); return; }
     setActionError(''); setTablesError('');
-    if (ca || viewOnly) { setActionData(null); } else {
+    if (ca || viewOnly || gta) { setActionData(null); } else {
       client.mapActions().then(r => { if (live) { setActionData(r); } }).catch(e => { if (live) { setActionData(null); setActionError(errText(e)); } });
     }
     client.mapTables().then(r => { if (live) { setTables(r); } }).catch(e => { if (live) { setTables(null); setTablesError(errText(e)); } });
@@ -929,7 +930,7 @@ export function MapPage() {
 
   return (
     <div className="me-app mp-app has-header" onPointerDown={e => { if (!(e.target as HTMLElement).closest('.me-menu')) { setOpenMenu(null); } }}>
-      <PageHeader icon="globe" title="Map Builder" subtitle={ca ? 'Combined Assault maps and missions' : battlefront ? 'Star Wars: Battlefront maps: move props, command posts and vehicle spawns' : gta ? 'GTA: San Andreas map areas (view only)' : 'Props, clutter and spawn points of SOCOM II maps'} />
+      <PageHeader icon="globe" title="Map Builder" subtitle={ca ? 'Combined Assault maps and missions' : battlefront ? 'Star Wars: Battlefront maps: move props, command posts and vehicle spawns' : gta ? 'GTA: San Andreas map areas: move and turn buildings and props' : 'Props, clutter and spawn points of SOCOM II maps'} />
       <MenuBar {...menuBarProps} />
       {shortcutsOpen && <ShortcutReference onClose={() => setShortcutsOpen(false)} />}
       {paletteOpen && <CommandPalette commands={commandsFromMenus(menus)} onClose={() => setPaletteOpen(false)} />}

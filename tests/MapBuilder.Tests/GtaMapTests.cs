@@ -32,6 +32,22 @@ public sealed class GtaMapTests
     }
 
     [Fact]
+    public void Game_values_round_trip_through_the_editors_matrix()
+    {
+        var rng = new Random(7);
+        for (int i = 0; i < 200; i++)
+        {
+            float qx = (float)rng.NextDouble() * 2 - 1, qy = (float)rng.NextDouble() * 2 - 1, qz = (float)rng.NextDouble() * 2 - 1, qw = (float)rng.NextDouble() * 2 - 1;
+            var m = GtaPackage.Transform(100 * i, -50 * i, 3 + i, qx, qy, qz, qw);
+            var g = GtaPackage.GameTransform(m);
+            Assert.Equal(100f * i, g.X, 2); Assert.Equal(-50f * i, g.Y, 2); Assert.Equal(3f + i, g.Z, 2);
+            // q and -q are the same rotation: the matrices agree.
+            var back = GtaPackage.Transform(g.X, g.Y, g.Z, g.Qx, g.Qy, g.Qz, g.Qw);
+            for (int k = 0; k < 12; k++) Assert.Equal(m[k], back[k], 3);
+        }
+    }
+
+    [Fact]
     public void Water_polygons_clip_to_an_area_rectangle()
     {
         // A 100 m square of sea at z 2, half inside a rectangle that ends at x = 50.
@@ -134,6 +150,91 @@ public sealed class GtaMapTests
             Assert.True(la.Count(i => i.GetProperty("position")[0].GetSingle() > 0 && i.GetProperty("position")[2].GetSingle() > 0) > la.Count * 0.95);
         }
         finally { b.Close(session); }
+    }
+
+    [Fact]
+    public void Retail_moved_placements_undo_and_save_their_text_and_stream_IPLs()
+    {
+        string? root = Environment.GetEnvironmentVariable("MAPBUILDER_GTA_DISC");
+        if (string.IsNullOrEmpty(root)) return;
+        // A GTA3.IMG copy is 480 MB (twice, with GTA3_1.IMG): write it where the disc cache lives when that is set.
+        string baseDir = Environment.GetEnvironmentVariable("MAPBUILDER_DISC_CACHE") is { Length: > 0 } cache ? cache : Path.GetTempPath();
+        string outDir = Path.Combine(baseDir, "gta-map-save-" + Guid.NewGuid().ToString("N")[..8]);
+        var b = new Backend();
+        string session = b.Open(root);
+        try
+        {
+            b.Ok(new CommandMessage { Command = "ASSET_MAP_POINTS", AssetSession = session, AssetJson = "{\"mission\":\"lae2\"}" });
+            var scene = FullScene(b, session).GetProperty("instances").EnumerateArray().ToList();
+            var house = scene.First(i => i.GetProperty("model").GetString() == "carlshou1_lae2");
+            Assert.True(house.GetProperty("caNode").GetBoolean());
+            // A drawn placement from the zone's text IPL too (most text rows are LODs, which the scene hides).
+            var text = scene.First(i => i.GetProperty("kind").GetString() == "reference" && !i.GetProperty("instance").GetString()!.Contains("_stream"));
+            string houseId = house.GetProperty("instance").GetString()!, textId = text.GetProperty("instance").GetString()!;
+            static float[] Matrix(System.Text.Json.JsonElement i) => i.GetProperty("matrix").EnumerateArray().Select(v => v.GetSingle()).ToArray();
+            var houseBefore = Matrix(house);
+            // CJ's house 5 m east (+x) and a quarter turn about the vertical; the text row 3 m up.
+            float[] turned = { 0, 0, -1, 0, 0, 1, 0, 0, 1, 0, 0, 0, houseBefore[12] + 5, houseBefore[13], houseBefore[14], 1 };
+            var textPos = new[] { Matrix(text)[12], Matrix(text)[13] + 3, Matrix(text)[14] };
+            var edit = b.Edit(session, new { op = "batch", ops = new object[] {
+                new { op = "moveInstance", instance = houseId, matrix = turned },
+                new { op = "moveInstance", instance = textId, position = textPos } } });
+            Assert.Equal(2, edit.GetProperty("changed").GetArrayLength());
+            var dirty = b.Status(session).GetProperty("dirty").EnumerateArray().Select(d => d.GetString()!).ToList();
+            Assert.Contains("GTA3.IMG/lae2_stream5.ipl", dirty);
+            Assert.Contains(dirty, d => d.EndsWith(".IPL", StringComparison.OrdinalIgnoreCase) && d.StartsWith("DATA/MAPS/LA/", StringComparison.OrdinalIgnoreCase));
+            b.Undo(session);
+            Assert.Empty(b.Status(session).GetProperty("dirty").EnumerateArray());
+            var undone = FullScene(b, session).GetProperty("instances").EnumerateArray().First(i => i.GetProperty("instance").GetString() == houseId);
+            Assert.Equal(houseBefore, Matrix(undone));
+            b.Redo(session);
+            var moved = FullScene(b, session).GetProperty("instances").EnumerateArray().First(i => i.GetProperty("instance").GetString() == houseId);
+            Assert.Equal(houseBefore[12] + 5, Matrix(moved)[12], 2);
+
+            var saved = b.Ok(new CommandMessage { Command = "ASSET_SAVE", AssetSession = session, AssetJson = System.Text.Json.JsonSerializer.Serialize(new { mode = "zdb", outputPath = outDir }) });
+            var written = saved.GetProperty("written").EnumerateArray().Select(w => w.GetString()!).ToList();
+            _out.WriteLine(string.Join("\n", written));
+            var discFiles = Iso9660.Files(root);
+
+            // The text IPL: one line differs, and it holds the new height; every other line is the disc's.
+            string iplPath = written.Single(w => w.EndsWith(".IPL", StringComparison.OrdinalIgnoreCase));
+            string discKey = Path.GetRelativePath(outDir, iplPath).Replace('\\', '/');
+            var before = System.Text.Encoding.ASCII.GetString(discFiles[discKey].Read()).Split('\n');
+            var after = System.Text.Encoding.ASCII.GetString(File.ReadAllBytes(iplPath)).Split('\n');
+            Assert.Equal(before.Length, after.Length);
+            var changedLines = Enumerable.Range(0, before.Length).Where(i => before[i] != after[i]).ToList();
+            Assert.Single(changedLines);
+            _out.WriteLine($"{discKey}: {before[changedLines[0]].Trim()}  ->  {after[changedLines[0]].Trim()}");
+            var cols = after[changedLines[0]].Split(',').Select(c => c.Trim()).ToArray();
+            var oldCols = before[changedLines[0]].Split(',').Select(c => c.Trim()).ToArray();
+            Assert.Equal(oldCols[1], cols[1]);
+            Assert.Equal(float.Parse(oldCols[5], System.Globalization.CultureInfo.InvariantCulture) + 3, float.Parse(cols[5], System.Globalization.CultureInfo.InvariantCulture), 2);
+
+            // GTA3.IMG (and its twin GTA3_1.IMG): the stream IPL's record holds the new position and turn.
+            string img = written.Single(w => Path.GetFileName(w).Equals("GTA3.IMG", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(written, w => Path.GetFileName(w).Equals("GTA3_1.IMG", StringComparison.OrdinalIgnoreCase));
+            Assert.Equal(discFiles["MODELS/GTA3.IMG"].Length, new FileInfo(img).Length);
+            var copy = new GtaImg(new FileSpan(img, 0, new FileInfo(img).Length));
+            var original = new GtaImg(discFiles["MODELS/GTA3.IMG"]);
+            var stream = copy.Read("lae2_stream5.ipl")!;
+            var source = original.Read("lae2_stream5.ipl")!;
+            int row = int.Parse(houseId.Split(':')[2]), at = BitConverter.ToInt32(stream, 28) + 40 * row;
+            var diff = Enumerable.Range(0, stream.Length).Where(i => stream[i] != source[i]).ToList();
+            Assert.NotEmpty(diff);
+            Assert.All(diff, i => Assert.InRange(i, at, at + 27));
+            var g = GtaPackage.GameTransform(turned);
+            Assert.Equal(g.X, BitConverter.ToSingle(stream, at), 2);
+            var stored = GtaPackage.Transform(BitConverter.ToSingle(stream, at), BitConverter.ToSingle(stream, at + 4), BitConverter.ToSingle(stream, at + 8),
+                BitConverter.ToSingle(stream, at + 12), BitConverter.ToSingle(stream, at + 16), BitConverter.ToSingle(stream, at + 20), BitConverter.ToSingle(stream, at + 24));
+            for (int k = 0; k < 12; k++) Assert.Equal(turned[k], stored[k], 3);
+            // A neighbouring entry is untouched.
+            Assert.True(copy.Read("lae2_stream4.ipl")!.AsSpan().SequenceEqual(original.Read("lae2_stream4.ipl")));
+        }
+        finally
+        {
+            b.Close(session);
+            if (Directory.Exists(outDir)) Directory.Delete(outDir, true);
+        }
     }
 
     private static System.Text.Json.JsonElement FullScene(Backend b, string session) =>

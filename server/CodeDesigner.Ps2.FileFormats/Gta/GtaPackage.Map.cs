@@ -114,6 +114,8 @@ public sealed partial class GtaPackage
                 if (suffix < 0 || !int.TryParse(stem.AsSpan(suffix + 7), out _)) continue;
                 string zone = stem[..suffix].ToLowerInvariant();
                 if (!zoneFile.TryGetValue(zone, out var mainFile)) continue;
+                string streamFile = mainFile.Replace(Path.GetFileName(mainFile), e.Name);
+                _streamFiles[streamFile] = (_imgByArchive.First(kv => kv.Value == img).Key, e.Name);
                 byte[] data;
                 try { data = img.Read(e); } catch (IOException) { continue; }
                 if (data.Length < 76 || !data.AsSpan(0, 4).SequenceEqual("bnry"u8)) continue;
@@ -125,7 +127,7 @@ public sealed partial class GtaPackage
                     float F(int o) => BitConverter.ToSingle(data, at + o);
                     int id = BitConverter.ToInt32(data, at + 28), interior = BitConverter.ToInt32(data, at + 32), lod = BitConverter.ToInt32(data, at + 36);
                     var model = Resolve(id, (interior & 0xFF) is not (0 or 13));
-                    streamed.Add(new Placement(zone, mainFile.Replace(Path.GetFileName(mainFile), e.Name), i, id, model?.Name ?? $"#{id}", interior,
+                    streamed.Add(new Placement(zone, streamFile, i, id, model?.Name ?? $"#{id}", interior,
                         F(0), F(4), F(8), Transform(F(0), F(4), F(8), F(12), F(16), F(20), F(24)), lod, model));
                 }
             }

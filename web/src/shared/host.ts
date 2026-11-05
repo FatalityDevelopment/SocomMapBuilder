@@ -168,6 +168,10 @@ export const host = {
     if (s.game === 'SOCOM 3 / Combined Assault') {
       return host.browse({ mode: 'folder', title: 'Choose a folder for the edited archive', key: 'ca-save', submitLabel: 'Save here' });
     }
+    // GTA: the moved placements' IPLs (and GTA3.IMG for streamed ones), each at its disc path in the folder.
+    if (s.game === 'GTA: San Andreas') {
+      return host.browse({ mode: 'folder', title: 'Choose a folder for the edited map files', key: 'gta-map-save', submitLabel: 'Save here' });
+    }
     // Battlefront: the edited levels, each at its disc path (TAT/TAT2.LVL) in the folder.
     if (s.game === 'Star Wars: Battlefront') {
       return host.browse({ mode: 'folder', title: 'Choose a folder for the edited levels', key: 'swbf-save', submitLabel: 'Save here' });

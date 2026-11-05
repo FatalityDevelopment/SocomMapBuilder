@@ -55,7 +55,7 @@ namespace MapBuilder.Server.Services.Assets
         public static int? Close(string id)
         {
             if (!Sessions.TryGetValue(id, out var s)) return null;
-            lock (s.Gate) return Sessions.TryRemove(id, out _) ? s.Dirty.Count : null;
+            lock (s.Gate) return Sessions.TryRemove(id, out _) ? s.Dirty.Count + DirtyPlacementFiles(s).Count() : null;
         }
 
         public static IEnumerable<object> Statuses() => Sessions.Values.Select(Status);
@@ -115,7 +115,7 @@ namespace MapBuilder.Server.Services.Assets
                 initialModel = s.Package.InitialModel, isZdb = true, mapNamespace = (string?)null,
                 // The disc's map areas (IPL zones) as the Map Builder's "missions"; the map itself is view-only.
                 packageKind = HasMap(s) ? "map" : "assets", location = CurrentArea(s), mission = CurrentArea(s), missions = Missions(s),
-                revision = s.Revision, dirty = s.Dirty.Select(Label).Order().ToArray(),
+                revision = s.Revision, dirty = DirtyNames(s),
                 canUndo = s.Undo.TryPeek(out var undo) ? undo.Description : null,
                 canRedo = s.Redo.TryPeek(out var redo) ? redo.Description : null,
                 entries = s.Package.Archives.Sum(a => a.Entries.Count),
