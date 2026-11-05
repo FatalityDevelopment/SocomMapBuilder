@@ -44,15 +44,18 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.RDR
             return defs;
         }
 
-        // A record: alternating string keys and values that include ModelName.
+        // A record: string keys each followed by its value, including ModelName.
         private static Weapon? TryRecord(List<object> list)
         {
-            if (list.Count < 4 || list.Count % 2 != 0) return null;
+            if (list.Count < 4) return null;
             var fields = new Dictionary<string, object>(StringComparer.OrdinalIgnoreCase);
-            for (int i = 0; i < list.Count; i += 2)
+            // Retail records can hold a stray authoring note between fields (M16A2 and SA-80 A2 have the bare items
+            // "adjusted", "from", 40): a value where a key should be is stepped over so the next key lines up again.
+            for (int i = 0; i + 1 < list.Count; i++)
             {
-                if (list[i] is not string key) return null;
+                if (list[i] is not string key) continue;
                 if (list[i + 1] is string or int or float) fields[key] = list[i + 1];
+                i++;
             }
             if (!fields.TryGetValue("ModelName", out var model) || model is not string m || m.Length == 0) return null;
             string S(string k) => fields.TryGetValue(k, out var v) && v is string s ? s : string.Empty;

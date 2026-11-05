@@ -15,6 +15,7 @@ The aim is to add to SOCOM II's Map Builder and Model Editor the tools Unity and
 | 3: Textures and performance | `bakeOcclusion`, texture paint (T), simplified low-detail gear (`MeshDecimate`, `lowDetail`), character presets (`applyCharacterPreset`, `characters_*` MCP tools) | **#15** | open, mergeable |
 | Ignore `models/` | `.gitignore` | **#16** | open |
 | 4: Workflow polish | see below | `claude/wave4` | **pushed, no PR yet** |
+| Disc survey | every map file on the disc mapped ([disc-survey](formats/disc-survey.md)); readers for character types with weapons, scrolling textures and DBUFFER; `ASSET_MAP_TABLES` adds actor weapons, `textureScroll`, `mapImages`; RdrFile shared-block fix | `claude/disc-survey` | local, not committed |
 | Map actions and mission tables | action icons in 3D, friendlier Actions panel, Mission tab (objectives, actors, mission settings, weapons) from READERM.ZAR, [map-tables format doc](formats/map-tables.md) | `claude/actions-rdr` | local, not committed |
 
 ## Wave 4: where it stands (`claude/wave4`, built on `claude/wave3`)
@@ -41,6 +42,7 @@ The aim is to add to SOCOM II's Map Builder and Model Editor the tools Unity and
 
 ## Open threads outside the waves
 
+- **Disc survey findings** ([disc-survey.md](formats/disc-survey.md)): actor weapons come from `RUN/READERC.ZAR › character.rdr` (type, its parents, `default_weapons`, then zweapon's `ModelName`). Worn gear is `default_gear` in the same table (FLIB models), so gear is data too, not only game code. SP map screens are `UI\MM<n>_TXR.ZED` (no world registration found); the TacMap's colours are in `hud.rdr`, its shapes are not found yet. `MAPBUILDER_DISC='E:\'` runs the disc-backed tests.
 - **In-game tests: none of the character work, nor Waves 1–3, has been tried in the game.** The `mwinter` pack in `C:\Users\tholu\Desktop\CodeDesigner\Mods\SOCOM2\packs\mwinter` still has the older script-built gear. Test it like this:
   - Repack with `characters_pack`.
   - The user hosts a round.

@@ -131,6 +131,8 @@ internal sealed partial class ZipperAssetService
 
         var actors = new List<object>();
         Dictionary<string, string>? models = null;
+        var characterTypes = CharacterTypesBeside(s);
+        var weaponDefs = characterTypes == null ? null : WeaponDefsOf(s);
         if (ReaderRecord(s, "vehicles.rdr") is { } vehicles)
         {
             var doc = RdrDocument.Parse(vehicles.Data);
@@ -151,7 +153,9 @@ internal sealed partial class ZipperAssetService
                 {
                     row = i, path,
                     name = Text1(doc, row, "name"), display = Text1(doc, row, "display"), character = Text1(doc, row, "character"),
-                    model = CharacterModel(models ??= PackageModels(s), Text1(doc, row, "character"), CharTypes.Value),
+                    model = CharacterModel(models ??= PackageModels(s), Text1(doc, row, "character"), CharTypes.Value)
+                        ?? CharacterModel(models, characterTypes?.Resolve(Text1(doc, row, "character"))?.Model, CharTypes.Value),
+                    chartype = ActorCharacter(characterTypes, weaponDefs, Text1(doc, row, "character")),
                     starts = setup,
                     teams = Vals(doc, row, "team")?.OfType<int>().ToArray() ?? Array.Empty<int>(),
                     flags = Pairs(doc, row).Where(p => !known.Contains(p.Key)).Select(p => new { name = p.Key, values = doc.Values(p.Value) }).ToArray(),
@@ -239,6 +243,8 @@ internal sealed partial class ZipperAssetService
         {
             revision = s.Revision, hasReader = s.Package.Entry(MissionReader) != null,
             objectives, actors, mission, world, extents, cams, valves = valveList,
+            hasCharacterTypes = characterTypes != null,
+            textureScroll = MapTextureScroll(s), mapImages = MapScreenImages(s),
             texts = used.ToDictionary(k => k, k => texts[k]),
         };
     }
