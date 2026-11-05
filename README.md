@@ -23,7 +23,7 @@ Open a SOCOM II package and work across the whole map: its world, props, clutter
 
 > **Get started:** build the web client, run the server and open `http://127.0.0.1:8770`. See [Getting started](#getting-started).
 >
-> **Status** — SOCOM II is the primary, tested target. Combined Assault supports editing points, actor starts and headings, valves, allowed weapon slots and world placements. Edits save to an archive copy and reopen in the editor. In-game verification is pending. The Model Editor opens the PS2 GTA: San Andreas disc, edits native DFF models, and saves DFF or IMG copies. Star Wars: Battlefront models and textures open read-only. See [Game support](docs/game-support.md).
+> **Status** — SOCOM II is the primary, tested target. Combined Assault supports editing points, actor starts and headings, valves, allowed weapon slots and world placements. Edits save to an archive copy and reopen in the editor. In-game verification is pending. The Model Editor opens the PS2 GTA: San Andreas disc, edits native DFF models, and saves DFF or IMG copies. Star Wars: Battlefront models, textures and maps open read-only. See [Game support](docs/game-support.md).
 
 ## Contents
 

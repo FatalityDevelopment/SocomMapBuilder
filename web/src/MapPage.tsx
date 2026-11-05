@@ -57,6 +57,7 @@ export function MapPage() {
     busy, progress, loading, loadWarnings, connectionIssue, message, messageIsError, say,
     retryScene, edit, history, saveCopy, exportPack, openDialog, loadModel, texturePixels, jump, sceneReady, reload } = mapSession;
   const ca = status?.game === 'SOCOM 3 / Combined Assault';
+  const battlefront = status?.game === 'Star Wars: Battlefront';
   const canPlace = !!status && !status.readOnly && !ca;
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   // The Map tab's check: rerun while the tab is open whenever the session changes.
@@ -297,7 +298,8 @@ export function MapPage() {
       await client.mapPoints(mission);
       setStatus(await client.status());
       setSelectedPoint(null);
-      await reload(true, false);
+      // A Battlefront "mission" is a whole map elsewhere: frame it. CA missions share the location's models.
+      await reload(!battlefront, false);
       say(`${mission}: ${mapSession.pointsRef.current.length} points.`);
     } catch (error) {
       say(`Mission ${mission} could not be read: ${errText(error)}`, true);
@@ -910,14 +912,14 @@ export function MapPage() {
 
   return (
     <div className="me-app mp-app has-header" onPointerDown={e => { if (!(e.target as HTMLElement).closest('.me-menu')) { setOpenMenu(null); } }}>
-      <PageHeader icon="globe" title="Map Builder" subtitle={ca ? 'Combined Assault maps and missions' : 'Props, clutter and spawn points of SOCOM II maps'} />
+      <PageHeader icon="globe" title="Map Builder" subtitle={ca ? 'Combined Assault maps and missions' : battlefront ? 'Star Wars: Battlefront maps (read-only)' : 'Props, clutter and spawn points of SOCOM II maps'} />
       <MenuBar {...menuBarProps} />
       {shortcutsOpen && <ShortcutReference onClose={() => setShortcutsOpen(false)} />}
       {paletteOpen && <CommandPalette commands={commandsFromMenus(menus)} onClose={() => setPaletteOpen(false)} />}
 
       <div className="me-header">
         {!!status?.missions?.length && (
-          <label className="me-toggle" title={`The mission whose points are shown: ${status.location ?? 'this location'} holds ${status.missions.length}`}>Mission
+          <label className="me-toggle" title={battlefront ? `The map drawn: the disc holds ${status.missions.length}` : `The mission whose points are shown: ${status.location ?? 'this location'} holds ${status.missions.length}`}>{battlefront ? 'Map' : 'Mission'}
             <select aria-label="Mission" value={status.mission ?? ''} disabled={busy || loading} onChange={e => void pickMission(e.target.value)}>
               {status.missions.map(m => <option key={m.id} value={m.id}>{missionLabel(m)}</option>)}
             </select>

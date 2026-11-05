@@ -17,12 +17,15 @@ namespace CodeDesigner.Ps2.FileFormats.Swbf
         public sealed record Model(string Name, string Kind, string Archive, int Level, int Offset, int Sub, int Segments, int Vertices, int Triangles, bool Skinned, int Size);
         public sealed record TextureRef(string Name, string Archive, int Level, int Offset, int Sub, int Width, int Height, int Depth, int Size);
         public sealed record Level(string Name, FileSpan Span);
+        /// <summary>A "wrld" chunk: a map (or a layer of one) in <see cref="Archive"/>.</summary>
+        public sealed record WorldRef(string Name, string Archive, int Level, int Offset, string? Terrain, string? Sky, int Instances, int Regions);
 
         public string SourcePath { get; }
         public bool IsDisc { get; }
         public IReadOnlyList<Level> Levels => _levels;
         public IReadOnlyList<Model> Models => _models;
         public IReadOnlyList<TextureRef> Textures => _textures;
+        public IReadOnlyList<WorldRef> Worlds => _worlds;
         /// <summary>The disc's files (path upper case, '/' separated), or empty for a loose level.</summary>
         public IReadOnlyDictionary<string, FileSpan> DiscFiles => _disc;
 
@@ -33,6 +36,11 @@ namespace CodeDesigner.Ps2.FileFormats.Swbf
         private readonly Dictionary<string, List<TextureRef>> _texByName = new(StringComparer.OrdinalIgnoreCase);
         // A model's skeleton ("skel" named after it) per level: (level, name) -> chunk offset.
         private readonly Dictionary<(int Level, string Name), int> _skels = new();
+        private readonly List<WorldRef> _worlds = new();
+        // Terrains per level by lower-case name -> chunk offset; entity classes and geometry tables by lower-case name.
+        private readonly Dictionary<(int Level, string Name), int> _terrains = new();
+        private readonly Dictionary<string, List<(int Level, SwbfWorld.EntityClass Class)>> _classes = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, List<(int Level, string Model)>> _geometry = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, ModelMesh> _meshes = new(StringComparer.OrdinalIgnoreCase);
         private readonly Dictionary<string, SwbfTexture> _decoded = new(StringComparer.OrdinalIgnoreCase);
         private readonly LinkedList<(int Level, byte[] Data)> _bytes = new();
@@ -124,6 +132,34 @@ namespace CodeDesigner.Ps2.FileFormats.Swbf
                             if (name.Length > 0) _skels.TryAdd((level, name.ToLowerInvariant()), c.Offset);
                             break;
                         }
+                        case "wrld":
+                        {
+                            var w = SwbfWorld.Parse(c);
+                            _worlds.Add(new WorldRef(w.Name, _levels[level].Name, level, c.Offset, w.Terrain, w.Sky, w.Instances.Count, w.Regions.Count));
+                            break;
+                        }
+                        case "tern":
+                        {
+                            string name = c.ChildText("NAME") ?? "";
+                            if (name.Length > 0 && SwbfTerrain.HasHeights(c)) _terrains.TryAdd((level, name.ToLowerInvariant()), c.Offset);
+                            break;
+                        }
+                        case "entc":
+                        {
+                            var e = SwbfWorld.ParseClass(c);
+                            if (e.Type.Length == 0) break;
+                            if (!_classes.TryGetValue(e.Type, out var list)) _classes[e.Type] = list = new();
+                            list.Add((level, e));
+                            break;
+                        }
+                        case "gmod":
+                        {
+                            var (name, model) = SwbfWorld.ParseGeometry(c);
+                            if (name.Length == 0 || model == null) break;
+                            if (!_geometry.TryGetValue(name, out var list)) _geometry[name] = list = new();
+                            list.Add((level, model));
+                            break;
+                        }
                         case "tex_":
                         {
                             string name = c.ChildText("NAME") ?? "";
@@ -149,7 +185,8 @@ namespace CodeDesigner.Ps2.FileFormats.Swbf
             if (n.Contains("_weap_") || n.StartsWith("weap_")) return "weapon";
             if (n.Contains("_inf_")) return "character";
             if (n.Contains("_hover_") || n.Contains("_walk_") || n.Contains("_fly_") || n.Contains("_tread_")) return "vehicle";
-            if (n.Contains("sky")) return "sky";
+            // sky domes and their clouds, rocks and planets; not a skyway building
+            if (System.Text.RegularExpressions.Regex.IsMatch(n, "(^|_)sky(?!way|line|light|scraper)")) return "sky";
             return "prop";
         }
 
@@ -202,6 +239,83 @@ namespace CodeDesigner.Ps2.FileFormats.Swbf
                 if (_meshes.TryGetValue(key, out var hit)) return hit;
             Ucfb? skel = _skels.TryGetValue((model.Level, model.Name.ToLowerInvariant()), out int at) ? ChunkAt(model.Level, at) : null;
             var mesh = SwbfModel.Build(ChunkAt(model.Level, model.Offset), model.Archive, skel);
+            lock (_meshes)
+            {
+                if (_meshes.Count > 64) _meshes.Clear();
+                _meshes[key] = mesh;
+            }
+            return mesh;
+        }
+
+        // ------------------------------------------------------------------ maps
+
+        /// <summary>The model name a terrain's mesh goes by (<see cref="BuildTerrainMesh"/>).</summary>
+        public const string TerrainPrefix = "@terrain:";
+
+        public SwbfWorld.World ReadWorld(WorldRef w) => SwbfWorld.Parse(ChunkAt(w.Level, w.Offset));
+
+        /// <summary>The worlds of a level (by archive, e.g. TAT/TAT2.LVL).</summary>
+        public IEnumerable<WorldRef> WorldsIn(string archive) =>
+            _worlds.Where(w => w.Archive.Equals(archive.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase));
+
+        /// <summary>The model an entity class draws: its GeometryName (inherited through BASE), through a gmod's best
+        /// LOD when one has that name; the class's own level first. Null when the class draws nothing found.</summary>
+        public Model? ModelForClass(string cls, int level)
+        {
+            string archive = _levels[level].Name;
+            string? geometry = null;
+            string current = cls;
+            for (int depth = 0; depth < 6 && geometry == null; depth++)
+            {
+                if (!_classes.TryGetValue(current, out var list) || list.Count == 0) break;
+                var e = list.FirstOrDefault(x => x.Level == level).Class ?? list[0].Class;
+                geometry = e.Geometry;
+                if (e.Base.Length == 0 || e.Base.Equals(current, StringComparison.OrdinalIgnoreCase)) break;
+                current = e.Base;
+            }
+            geometry ??= cls;
+            string model = geometry;
+            if (_geometry.TryGetValue(geometry, out var g) && g.Count > 0)
+                model = (g.FirstOrDefault(x => x.Level == level).Model ?? g[0].Model);
+            return FindModel(model, archive) ?? (model != geometry ? FindModel(geometry, archive) : null);
+        }
+
+        private readonly Dictionary<string, SwbfTerrain> _terrainCache = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>A terrain by name, in <paramref name="archive"/>'s level first; null when no level has its heights.</summary>
+        public SwbfTerrain? Terrain(string name, string archive)
+        {
+            int level = LevelIndex(archive);
+            string key = name.ToLowerInvariant();
+            int at;
+            if (!_terrains.TryGetValue((level, key), out at))
+            {
+                var other = _terrains.FirstOrDefault(t => t.Key.Name == key);
+                if (other.Key.Name == null) return null;
+                (level, at) = (other.Key.Level, other.Value);
+            }
+            string cacheKey = level + ":" + key;
+            lock (_terrainCache)
+                if (_terrainCache.TryGetValue(cacheKey, out var hit)) return hit;
+            var t = SwbfTerrain.Parse(ChunkAt(level, at));
+            lock (_terrainCache)
+            {
+                if (_terrainCache.Count > 8) _terrainCache.Clear();
+                _terrainCache[cacheKey] = t;
+            }
+            return t;
+        }
+
+        /// <summary>A terrain as a model of its level: archive + <see cref="TerrainPrefix"/> + terrain name.</summary>
+        public ModelMesh? BuildTerrainMesh(string archive, string modelName)
+        {
+            if (!modelName.StartsWith(TerrainPrefix, StringComparison.OrdinalIgnoreCase)) return null;
+            string key = archive.Replace('\\', '/') + ":" + modelName;
+            lock (_meshes)
+                if (_meshes.TryGetValue(key, out var hit)) return hit;
+            var t = Terrain(modelName[TerrainPrefix.Length..], archive);
+            if (t == null) return null;
+            var mesh = t.Build(archive.Replace('\\', '/'), modelName);
             lock (_meshes)
             {
                 if (_meshes.Count > 64) _meshes.Clear();

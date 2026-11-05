@@ -8,7 +8,7 @@ SOCOM U.S. Navy SEALs II is the primary target. Combined Assault also supports s
 | **SOCOM: Combined Assault** | Location archives by name, missions, world, actors, loadouts and named objective areas | Points, actor starts and headings, valve start values, allowed weapon slots and world placements. Save to a copy. | Models to SOCOM II |
 | **SOCOM 3** | Compatible asset archives | Map edits verified on the Combined Assault disc only | Compatible models to SOCOM II |
 | **Grand Theft Auto: San Andreas (PS2)** | Mounted disc, ISO, IMG or DFF | Frame positions, geometry transforms and material properties. Save DFF or IMG copies. | Models and selected character clips to SOCOM II |
-| **Star Wars: Battlefront** | `.ISO` or a `.LVL`, read-only: models and textures | — | — |
+| **Star Wars: Battlefront** | `.ISO` or a `.LVL`, read-only: models, textures and maps | — | — |
 | **SOCOM: Fireteam Bravo** | Not tested | — | — |
 
 ## SOCOM II
@@ -63,8 +63,9 @@ Open the disc image (`Star Wars - Battlefront (USA).iso`) or a loose `.LVL` in t
 
 - **Model Editor:** characters, vehicles, weapons, first-person models, props and sky domes, textured. Characters show in their bind pose; animations are not read yet.
 - **Asset Viewer:** a `.ISO` lists its files by disc path, and a `.LVL` lists its models and textures for preview.
+- **Map Builder:** pick one of the disc's 22 maps from the **Map** list. It draws the terrain (heights, the base texture layer and the baked lighting, with the cut patches of caves and hangars), the placed objects and the sky dome (turn on the Sky layer). The game draws its sky in a small dome that follows the camera; here it is scaled to enclose the map. Sound emitters, vehicle spawns and particle effects are not drawn.
 
-Maps (terrain, sky, placed objects), paths, regions and command posts, editing and conversion to SOCOM II are planned. The PS2 position quantisation and bone-space vertices follow research by the [openbf](https://github.com/sprucey149/openbf) project (MIT).
+Paths, regions and command posts, the terrain's blended texture layers, editing and conversion to SOCOM II are planned. The PS2 position quantisation, bone-space vertices and the terrain and world layouts follow research by the [openbf](https://github.com/sprucey149/openbf) project (MIT).
 
 ## Not included
 

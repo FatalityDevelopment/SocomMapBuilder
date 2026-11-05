@@ -16,6 +16,9 @@ namespace MapBuilder.Server.Services.Assets
             public required string Id { get; init; }
             public required SwbfPackage Package { get; init; }
             public object Gate { get; } = new();
+            /// <summary>The map (a world's level, e.g. TAT/TAT2.LVL) Map Builder draws; null on a level with none.</summary>
+            public string? Map { get; set; }
+            public int Revision { get; set; }
         }
 
         private static readonly ConcurrentDictionary<string, Session> Sessions = new(StringComparer.OrdinalIgnoreCase);
@@ -39,6 +42,7 @@ namespace MapBuilder.Server.Services.Assets
                 Session? existing = Sessions.Values.FirstOrDefault(s => s.Package.SourcePath.Equals(full, StringComparison.OrdinalIgnoreCase));
                 reused = existing != null;
                 Session session = existing ?? new Session { Id = AssetJson.SessionId(full), Package = SwbfPackage.Open(full) };
+                session.Map ??= session.Package.Worlds.FirstOrDefault()?.Archive;
                 Sessions[session.Id] = session;
                 return session;
             }
@@ -65,7 +69,14 @@ namespace MapBuilder.Server.Services.Assets
                         "ASSET_MODEL_MESH" => Mesh(s, c.AssetName, c.AssetArchive, AssetJson.Parse<AssetJson.MeshArgs>(c.AssetJson)?.Arrays ?? true),
                         "ASSET_TEXTURE" => Texture(s, c.AssetName, c.AssetArchive),
                         "ASSET_LIST_TEXTURES" => ListTextures(s, c.AssetArchive),
-                        "ASSET_MAP_POINTS" => new { points = Array.Empty<object>() },
+                        "ASSET_MAP_POINTS" => Points(s, c.AssetJson),
+                        "ASSET_MAP_SCENE" => MapScene(s),
+                        "ASSET_MAP_TABLES" => new { revision = s.Revision, missionId = s.Map, hasReader = false, objectives = Array.Empty<object>(), actors = Array.Empty<object>(),
+                            loadoutSource = (string?)null, mission = (object?)null, world = (object?)null, extents = (object?)null, cams = Array.Empty<object>(),
+                            valves = Array.Empty<object>(), texts = new Dictionary<string, string>() },
+                        "ASSET_MAP_HUD" => new { revision = s.Revision, map = s.Map, icons = new Dictionary<string, object>(), missing = Array.Empty<string>(), tacmap = (object?)null },
+                        "ASSET_HISTORY" => new { revision = s.Revision, undo = Array.Empty<object>(), redo = Array.Empty<object>(), dirty = Array.Empty<string>() },
+                        "ASSET_VALIDATE" => new { ok = true, counts = new Dictionary<string, int>(), instances = 0, textures = 0, textureBytes = 0, problems = Array.Empty<object>() },
                         "ASSET_LIST_ANIMATIONS" => new { packageArchive = (string?)null, sharedPath = (string?)null, clips = Array.Empty<object>() },
                         "ASSET_WEAPONS" => Array.Empty<object>(),
                         "ASSET_WEAPON_FX" => new { weapon = c.AssetName, effect = (object?)null },
@@ -88,8 +99,14 @@ namespace MapBuilder.Server.Services.Assets
             game = Game,
             readOnly = true,
             isZdb = true,
-            mapNamespace = (string?)null,
-            revision = 0,
+            packageKind = s.Package.Worlds.Count > 0 ? "map" : "assets",
+            mapNamespace = s.Map == null ? null : s.Package.WorldsIn(s.Map).FirstOrDefault()?.Name,
+            revision = s.Revision,
+            location = s.Map,
+            mission = s.Map,
+            // Each map level as a "mission" to pick from; a level's hero (_H) copy is its own entry.
+            missions = s.Package.Worlds.Select(w => w.Archive).Distinct(StringComparer.OrdinalIgnoreCase)
+                .Select(a => new { id = a, kind = "", mode = "" }).ToList(),
             dirty = Array.Empty<string>(),
             canUndo = (string?)null,
             canRedo = (string?)null,
@@ -121,8 +138,91 @@ namespace MapBuilder.Server.Services.Assets
 
         private static object Mesh(Session s, string? name, string? archive, bool arrays)
         {
+            if (name != null && name.StartsWith(SwbfPackage.TerrainPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                string level = archive ?? s.Map ?? throw new ArgumentException("AssetArchive (the terrain's level) is required");
+                var terrain = s.Package.BuildTerrainMesh(level, name) ?? throw new KeyNotFoundException($"Terrain {name[SwbfPackage.TerrainPrefix.Length..]} not found");
+                return AssetJson.Mesh(terrain, terrain.Archive, name, Game, arrays, textureNamespace: terrain.Archive);
+            }
             var m = Find(s, name, archive);
             return AssetJson.Mesh(s.Package.BuildMesh(m), m.Archive, m.Name, Game, arrays, textureNamespace: m.Archive);
+        }
+
+        private sealed record PointArgs(string? Mission);
+
+        /// <summary>Picks the map (ASSET_MAP_POINTS' mission); spawn points and regions come with wave 3.</summary>
+        private static object Points(Session s, string? json)
+        {
+            if (AssetJson.Parse<PointArgs>(json)?.Mission is { Length: > 0 } pick)
+            {
+                var world = s.Package.WorldsIn(pick).FirstOrDefault() ?? throw new KeyNotFoundException($"No map in {pick}");
+                if (!world.Archive.Equals(s.Map, StringComparison.OrdinalIgnoreCase)) { s.Map = world.Archive; s.Revision++; }
+            }
+            return new { mission = s.Map, points = Array.Empty<object>(), teamSpawns = Array.Empty<object>() };
+        }
+
+        private static readonly float[] Identity = { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1 };
+
+        /// <summary>
+        /// The selected map: its terrain (one generated model, <see cref="SwbfPackage.TerrainPrefix"/>), the level's sky
+        /// models at the origin, and each world instance that draws a model, placed by its stored matrix (row vectors,
+        /// translation in [12..14], as the Map Builder reads them). Instances with nothing to draw (sound emitters,
+        /// vehicle spawns, particle effects) are counted but not listed.
+        /// </summary>
+        private static object MapScene(Session s)
+        {
+            if (s.Map == null) throw new InvalidOperationException("This level has no map (no world). Open the disc or a map level such as TAT/TAT2.LVL.");
+            var pkg = s.Package;
+            var instances = new List<object>();
+            object Item(string kind, string model, string instance, string path, float[] m, string source) => new
+            {
+                kind, model, instance, path, position = new[] { m[12], m[13], m[14] }, scale = 1f, matrix = m,
+                geoIndex = (int?)null, clutterIndex = (int?)null, source,
+            };
+            var placed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            int notDrawn = 0, props = 0, terrains = 0;
+            float mapHalf = 0;
+            string? worldName = null;
+            foreach (var w in pkg.WorldsIn(s.Map))
+            {
+                worldName ??= w.Name;
+                var data = pkg.ReadWorld(w);
+                if (data.Terrain != null && pkg.Terrain(data.Terrain, w.Archive) is { } t && placed.Add(SwbfPackage.TerrainPrefix + t.Name))
+                {
+                    terrains++;
+                    mapHalf = Math.Max(mapHalf, t.Size * t.GridUnit / 2);
+                    instances.Add(Item("model", "terrain " + t.Name, "terrain", "/terrain", Identity, $"{w.Archive}:{SwbfPackage.TerrainPrefix}{t.Name}"));
+                }
+                int i = 0;
+                foreach (var r in data.Instances)
+                {
+                    int n = i++;
+                    if (pkg.ModelForClass(r.Type, w.Level) is not { } m) { notDrawn++; continue; }
+                    placed.Add(m.Name);
+                    props++;
+                    string id = r.Name.Length > 0 ? r.Name : $"{r.Type}#{n}";
+                    instances.Add(Item("reference", m.Name, id, $"/{w.Name}/{r.Type}/{id}", r.Matrix, $"{m.Archive}:{m.Name}"));
+                }
+            }
+            // The game draws its sky models in a few-metre dome space that follows the camera; here they are scaled
+            // once so the dome encloses the whole map (its corners, with room to spare), centred on the origin.
+            int level = pkg.LevelIndex(s.Map);
+            int skies = 0;
+            float reach = mapHalf > 0 ? mapHalf * 1.6f : 1500f;
+            foreach (var m in pkg.Models.Where(m => m.Level == level && m.Kind == "sky" && !placed.Contains(m.Name)))
+            {
+                var mesh = pkg.BuildMesh(m);
+                float r = new[] { mesh.BoundsMin[0], mesh.BoundsMin[2], mesh.BoundsMax[0], mesh.BoundsMax[2] }.Max(MathF.Abs);
+                float k = r > 0 ? reach / r : 1;
+                skies++;
+                instances.Add(Item("model", m.Name, m.Name, "/sky/" + m.Name, new[] { k, 0, 0, 0, 0, k, 0, 0, 0, 0, k, 0, 0, 0, 0, 1f }, $"{m.Archive}:{m.Name}"));
+            }
+            return new
+            {
+                sceneNamespace = worldName ?? s.Map,
+                counts = new Dictionary<string, int> { ["terrain"] = terrains, ["prop"] = props, ["sky"] = skies, ["not drawn"] = notDrawn },
+                returned = instances.Count, instances, game = Game,
+            };
         }
 
         private static object TextureInfo(Session s, string name, string? archive)

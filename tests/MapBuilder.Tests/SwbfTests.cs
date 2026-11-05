@@ -136,7 +136,60 @@ public sealed class SwbfTests : IDisposable
         Assert.Equal(4, pkg.FindTexture("crate", "TEST.LVL")!.Width);
     }
 
+    [Fact]
+    public void Fnv1a_MatchesGeometryNameKey() => Assert.Equal(0x47C86B4Au, SwbfWorld.GeometryName);
+
     // ------------------------------------------------------------------ retail
+
+    private static SwbfPackage? _disc;
+    private static SwbfPackage? Disc()
+    {
+        string? iso = Environment.GetEnvironmentVariable("MAPBUILDER_SWBF_DISC");
+        if (string.IsNullOrEmpty(iso) || !File.Exists(iso)) return null;
+        lock (typeof(SwbfTests)) return _disc ??= SwbfPackage.Open(iso);
+    }
+
+    [Fact]
+    public void Retail_MapsResolveTerrainAndInstances()
+    {
+        if (Disc() is not { } pkg) return;
+        _out.WriteLine($"{pkg.Worlds.Count} worlds");
+        int placed = 0, resolved = 0;
+        var missing = new Dictionary<string, int>();
+        foreach (var w in pkg.Worlds)
+        {
+            var world = pkg.ReadWorld(w);
+            int ok = 0;
+            foreach (var i in world.Instances)
+            {
+                placed++;
+                if (pkg.ModelForClass(i.Type, w.Level) != null) { ok++; resolved++; }
+                else missing[i.Type] = missing.GetValueOrDefault(i.Type) + 1;
+            }
+            var t = w.Terrain != null ? pkg.Terrain(w.Terrain, w.Archive) : null;
+            string ter = t == null ? "no terrain" : $"terrain {t.Name} {t.Size}x{t.GridUnit}m layers [{string.Join(",", t.Layers.Take(3))}] drawn {t.PatchMasks.Count(m => m != 0)}/{t.PatchMasks.Count} replaced {t.Replacements.Count(r => r != null)} light {t.Light != null}";
+            Assert.Contains(pkg.Models, m => m.Level == w.Level && m.Kind == "sky");
+            _out.WriteLine($"{w.Archive} {w.Name}: sky {w.Sky},{ok}/{world.Instances.Count} inst, {world.Regions.Count} regn; {ter}");
+            if (t != null)
+            {
+                var mesh = pkg.BuildTerrainMesh(w.Archive, SwbfPackage.TerrainPrefix + t.Name)!;
+                Assert.NotEmpty(mesh.Chunks);
+                // Terrain faces up.
+                long up = 0, down = 0;
+                foreach (var c in mesh.Chunks)
+                    for (int k = 0; k + 2 < c.Triangles.Length; k += 3)
+                    {
+                        int a = c.Triangles[k] * 3, b = c.Triangles[k + 1] * 3, d = c.Triangles[k + 2] * 3;
+                        float ny = (c.Positions[d] - c.Positions[a]) * (c.Positions[b + 2] - c.Positions[a + 2]) - (c.Positions[d + 2] - c.Positions[a + 2]) * (c.Positions[b] - c.Positions[a]);
+                        if (ny > 0) up++; else if (ny < 0) down++;
+                    }
+                Assert.True(up > down * 20, $"{w.Archive} terrain should face up ({up} up, {down} down)");
+            }
+        }
+        _out.WriteLine($"instances resolved {resolved}/{placed}; unresolved classes: {string.Join(", ", missing.OrderByDescending(m => m.Value).Take(25).Select(m => $"{m.Key}x{m.Value}"))}");
+        // The rest are sound emitters, vehicle spawns and particle effects (dust, mist, god rays): nothing to draw.
+        Assert.True(resolved > placed * 0.8, "Most instances should resolve to a model");
+    }
 
     [Fact]
     public void Retail_EveryModelAndTextureDecodes()
