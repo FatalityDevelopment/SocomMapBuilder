@@ -168,6 +168,10 @@ export const host = {
     if (s.game === 'SOCOM 3 / Combined Assault') {
       return host.browse({ mode: 'folder', title: 'Choose a folder for the edited archive', key: 'ca-save', submitLabel: 'Save here' });
     }
+    // Battlefront: the edited levels, each at its disc path (TAT/TAT2.LVL) in the folder.
+    if (s.game === 'Star Wars: Battlefront') {
+      return host.browse({ mode: 'folder', title: 'Choose a folder for the edited levels', key: 'swbf-save', submitLabel: 'Save here' });
+    }
     const suggested = /\.cdb$/i.test(s.path) ? s.path : s.path.replace(/(\.zdb)$/i, '_edit$1');
     return (await host.pickSavePath('zdb', suggested)).path;
   },

@@ -11,6 +11,9 @@ import { errText } from './mapModel';
 import { host, openRequest, useSignals } from './shared';
 import { aiChange, samePath, type AiFocus } from './shared/aiBridge';
 
+// CA and Battlefront edits change placements and points only, so an undo keeps the decoded meshes.
+const placementsOnly = (game?: string) => game === 'SOCOM 3 / Combined Assault' || game === 'Star Wars: Battlefront';
+
 // Callbacks are read through refs, so the page can mirror selection without coupling session logic to its UI.
 export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
   onLoaded: (vp: MapViewport, keepCamera: boolean) => void, onOpened: () => void = () => {}) {
@@ -337,7 +340,7 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
       setStatus(await clientRef.current.status());
       say(`${undo ? 'Undid' : 'Redid'} ${r.description ?? ''} (revision ${r.revision})`);
       // CA edits change placements and mission records. SOCOM II history can also change meshes.
-      await reload(true, statusRef.current?.game !== 'SOCOM 3 / Combined Assault');
+      await reload(true, !placementsOnly(statusRef.current?.game));
     } catch (err) {
       say(errText(err), true);
     } finally {
@@ -355,7 +358,7 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
       for (let i = 0; i < redoSteps; i++) { last = await clientRef.current.redo(); }
       setStatus(await clientRef.current.status());
       if (last) { say(`${undoSteps ? `Undid ${undoSteps}` : `Redid ${redoSteps}`} step(s), to revision ${last.revision}`); }
-      await reload(true, statusRef.current?.game !== 'SOCOM 3 / Combined Assault');
+      await reload(true, !placementsOnly(statusRef.current?.game));
     } catch (err) {
       say(errText(err), true);
     } finally {

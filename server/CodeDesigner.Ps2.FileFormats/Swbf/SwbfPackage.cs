@@ -198,8 +198,91 @@ namespace CodeDesigner.Ps2.FileFormats.Swbf
 
         // ------------------------------------------------------------------ reads
 
+        // ------------------------------------------------------------------ edits
+
+        // Levels changed in this session: their whole bytes, edited in place (placements keep every chunk's size).
+        private readonly Dictionary<int, byte[]> _edited = new();
+
+        /// <summary>Overwrites <paramref name="bytes"/> at <paramref name="at"/> in a level (a copy of it, kept in memory).</summary>
+        public void Patch(int level, int at, byte[] bytes)
+        {
+            lock (_edited)
+            {
+                if (!_edited.TryGetValue(level, out var data)) _edited[level] = data = (byte[])OriginalBytes(level).Clone();
+                if (at < 0 || at + bytes.Length > data.Length) throw new ArgumentOutOfRangeException(nameof(at), "The edit is outside the level");
+                bytes.CopyTo(data, at);
+            }
+        }
+
+        public byte[] ReadAt(int level, int at, int count) => LevelBytes(level).AsSpan(at, count).ToArray();
+
+        /// <summary>The levels whose bytes now differ from the disc or file.</summary>
+        public List<int> DirtyLevels()
+        {
+            lock (_edited)
+                return _edited.Where(e => !e.Value.AsSpan().SequenceEqual(OriginalBytes(e.Key))).Select(e => e.Key).OrderBy(l => l).ToList();
+        }
+
+        /// <summary>A level as it is on the disc or in its file, edits aside.</summary>
+        public byte[] OriginalBytes(int level)
+        {
+            lock (_bytes)
+                for (var n = _bytes.First; n != null; n = n.Next)
+                    if (n.Value.Level == level) return n.Value.Data;
+            byte[] data = _levels[level].Span.Read();
+            lock (_bytes)
+            {
+                _bytes.AddFirst((level, data));
+                while (_bytes.Count > KeepLevels) _bytes.RemoveLast();
+            }
+            return data;
+        }
+
+        /// <summary>Writes a level as it is now (with this session's edits).</summary>
+        public void WriteLevel(int level, string path)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path))!);
+            string temp = path + ".tmp";
+            File.WriteAllBytes(temp, LevelBytes(level));
+            File.Move(temp, path, true);
+        }
+
+        /// <summary>A copy of the disc image with the edited levels written over their own bytes (an edit never changes
+        /// a level's size, so every file keeps its place).</summary>
+        public void WriteDisc(string path)
+        {
+            if (!IsDisc) throw new InvalidOperationException("Only a disc session saves a disc image");
+            if (Path.GetFullPath(path).Equals(SourcePath, StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("Save the disc to a new file, not over the original");
+            string temp = path + ".tmp";
+            var drive = new DriveInfo(Path.GetPathRoot(Path.GetFullPath(path))!);
+            long need = new FileInfo(SourcePath).Length;
+            if (drive.IsReady && drive.AvailableFreeSpace < need)
+                throw new IOException($"The disc copy needs {need / (1 << 20):N0} MB; {drive.Name} has {drive.AvailableFreeSpace / (1 << 20):N0} MB free. Save the edited levels to a folder instead.");
+            try
+            {
+                File.Copy(SourcePath, temp, true);
+                using (var f = new FileStream(temp, FileMode.Open, FileAccess.Write))
+                    foreach (int level in DirtyLevels())
+                    {
+                        var span = _levels[level].Span;
+                        var data = LevelBytes(level);
+                        if (data.Length != span.Length) throw new InvalidOperationException($"{_levels[level].Name} changed size");
+                        f.Position = span.Offset;
+                        f.Write(data);
+                    }
+                File.Move(temp, path, true);
+            }
+            catch
+            {
+                try { File.Delete(temp); } catch (IOException) { }
+                throw;
+            }
+        }
+
         public byte[] LevelBytes(int level)
         {
+            lock (_edited)
+                if (_edited.TryGetValue(level, out var edited)) return edited;
             lock (_bytes)
             {
                 for (var n = _bytes.First; n != null; n = n.Next)
