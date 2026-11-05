@@ -215,7 +215,11 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
             return info.Where(x => !Copy(x)).Select(x => x.Obj).ToList();
         }
 
-        /// <summary>Every placed object of every world piece of the location (UI scenes left out).</summary>
+        /// <summary>
+        /// Every placed object of every world piece of the location (UI scenes left out): the world's node tree, then
+        /// the island's scatter instances (<see cref="CaLibrary.Instances"/>: rocks, trees, crates — 497 of Reservoir's
+        /// 755 objects), each drawn as its prop model without LOD copies.
+        /// </summary>
         public List<Placement> MapScene()
         {
             var list = new List<Placement>();
@@ -225,8 +229,46 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
                 foreach (var node in lib.Nodes(w.Offset))
                     foreach (int obj in Drawn(w.LibraryIndex, lib, node))
                         list.Add(new Placement(w.Name, node.Hash, w.LibraryIndex, obj, node.World));
+                var prototypes = new Dictionary<int, List<(uint Hash, float[] World, List<int> Objects)>>();
+                var (min, max) = WorldBounds(lib, w.Offset);
+                foreach (var inst in lib.Instances())
+                {
+                    if (inst.Model == w.Offset) continue;
+                    // A few records are parked far off the island (at the origin, or thousands of units out: 56 of the
+                    // disc's 18,262); they are not drawn.
+                    if (Enumerable.Range(0, 3).Any(k => inst.Matrix[12 + k] < min[k] - ParkedMargin || inst.Matrix[12 + k] > max[k] + ParkedMargin)) continue;
+                    if (!prototypes.TryGetValue(inst.Model, out var parts))
+                    {
+                        var nodes = lib.Nodes(inst.Model);
+                        var skip = LodSkip(w.LibraryIndex, lib, nodes);
+                        prototypes[inst.Model] = parts = nodes.Where(n => !skip.Contains(n.Offset))
+                            .Select(n => (n.Hash, n.World, Drawn(w.LibraryIndex, lib, n))).Where(p => p.Item3.Count > 0).ToList();
+                    }
+                    foreach (var (hash, world, objects) in parts)
+                    {
+                        float[] m = Matrix4.Multiply(inst.Matrix, world);
+                        foreach (int obj in objects) list.Add(new Placement(w.Name, hash, w.LibraryIndex, obj, m));
+                    }
+                }
             }
             return list;
+        }
+
+        /// <summary>How far outside its island's bounds a scatter instance may stand and still be drawn.</summary>
+        private const float ParkedMargin = 1000;
+
+        /// <summary>A world root's bounds (+0xB0 min xyz, +0xBC max xyz); unbounded when they are not stored.</summary>
+        private static (float[] Min, float[] Max) WorldBounds(CaLibrary lib, int root)
+        {
+            var min = new float[3]; var max = new float[3];
+            for (int k = 0; k < 3; k++)
+            {
+                min[k] = root + 0xC8 <= lib.Data.Length ? BitConverter.ToSingle(lib.Data, root + 0xB0 + 4 * k) : float.NaN;
+                max[k] = root + 0xC8 <= lib.Data.Length ? BitConverter.ToSingle(lib.Data, root + 0xBC + 4 * k) : float.NaN;
+            }
+            bool valid = Enumerable.Range(0, 3).All(k => float.IsFinite(min[k]) && float.IsFinite(max[k]) && min[k] <= max[k]);
+            return valid ? (min, max)
+                : (new[] { float.NegativeInfinity, float.NegativeInfinity, float.NegativeInfinity }, new[] { float.PositiveInfinity, float.PositiveInfinity, float.PositiveInfinity });
         }
 
         private List<CaAnimations.Clip>? _clips;
@@ -364,6 +406,18 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
             foreach (var (_, lib) in _libraries)
                 foreach (int rec in lib.Textures)
                     if (lib.U32(rec + 0x4C) == hash && lib.DecodeTexture(rec) is { } t) return t;
+            return null;
+        }
+
+        /// <summary>How a texture draws (<see cref="CaLibrary.TextureState"/>): the first record of that name whose packet
+        /// sets blend, alpha test or clamping, or null.</summary>
+        public CaLibrary.TextureGs? FindTextureState(string name)
+        {
+            string hex = Path.GetFileNameWithoutExtension(name.StartsWith("ca_", StringComparison.OrdinalIgnoreCase) ? name[3..] : name);
+            if (!uint.TryParse(hex, System.Globalization.NumberStyles.HexNumber, null, out uint hash)) return null;
+            foreach (var (_, lib) in _libraries)
+                foreach (int rec in lib.Textures)
+                    if (lib.U32(rec + 0x4C) == hash && lib.TextureState(rec) is { } state) return state;
             return null;
         }
 

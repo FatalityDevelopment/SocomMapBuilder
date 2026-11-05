@@ -150,13 +150,17 @@ namespace MapBuilder.Server.Services
         {
             var t = s.Package.FindTexture(name);
             if (t == null) return new { name, found = false };
+            // The texture's GS state: most CA surfaces blend with the alpha test off (terrain layers faded by vertex
+            // alpha, water, decals); foliage is cut out (no blend, TEST >= 0x40). Without a state, cut out at half.
+            var gs = s.Package.FindTextureState(name);
             return new
             {
                 name, found = true, @namespace = (string?)null, width = t.Width, height = t.Height,
                 psm = $"0x{t.Psm:X2}", bpp = t.Psm switch { 0x13 => 8, 0x14 => 4, 0x02 => 16, _ => 32 },
                 palette = (int?)null, paletteResolved = true, hasTransparency = t.HasAlpha,
-                // Cut-out (foliage, fences): alpha test at half when the texture has transparent texels.
-                alphaTest = t.HasAlpha ? 0.5f : (float?)null, alphaBlend = (bool?)null, clamp = (bool[]?)null,
+                alphaTest = gs != null ? gs.AlphaTest : t.HasAlpha ? 0.5f : (float?)null,
+                alphaBlend = gs?.Blend,
+                clamp = gs == null ? (bool[]?)null : new[] { gs.ClampS, gs.ClampT },
             };
         }
 

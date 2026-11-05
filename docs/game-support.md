@@ -33,7 +33,7 @@ Map, model and animation edits round-trip through save and reopen. Imported mode
 
 ## SOCOM: Combined Assault (read-only)
 
-Each location is one archive on the disc, `RUN\<hash>.ZAR`. The file browser shows the location's name next to it (`055146D2.ZAR  POLAND_RURAL`). You can also open a location or one of its missions by name: `G:\RUN\WHARF` or `G:\RUN\WHARF\SP422.ZDB`. The Map Builder draws the location's world and the selected mission's points: squad starts and AI spawns, AI nav points, the markers named on the map screen, and doors and objective places. Pick another mission from **Mission** in the toolbar. Teams and mission tables are not read yet, and nothing can be edited or saved. Layouts: [Combined Assault missions](formats/ca-missions.md).
+Each location is one archive on the disc, `RUN\<hash>.ZAR`. The file browser shows the location's name next to it (`055146D2.ZAR  POLAND_RURAL`). You can also open a location or one of its missions by name: `G:\RUN\WHARF` or `G:\RUN\WHARF\SP422.ZDB`. The Map Builder draws the location's world, including its scatter props (rocks, trees, crates), with water and terrain blend layers drawn translucent as the game's GS state sets them ([Combined Assault worlds](formats/ca-worlds.md)), and the selected mission's points: squad starts and AI spawns, AI nav points, the markers named on the map screen, and doors and objective places. Pick another mission from **Mission** in the toolbar. Teams and mission tables are not read yet, and nothing can be edited or saved. Layouts: [Combined Assault missions](formats/ca-missions.md).
 
 ## Grand Theft Auto: San Andreas (partial)
 

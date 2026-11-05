@@ -152,6 +152,9 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
             foreach (var s in Sections(obj))
             {
                 string? texture = s.TextureRecord is int t ? TextureName(U32(t + 0x4C)) : null;
+                // The material's ALPHA_1: whether the chunk blends with the frame buffer (vertex-alpha terrain layers,
+                // water, decals) or replaces it (cut-out foliage).
+                bool? blend = AdRegisters(s.MaterialOffset, s.MaterialLength).TryGetValue(GsAlpha, out ulong alpha) ? IsBlend(alpha) : null;
                 foreach (var part in s.Parts)
                 {
                     // A geometry blob holds one chunk; find its header (STCYCL 0x101, UNPACK V4-32 @0 n4).
@@ -163,7 +166,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
                             GeometryOffset = o, GeometryLength = part.GeometryOffset + part.GeometryLength - o,
                             ColorOffset = part.ColorOffset, ColorLength = part.ColorLength,
                         };
-                        var chunk = ZipperModelMesh.DecodeChunk(Data, r, firstIndex + list.Count, visual, texture, null, unit, world);
+                        var chunk = ZipperModelMesh.DecodeChunk(Data, r, firstIndex + list.Count, visual, texture, blend, unit, world);
                         if (chunk != null)
                         {
                             for (int i = 1; i < chunk.Uvs.Length; i += 2) chunk.Uvs[i] = 1f - chunk.Uvs[i];
@@ -182,18 +185,140 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         private const ulong Tex0Identity = 0x3FFFUL | (0x3FUL << 14) | (0x3FUL << 20) | (0xFFUL << 26) | (0x3FFFUL << 37) | (0xFUL << 51);
 
         /// <summary>TEX0 of the first A+D GIF packet in [o, o + length), or null.</summary>
-        private ulong? MaterialTex0(int o, int length)
+        private ulong? MaterialTex0(int o, int length) => AdRegisters(o, length).TryGetValue(GsTex0, out ulong t) ? t : null;
+
+        // GS register addresses an A+D packet sets.
+        public const ulong GsTex0 = 0x06, GsClamp = 0x08, GsAlpha = 0x42, GsTest = 0x47;
+
+        /// <summary>
+        /// The registers (address → value) of the first A+D GIF packet in [o, o + length). CA materials set ALPHA_1,
+        /// TEX1, TEST_1 and CLAMP_1 (the texture's own packet adds TEX0): ALPHA 0x44 (Cs − Cd)·As + Cd on almost every
+        /// surface with the alpha test off, 0x4000000000 (no blend) with TEST ≥ 0x40 on cut-out foliage, 0x48 additive
+        /// and 0x42 subtractive on effects.
+        /// </summary>
+        public Dictionary<ulong, ulong> AdRegisters(int o, int length)
         {
-            for (int p = o; p + 16 <= o + length; p += 16)
+            var regs = new Dictionary<ulong, ulong>();
+            for (int p = Math.Max(0, o); p + 16 <= o + length && p + 16 <= Data.Length; p += 16)
             {
                 ulong lo = BitConverter.ToUInt64(Data, p), hi = BitConverter.ToUInt64(Data, p + 8);
                 int nloop = (int)(lo & 0x7FFF);
                 if (hi != 0xE || ((lo >> 60) & 0xF) != 1 || nloop is 0 or > 32) continue;
                 for (int i = 0; i < nloop && p + 32 + 16 * i <= Data.Length; i++)
-                    if (BitConverter.ToUInt64(Data, p + 24 + 16 * i) == 0x06) return BitConverter.ToUInt64(Data, p + 16 + 16 * i);
-                return null;
+                    regs.TryAdd(BitConverter.ToUInt64(Data, p + 24 + 16 * i), BitConverter.ToUInt64(Data, p + 16 + 16 * i));
+                return regs;
             }
-            return null;
+            return regs;
+        }
+
+        /// <summary>Whether an ALPHA_1 value reads the frame buffer (the rule SOCOM II's textures use: B or D is Cd,
+        /// or A is Cd without D).</summary>
+        public static bool IsBlend(ulong alpha)
+        {
+            ulong a = alpha & 3, b = (alpha >> 2) & 3, d = (alpha >> 6) & 3;
+            return b == 1 || d == 1 || (a == 1 && d != 1);
+        }
+
+        /// <summary>A TEST_1 value's "keep texels at or above" threshold in 0..1 alpha, or null when the test is off or
+        /// is another comparison (ATST 5 GEQUAL / 6 GREATER: AREF / 0x80; 7 NOTEQUAL 0: any alpha).</summary>
+        public static float? AlphaTest(ulong test)
+        {
+            if ((test & 1) == 0) return null;
+            ulong atst = (test >> 1) & 7, aref = (test >> 4) & 0xFF;
+            return atst is 5 or 6 ? Math.Min(1f, aref / 128f) : atst == 7 && aref == 0 ? 1f / 255f : null;
+        }
+
+        /// <summary>How a texture record draws, from its own GIF packet (+0x14): blend (ALPHA_1), alpha test (TEST_1)
+        /// and clamping (CLAMP_1 WMS / WMT 1 or 2). Null when the packet sets none of them.</summary>
+        public sealed record TextureGs(bool? Blend, float? AlphaTest, bool ClampS, bool ClampT);
+
+        public TextureGs? TextureState(int rec)
+        {
+            int packet = (int)U32(rec + 0x14);
+            if (packet <= 0 || packet + 16 > Data.Length) return null;
+            var regs = AdRegisters(packet, Data.Length - packet);
+            if (!regs.ContainsKey(GsAlpha) && !regs.ContainsKey(GsTest) && !regs.ContainsKey(GsClamp)) return null;
+            ulong clamp = regs.GetValueOrDefault(GsClamp);
+            ulong wms = clamp & 3, wmt = (clamp >> 2) & 3;
+            return new TextureGs(
+                regs.TryGetValue(GsAlpha, out ulong alpha) ? IsBlend(alpha) : null,
+                regs.TryGetValue(GsTest, out ulong test) ? AlphaTest(test) : null,
+                wms is 1 or 2, wmt is 1 or 2);
+        }
+
+        // ------------------------------------------------------------------ scatter instances
+
+        /// <summary>
+        /// A scatter instance of an island (rocks, trees, crates): a 0x70-byte record placing one of the library's prop
+        /// models. +0x00 the transform: a 4×4 matrix (rows are the axes, translation in row 3, as node matrices), or —
+        /// flag bit 0x02 — a quaternion (x, y, z, w) at +0x00, identity at +0x10 and position at +0x20 with a uniform
+        /// scale in its w; +0x40 / +0x44 fade distances squared; +0x4C flags; +0x5C colour; +0x60 the model; +0x64 0;
+        /// +0x68 / +0x6C −1.0. <paramref name="Matrix"/> is the placement in <see cref="Matrix4"/> order.
+        /// </summary>
+        public sealed record Instance(int Offset, int Model, uint Flags, float[] Matrix);
+
+        public const int InstanceSize = 0x70;
+        private const uint MinusOne = 0xBF800000;
+
+        private List<Instance>? _instances;
+
+        /// <summary>
+        /// The library's scatter instances. The island keeps them in one vector (its spatial grid's cells hold
+        /// sub-ranges and pointers into it); each is found as a {begin, end} vector of whole records that all place a
+        /// model of this library, and the records are taken once each, in order.
+        /// </summary>
+        public List<Instance> Instances()
+        {
+            if (_instances != null) return _instances;
+            var models = Models.ToHashSet();
+            var found = new SortedSet<int>();
+            if (models.Count > 1)
+                for (int o = 0; o + 8 <= Data.Length; o += 4)
+                {
+                    int begin = (int)U32(o), end = (int)U32(o + 4);
+                    if (begin <= 0 || end <= begin || end > Data.Length || (begin & 15) != 0 || (end - begin) % InstanceSize != 0) continue;
+                    if (found.Contains(begin) && found.Contains(end - InstanceSize)) continue;
+                    bool all = true;
+                    for (int r = begin; r < end && all; r += InstanceSize) all = IsInstance(r, models);
+                    if (all) for (int r = begin; r < end; r += InstanceSize) found.Add(r);
+                }
+            var list = new List<Instance>(found.Count);
+            foreach (int r in found)
+                if (InstanceMatrix(r) is { } m) list.Add(new Instance(r, (int)U32(r + 0x60), U32(r + 0x4C), m));
+            return _instances = list;
+        }
+
+        private bool IsInstance(int r, HashSet<int> models) =>
+            models.Contains((int)U32(r + 0x60)) && U32(r + 0x64) == 0 && U32(r + 0x68) == MinusOne && U32(r + 0x6C) == MinusOne;
+
+        private float F(int o) => BitConverter.ToSingle(Data, o);
+
+        private float[]? InstanceMatrix(int r)
+        {
+            float[] m;
+            if ((U32(r + 0x4C) & 2) != 0)
+            {
+                float x = F(r), y = F(r + 4), z = F(r + 8), w = F(r + 12), s = F(r + 0x2C);
+                float len = MathF.Sqrt(x * x + y * y + z * z + w * w);
+                if (!(len > 1e-6f) || !float.IsFinite(s) || s == 0) return null;
+                x /= len; y /= len; z /= len; w /= len;
+                float x2 = x + x, y2 = y + y, z2 = z + z;
+                float xx = x * x2, xy = x * y2, xz = x * z2, yy = y * y2, yz = y * z2, zz = z * z2, wx = w * x2, wy = w * y2, wz = w * z2;
+                m = new[]
+                {
+                    (1 - (yy + zz)) * s, (xy + wz) * s, (xz - wy) * s, 0,
+                    (xy - wz) * s, (1 - (xx + zz)) * s, (yz + wx) * s, 0,
+                    (xz + wy) * s, (yz - wx) * s, (1 - (xx + yy)) * s, 0,
+                    F(r + 0x20), F(r + 0x24), F(r + 0x28), 1,
+                };
+            }
+            else
+            {
+                m = new float[16];
+                for (int i = 0; i < 16; i++) m[i] = F(r + 4 * i);
+                m[3] = m[7] = m[11] = 0; m[15] = 1;
+            }
+            return m.All(float.IsFinite) ? m : null;
         }
 
         /// <summary>TEX0 of a texture record (from its GIF A+D packet at +0x14), or null.</summary>

@@ -19,6 +19,7 @@ All values are little-endian. Offsets are in hex. "Confirmed in game" means a fi
 | [Disc survey](disc-survey.md) | Every map file on the disc, what each holds, known vs unknown, what to decode next; character types and weapons (`character.rdr`), scrolling textures, DBUFFER, map screens and the TacMap | `RDR/CharacterTypes.cs`, `Geo/TextureScroll.cs`, `ZAR/BufferTable.cs`, `Services/AssetService.MapExtras.cs` |
 | [HUD radar and tactical maps](hud.md) | `HUD2_TXR.ZED` radar art, `MM<nn>_TXR.ZED` map pages and where they sit in the world | `Services/AssetService.MapHud.cs`, `web/src/viewport/minimap.ts` |
 | [Combined Assault missions](ca-missions.md) | CA location archives (CRC32 names), missions, `mission.rdr` points and `AIMi` grids | `Ca/CaMissions.cs`, `Ca/CaDisc.cs`, `Ca/CaPackage.cs` |
+| [Combined Assault worlds](ca-worlds.md) | CA scatter instances (0x70-byte records), and the GS blend / alpha test / clamp state of CA surfaces and water | `Ca/CaLibrary.cs`, `Ca/CaPackage.cs` |
 | [SOCOM 1 maps](socom1.md) | SOCOM 1's loose map folders on the disc, `assetlibs`, and the SOCOM II names its archives are read as | `Package/Socom1DiscMap.cs` |
 | [Animations](animations.md) | Motion clips (MOTION_S / MOTION_P) and ZANIM effect scripts | `Anim/MotionClip.cs`, `Anim/ZanimFile.cs` |
 
