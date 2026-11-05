@@ -47,6 +47,8 @@ namespace CodeDesigner.Ps2.FileFormats.Assets
         public sealed class Group
         {
             public string Texture { get; init; } = string.Empty;
+            public byte[]? Colors { get; init; }
+            public bool? MaterialBlend { get; init; }
             public int Section { get; init; }
             /// <summary>Offset of the draw block in the payload (the group's identity).</summary>
             public int DrawOffset { get; init; }

@@ -569,7 +569,7 @@ namespace MapBuilder.Server.Services
             // ── sessions
             AddSync("assets_open", "Open package",
                 "Open a SOCOM package (.ZDB / .CDB, loose archives or package folder), a Combined Assault location archive or mission path, " +
-                "or a read-only GTA: San Andreas session. The pages share a session for each path. Returns the " +
+                "or a GTA: San Andreas mounted disc folder, ISO, IMG or DFF. The pages share a session for each path. Returns the " +
                 "session id and a summary. The app opens it too: in the Map Builder when it is a map, else the Model Editor. Risk: changes " +
                 "only what the app shows.",
                 false, Schema(new[] { "path" }, P("path", "string", "Path to the package or its unpacked folder.")), a =>
@@ -859,13 +859,14 @@ namespace MapBuilder.Server.Services
                 ".bak); mode=pack writes a memory-card pack <NAME>.CDB (packName starts with 'm', at most 7 characters) to outputPath and, with " +
                 "folderCard (a PCSX2 folder memory card), installs it. Prefer a copy (outputPath) over the retail file, and save only when the " +
                 "user asks. Risk: writes disk.",
-                false, Schema(new[] { "session" }, session, E("mode", "zdb (default) or pack. CA uses zdb for a complete archive copy.", "zdb", "pack"), P("outputPath", "string", "zdb: output file. CA requires a separate .ZAR/.ZDB file or output folder. pack: output folder."),
+                false, Schema(new[] { "session" }, session, E("mode", "zdb (default), pack, GTA model copy (dff), or GTA archive copy (img).", "zdb", "pack", "dff", "img"), P("outputPath", "string", "Output file, or folder for a pack or CA location. GTA requires a separate DFF or IMG file."),
+                    P("archive", "string", "GTA source archive from assets_list_models."), P("model", "string", "GTA model to save in dff mode."),
                     P("packName", "string", "pack: the name, e.g. mfrst."), P("folderCard", "string", "pack: optional PCSX2 folder memory card to install into."),
                     P("archiveDir", "string", "pack from an unpacked folder: the files' folder in game, e.g. RUN\\MP\\M51 (default RUN\\MP\\<FOLDER>).")),
                 a => FromCommand(new CommandMessage
                 {
                     Command = "ASSET_SAVE", AssetSession = Session(a),
-                    AssetJson = JsonSerializer.Serialize(new { mode = Str(a, "mode") ?? "zdb", outputPath = Str(a, "outputPath"), packName = Str(a, "packName"), folderCard = Str(a, "folderCard"), archiveDir = Str(a, "archiveDir") }, Json),
+                    AssetJson = JsonSerializer.Serialize(new { mode = Str(a, "mode") ?? "zdb", outputPath = Str(a, "outputPath"), archive = Str(a, "archive"), model = Str(a, "model"), packName = Str(a, "packName"), folderCard = Str(a, "folderCard"), archiveDir = Str(a, "archiveDir") }, Json),
                 }, d => d.TryGetProperty("written", out var w) ? "wrote " + string.Join(", ", w.EnumerateArray().Select(x => Path.GetFileName(x.GetString()))) : null!));
 
             AddSync("mapbuilder_command", "Run command",
@@ -908,10 +909,8 @@ namespace MapBuilder.Server.Services
                 true, Schema(new[] { "session", "weapon" }, session, P("weapon", "string", "Weapon model or internal name (assets_weapons lists them).")),
                 a => FromCommand(new CommandMessage { Command = "ASSET_WEAPON_FX", AssetSession = Session(a), AssetName = Str(a, "weapon") }, _ => Str(a, "weapon")!));
 
-            AddSync("assets_export", "Export to SOCOM 3 / CA",
-                "Export a SOCOM II model (character, weapon, vehicle, prop) as a SOCOM 3 / Combined Assault package: <outputDir>/<MODEL>.ZDB " +
-                "with the asset library, the chosen animation clips as a bone bank and a name list. Answers the written path. Risk: writes disk " +
-                "(a new file).",
+            AddSync("assets_export", "Convert a model",
+                "Convert the selected GTA: San Andreas or Combined Assault model into a SOCOM II pack, or a SOCOM II model into a Combined Assault ZDB. Reads the current session including edits and returns the written path.",
                 false, Schema(new[] { "session", "archive", "model" }, session, P("archive", "string", "Archive leaf, e.g. M51_MDL.ZED."), P("model", "string", "Model name."),
                     P("outputDir", "string", "Optional output folder (default: the app's export folder)."), P("modelName", "string", "Optional name in the new package."),
                     A("clips", "string", "Optional animation clip names to include (characters).")),

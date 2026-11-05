@@ -15,6 +15,7 @@ export interface UvEditorCallbacks {
 }
 
 export class UvEditor {
+  editable = true;
   private readonly ctx: CanvasRenderingContext2D;
   private image: HTMLCanvasElement | null = null;
   private chunks: EditorChunk[] = [];
@@ -56,6 +57,8 @@ export class UvEditor {
 
   // Chunks to show and the vertices to start selected (from the 3D selection).
   setChunks(chunks: EditorChunk[], selected: Map<number, Set<number>>): void {
+    this.drag = null;
+    this.boxRect = null;
     this.chunks = chunks;
     this.uvs = new Map(chunks.map(c => [c.index, c.uvs.slice()]));
     this.selected.clear();
@@ -90,6 +93,7 @@ export class UvEditor {
 
   // Applies a transform to the selected UVs (u, v space) and commits it.
   transformSelected(fn: (u: number, v: number) => [number, number]): void {
+    if (!this.editable) { return; }
     const edits: UvEdits = new Map();
     for (const [ci, set] of this.selected) {
       const uv = this.uvs.get(ci)!;
@@ -220,7 +224,7 @@ export class UvEditor {
     if (e.button === 1 || e.button === 2) { this.drag = { mode: 'pan', x, y, moved: false }; return; }
     if (e.button !== 0) { return; }
     const hit = this.hitVertex(x, y);
-    if (hit && this.selected.get(hit.chunk)?.has(hit.vertex) && !e.shiftKey && !e.ctrlKey) {
+    if (this.editable && hit && this.selected.get(hit.chunk)?.has(hit.vertex) && !e.shiftKey && !e.ctrlKey) {
       this.drag = { mode: 'move', x, y, moved: false, start: new Map([...this.uvs].map(([k, v]) => [k, v.slice()])) };
       return;
     }

@@ -171,6 +171,8 @@ export class ModelEditorPageLogic {
   readonly maxRadius = signal(100);
 
   readonly dirtyCount = computed(() => this.status()?.dirty.length ?? 0);
+  readonly gta = computed(() => this.status()?.game === 'GTA: San Andreas');
+  readonly visibleMenus = computed(() => this.gta() ? this.menus.filter(menu => !['add', 'mesh'].includes(menu.id)) : this.menus);
   readonly kinds = computed(() => KIND_ORDER.filter(k => (this.status()?.models?.[k] ?? 0) > 0));
   readonly groups = computed(() => {
     const q = this.query().toLowerCase();
@@ -223,7 +225,8 @@ export class ModelEditorPageLogic {
         { label: 'Open package…', shortcut: 'Ctrl+O', action: () => this.pickPackage() },
         { label: 'Import from package…', action: () => void this.importFromPackage(), disabled: () => !this.canImport() },
         { separator: true, label: '' },
-        { label: 'Save copy…', shortcut: 'Ctrl+S', action: () => void this.saveZdbCopy(), disabled: () => !this.dirtyCount() },
+        { label: () => this.gta() ? 'Save model as DFF…' : 'Save copy…', shortcut: 'Ctrl+S', action: () => void this.saveZdbCopy(), disabled: () => this.busy() || (this.gta() ? !this.description()?.gta : !this.dirtyCount()) },
+        { label: 'Save edited IMG archive…', action: () => void this.saveGta('img'), disabled: () => !this.canSaveImg() },
         { label: 'Export memory-card pack…', action: () => void this.exportPack(), disabled: () => !!this.status()?.game || !this.dirtyCount() },
         { separator: true, label: '' },
         { label: 'Export model as OBJ…', action: () => void this.exportObj(), disabled: () => !this.mesh() },
@@ -418,6 +421,7 @@ export class ModelEditorPageLogic {
 
   setSelectMode(mode: SelectMode): void { this.selectMode.set(mode); this.viewport.setSelectMode(mode); }
   setTool(tool: Tool): void {
+    if (this.gta() && tool !== 'select') { return; }
     if (tool === 'weights' && !this.mesh()?.skeleton) { this.say('Weight paint is for skinned characters.', true); return; }
     if ((tool === 'move' || tool === 'rotate' || tool === 'scale') && this.viewport.posed) {
       this.say('Vertices move in the bind pose: set Pose to Bind pose (Paint tab) first.');
@@ -575,6 +579,14 @@ export class ModelEditorPageLogic {
       this.status.set(status);
       this.textures.invalidate(status.revision);
       this.models.set(await this.client.listModels());
+      this.query.set('');
+      this.kindFilter.set('');
+      this.poseClips.set([]);
+      this.poseClip.set('');
+      this.poseData = null;
+      this.exportClips.set(new Set());
+      this.exportClipNames.set([]);
+      if (this.gta()) { this.propTab.set('item'); this.setTool('select'); }
       this.current.set(null);
       this.description.set(null);
       this.mesh.set(null);
@@ -582,7 +594,7 @@ export class ModelEditorPageLogic {
       this.say(`Opened ${status.path}: ${this.models().length} models (session ${status.session}).`);
       const first = model
         ? this.models().find(m => m.archive.toLowerCase() === model.archive.toLowerCase() && m.name === model.name)
-        : undefined;
+        : this.gta() ? this.models().find(m => m.name === (status.initialModel ?? 'cj')) ?? this.models()[0] : undefined;
       if (first) { await this.select(first); }
       if (!this.pollTimer) { this.pollTimer = setInterval(() => void this.poll(), 2000); }
     } catch (err) {
@@ -699,7 +711,7 @@ export class ModelEditorPageLogic {
       this.viewport.setMesh(mesh, pixels, keepCamera);
       if (mesh.skeleton && this.poseData) { this.viewport.setPose(poseBones(mesh.skeleton, this.poseData, this.poseTime())); }
       if (mesh.skeleton && !this.poseClips().length) { void this.loadPoseClips(); }
-      if (mesh.skeleton && !this.characterPresets().length) { void this.loadCharacterPresets(); }
+      if (mesh.skeleton && !this.status()?.game && !this.characterPresets().length) { void this.loadCharacterPresets(); }
       const ext = Math.max(...[0, 1, 2].map(k => {
         let lo = Infinity, hi = -Infinity;
         for (const c of mesh.chunks) { for (let i = k; i < c.positions.length; i += 3) { lo = Math.min(lo, c.positions[i]); hi = Math.max(hi, c.positions[i]); } }
@@ -720,11 +732,13 @@ export class ModelEditorPageLogic {
       // A model that loads replaces the previous model's error.
       if (!keepCamera && this.messageIsError()) { this.say(`${m.name}: ${mesh.chunks.length} chunks${missing.length ? `, ${missing.length} texture(s) not found` : ''}.`); }
     } catch (err) {
+      if (this.current() !== m) { return; }
+      this.description.set(null);
       this.mesh.set(null);
       this.viewport.setMesh(null, {});
       this.say(`${m.name}: ${errText(err)}`, true);
     } finally {
-      this.loading.set(false);
+      if (this.current() === m) { this.loading.set(false); }
     }
   }
 
@@ -742,10 +756,23 @@ export class ModelEditorPageLogic {
     return (await this.editResult(label, op)) !== null;
   }
 
+  editGta(op: Record<string, unknown>, label: string): Promise<boolean> {
+    if (!this.gta() || !this.description()?.gta || this.busy() || this.loading()) { return Promise.resolve(false); }
+    return this.edit(label, { ...op, revision: this.description()!.revision });
+  }
+
+  async previewGtaTexture(name: string): Promise<string> {
+    const d = this.description();
+    if (!d?.gta) throw new Error('Select a GTA model.');
+    const { png } = await this.client.texture(`${d.archive}|${d.namespace}/${name}`, null);
+    return 'data:image/png;base64,' + png;
+  }
+
   // As edit, answering the server's reply (null when the edit failed).
   private async editResult(label: string, op: Record<string, unknown>): Promise<Record<string, unknown> | null> {
     const m = this.current();
-    if (!m || this.status()?.game || this.status()?.readOnly) { return null; }
+    const native = this.gta() && ['gtaFrame', 'gtaMaterial', 'gtaGeometry', 'gtaUv'].includes(String(op.op));
+    if (!m || (this.status()?.game && !native) || this.status()?.readOnly) { return null; }
     this.busy.set(true);
     try {
       const raw = await this.client.edit({ archive: m.archive, model: m.name, label, ...op }) as unknown as { result?: { revision: number; description?: string }; newChunks?: number[]; revision?: number; description?: string };
@@ -917,18 +944,25 @@ export class ModelEditorPageLogic {
   }
 
   private async loadPoseClips(): Promise<void> {
-    try { this.poseClips.set((await this.client.listAnimations()).clips); }
-    catch { this.poseClips.set([]); }
+    const session = this.client.session;
+    try {
+      const { clips } = await this.client.listAnimations();
+      if (session === this.client.session) { this.poseClips.set(clips); }
+    } catch { if (session === this.client.session) { this.poseClips.set([]); } }
   }
+
+  poseKey(clip: AnimationSummary): string { return this.gta() ? clip.source + '/' + clip.name : clip.name; }
 
   /** Poses the character with a clip ('' for the bind pose), at its start or where the slider is. */
   async setPoseClip(name: string): Promise<void> {
     const skeleton = this.mesh()?.skeleton;
     this.poseClip.set(name);
     if (!name || !skeleton) { this.poseData = null; this.poseDuration.set(0); this.viewport.setPose(null); return; }
-    const summary = this.poseClips().find(c => c.name === name);
+    const summary = this.poseClips().find(c => this.poseKey(c) === name);
     try {
-      this.poseData = await this.client.animation(name, summary?.source) as PoseClip;
+      const data = await this.client.animation(summary?.name ?? name, summary?.source) as PoseClip;
+      if (this.mesh()?.skeleton !== skeleton || this.poseClip() !== name) { return; }
+      this.poseData = data;
       this.poseDuration.set(this.poseData.duration);
       this.poseTime.set(Math.min(this.poseTime(), this.poseData.duration));
       this.viewport.setPose(poseBones(skeleton, this.poseData, this.poseTime()));
@@ -947,12 +981,13 @@ export class ModelEditorPageLogic {
   }
 
   private commitUv(edits: UvEdits): Promise<boolean> {
+    if (!this.canEditUvs() || this.busy() || this.loading()) { this.refreshUv(); return Promise.resolve(false); }
     const m = this.mesh()!;
     const chunks = [...edits].map(([ci, map]) => ({
       geometryOffset: m.chunks[ci].geometryOffset,
       vertices: [...map].map(([i, uv]) => ({ i, uv })),
     }));
-    return this.edit('Edit UVs', { op: 'setVertices', chunks });
+    return this.gta() ? this.editGta({ op: 'gtaUv', chunks }, 'Edit DFF UVs') : this.edit('Edit UVs', { op: 'setVertices', chunks });
   }
 
   // Numeric transform panel.
@@ -1245,12 +1280,21 @@ export class ModelEditorPageLogic {
 
   // ------------------------------------------------------------------ UV editor
 
+  canEditUvs(): boolean {
+    const s = this.status();
+    if (!s || s.readOnly) { return false; }
+    if (!s.game) { return true; }
+    const chunks = this.uvChunks();
+    return this.gta() && !!this.description()?.gta && chunks.length > 0 && chunks.every(c => c.geometryOffset >= 0);
+  }
+
   refreshUv(): void {
     if (!this.uv) { return; }
     const m = this.mesh();
     const sel = this.viewport?.selectionVertexMap() ?? new Map<number, Set<number>>();
     const chunks = m ? [...sel.keys()].map(i => m.chunks[i]).filter(Boolean) : [];
     this.uvChunks.set(chunks);
+    this.uv.editable = this.canEditUvs();
     const tex = chunks.find(c => c.texture)?.texture?.toLowerCase();
     this.uv.setTexture(tex ? this.texturePixels[tex] ?? null : null);
     // Vertex / face selections start selected in the UV editor; whole chunks start unselected.
@@ -1313,10 +1357,27 @@ export class ModelEditorPageLogic {
   }
 
   async saveZdbCopy(): Promise<void> {
+    if (this.gta()) { await this.saveGta('dff'); return; }
     const s = this.status();
     if (!s || !this.dirtyCount()) { return; }
     const path = await host.pickPackageCopy(s);
     if (path) { await this.save({ mode: 'zdb', outputPath: path }); }
+  }
+
+  canSaveImg(): boolean {
+    const m = this.current();
+    return this.gta() && !!m && /\.img$/i.test(m.archive) && !this.busy()
+      && !!this.status()?.dirty.some(name => name.startsWith(m.archive + '/'));
+  }
+
+  async saveGta(mode: 'dff' | 'img'): Promise<void> {
+    const m = this.current(), session = this.client.session;
+    if (!m || !this.gta() || this.busy() || (mode === 'dff' ? !this.description()?.gta : !this.canSaveImg())) { return; }
+    const name = mode === 'dff' ? m.name + '.dff' : m.archive;
+    const path = await host.browse({ mode: 'save', title: 'Save a copy of ' + name,
+      filters: [{ label: mode.toUpperCase(), extensions: [mode] }], fileName: name, key: 'gta-' + mode, submitLabel: 'Save copy' });
+    if (!path || this.client.session !== session) { return; }
+    await this.save({ mode, outputPath: path, archive: m.archive, model: m.name });
   }
 
   async exportPack(): Promise<void> {
@@ -1325,7 +1386,7 @@ export class ModelEditorPageLogic {
     await this.save({ mode: 'pack', packName: picked.packName, outputPath: picked.path ?? undefined });
   }
 
-  private async save(args: { mode: 'zdb' | 'pack'; outputPath?: string; packName?: string }): Promise<void> {
+  private async save(args: { mode: 'zdb' | 'pack' | 'dff' | 'img'; outputPath?: string; packName?: string; archive?: string; model?: string }): Promise<void> {
     this.busy.set(true);
     try {
       const r = await this.client.save(args);

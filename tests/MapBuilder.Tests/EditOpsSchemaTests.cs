@@ -41,6 +41,8 @@ namespace MapBuilder.Tests
             int start = source.IndexOf("private static object Edit(AssetSession s, string? json)", StringComparison.Ordinal);
             int end = source.IndexOf("throw new ArgumentException($\"Unknown op '{op}'\")", start, StringComparison.Ordinal);
             var served = Regex.Matches(source[start..end], "case \"([A-Za-z]+)\":").Select(m => m.Groups[1].Value).ToHashSet();
+            var gta = File.ReadAllText(RepoFile("server", "Services", "Assets", "GtaAssetService.Edits.cs"));
+            served.UnionWith(Regex.Matches(gta, "case \"(gta[A-Za-z]+)\":").Select(m => m.Groups[1].Value));
             var table = EditOps.All.Select(s => s.Op).ToHashSet();
             Assert.Equal(served.OrderBy(x => x), table.OrderBy(x => x));
         }
