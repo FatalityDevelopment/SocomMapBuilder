@@ -255,8 +255,9 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
             if (_assembledCj != null && model.Archive == _assembledCj.Archive) _meshes.Remove(_assembledCj);
         }
 
-        /// <summary>Stream the original IMG to an atomic copy and write the edited DFFs to their own slots.</summary>
-        public void SaveImgCopy(string archive, string outputPath)
+        /// <summary>Stream the original IMG to an atomic copy and write the edited DFFs to their own slots, and any other
+        /// <paramref name="entries"/> (by entry name, e.g. an edited stream IPL) over theirs.</summary>
+        public void SaveImgCopy(string archive, string outputPath, IReadOnlyDictionary<string, byte[]>? entries = null)
         {
             if (!_imgByArchive.TryGetValue(archive, out var img))
                 throw new ArgumentException($"No IMG archive named {archive} in this package");
@@ -266,7 +267,8 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
             if (IsSourceFile(full))
                 throw new InvalidOperationException("Choose a separate output file for the IMG copy.");
             var changes = _edited.Where(e => e.Key.Archive.Equals(archive, StringComparison.OrdinalIgnoreCase)).ToArray();
-            if (changes.Length == 0) throw new InvalidOperationException($"No edited models in {archive}.");
+            var others = (entries ?? new Dictionary<string, byte[]>()).Select(kv => (Entry: img.Find(kv.Key) ?? throw new KeyNotFoundException($"{kv.Key} is not in {archive}"), Bytes: kv.Value)).ToArray();
+            if (changes.Length == 0 && others.Length == 0) throw new InvalidOperationException($"No edited models in {archive}.");
             Directory.CreateDirectory(Path.GetDirectoryName(full)!);
             string temp = full + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try
@@ -276,6 +278,8 @@ namespace CodeDesigner.Ps2.FileFormats.Gta
                     img.CopyTo(writer);
                     foreach (var (model, bytes) in changes)
                         img.WriteEntry(writer, img.Find(model.Name + ".dff")!, bytes);
+                    foreach (var (entry, bytes) in others)
+                        img.WriteEntry(writer, entry, bytes);
                     writer.Flush(flushToDisk: true);
                 }
                 File.Move(temp, full, overwrite: true);

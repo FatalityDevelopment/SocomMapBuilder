@@ -12,9 +12,9 @@ import { host, openRequest, useSignals } from './shared';
 import { aiChange, samePath, type AiFocus } from './shared/aiBridge';
 
 // CA and Battlefront edits change placements and points only, so an undo keeps the decoded meshes.
-const placementsOnly = (game?: string) => game === 'SOCOM 3 / Combined Assault' || game === 'Star Wars: Battlefront';
-// GTA: San Andreas' map is view-only; its session stays editable for the Model Editor.
-export const mapViewOnly = (s: SessionStatus | null | undefined) => !!s?.readOnly || s?.game === 'GTA: San Andreas';
+const placementsOnly = (game?: string) => game === 'SOCOM 3 / Combined Assault' || game === 'Star Wars: Battlefront' || game === 'GTA: San Andreas';
+// A session the Map Builder cannot edit.
+export const mapViewOnly = (s: SessionStatus | null | undefined) => !!s?.readOnly;
 
 // Callbacks are read through refs, so the page can mirror selection without coupling session logic to its UI.
 export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,

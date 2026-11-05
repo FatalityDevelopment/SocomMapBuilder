@@ -6,14 +6,23 @@ namespace MapBuilder.Server.Services.Assets;
 
 internal static partial class GtaAssetService
 {
-    internal sealed record Step(GtaPackage.Model Model, string Description, byte[] Before, byte[] After);
+    /// <summary>An undo step: a DFF edit (Model, bytes before and after) or map placement moves.</summary>
+    internal sealed record Step(GtaPackage.Model? Model, string Description, byte[]? Before, byte[]? After, IReadOnlyList<Move>? Moves = null);
     private static readonly object FileGate = new();
     private static string Label(GtaPackage.Model m) => $"{m.Archive}/{m.Name}.dff";
+
+    private static string[] StepLabels(Session s, Step step) => step.Moves != null
+        ? step.Moves.Select(m => s.Package.PlacementFileLabel(m.File)).Distinct().ToArray()
+        : new[] { Label(step.Model!) };
+
+    /// <summary>Edited DFFs and moved placements' IPLs, as the session's unsaved names.</summary>
+    private static string[] DirtyNames(Session s) => s.Dirty.Select(Label).Concat(DirtyPlacementFiles(s)).Order().ToArray();
 
     private static object Edit(Session s, string? json)
     {
         using var doc = JsonDocument.Parse(json ?? "{}");
         var op = doc.RootElement;
+        if (IsMapOp(op)) return MapEdit(s, op);
         if (EditOps.Check(op) is { } error) throw new ArgumentException(error);
         if (op.GetProperty("op").GetString() is not ("gtaFrame" or "gtaMaterial" or "gtaGeometry" or "gtaUv"))
             throw new NotSupportedException("Use gtaFrame, gtaMaterial, gtaGeometry or gtaUv for a native DFF edit.");
@@ -92,16 +101,17 @@ internal static partial class GtaAssetService
     {
         var source = undo ? s.Undo : s.Redo;
         if (!source.TryPeek(out var step)) throw new InvalidOperationException(undo ? "Nothing to undo" : "Nothing to redo");
-        Apply(s, step.Model, undo ? step.Before : step.After);
+        if (step.Moves != null) ApplyMoves(s, step.Moves, undo);
+        else Apply(s, step.Model!, undo ? step.Before! : step.After!);
         source.Pop();
         (undo ? s.Redo : s.Undo).Push(step);
-        return new { revision = s.Revision, step.Description, changed = new[] { Label(step.Model) } };
+        return new { revision = s.Revision, step.Description, changed = StepLabels(s, step) };
     }
 
     private static object History(Session s)
     {
-        object[] Rows(IEnumerable<Step> steps) => steps.Select(step => new { step.Description, archives = new[] { Label(step.Model) } }).ToArray();
-        return new { revision = s.Revision, undo = Rows(s.Undo), redo = Rows(s.Redo), dirty = s.Dirty.Select(Label).Order().ToArray() };
+        object[] Rows(IEnumerable<Step> steps) => steps.Select(step => new { step.Description, archives = StepLabels(s, step) }).ToArray();
+        return new { revision = s.Revision, undo = Rows(s.Undo), redo = Rows(s.Redo), dirty = DirtyNames(s) };
     }
 
     private sealed record SaveArgs(string? Mode, string? OutputPath, string? Archive, string? Model);
@@ -109,7 +119,7 @@ internal static partial class GtaAssetService
     private static object Save(Session s, string? json)
     {
         var args = AssetJson.Parse<SaveArgs>(json);
-        if (string.IsNullOrWhiteSpace(args?.OutputPath)) throw new ArgumentException("Choose a separate .DFF or .IMG output file.");
+        if (string.IsNullOrWhiteSpace(args?.OutputPath)) throw new ArgumentException("Choose a separate .DFF or .IMG output file (or, for moved map placements, a folder).");
         string full = Path.GetFullPath(args.OutputPath);
         string[] leaves;
         lock (FileGate)
@@ -127,7 +137,11 @@ internal static partial class GtaAssetService
                     s.Package.SaveImgCopy(args.Archive, full);
                     leaves = s.Dirty.Where(m => m.Archive.Equals(args.Archive, StringComparison.OrdinalIgnoreCase)).Select(Label).Order().ToArray();
                     break;
-                default: throw new ArgumentException("Save a model with mode dff, or all edited models in one archive with mode img.");
+                // The Map Builder's save: the moved placements' IPLs, at their disc paths under a folder.
+                case null or "zdb" or "map" when DirtyPlacementFiles(s).Any():
+                    leaves = DirtyPlacementFiles(s).Order().ToArray();
+                    return new { written = SaveMap(s, full), leaves, revision = s.Revision };
+                default: throw new ArgumentException("Save a model with mode dff, all edited models in one archive with mode img, or moved map placements with mode map (a folder).");
             }
         }
         return new { written = new[] { full }, leaves, revision = s.Revision };

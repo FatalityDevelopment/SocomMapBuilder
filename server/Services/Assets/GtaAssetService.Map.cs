@@ -130,7 +130,8 @@ namespace MapBuilder.Server.Services.Assets
                 kind, model = p.Model!.Name, instance = $"{p.Zone}:{Path.GetFileNameWithoutExtension(p.File)}:{p.Row}",
                 path = $"/{p.AreaId}/{p.Model.Name}/{Path.GetFileNameWithoutExtension(p.File)}#{p.Row}",
                 position = new[] { p.Matrix[12], p.Matrix[13], p.Matrix[14] }, scale = 1f, matrix = p.Matrix,
-                geoIndex = (int?)null, clutterIndex = (int?)null, source = $"{p.Model.Archive}:{p.Model.Name}", caNode = false, multiMove = false,
+                // The area's own placements move by id (moveInstance), several in one batch; distant LOD blocks stay put.
+                geoIndex = (int?)null, clutterIndex = (int?)null, source = $"{p.Model.Archive}:{p.Model.Name}", caNode = kind == "reference", multiMove = kind == "reference",
             };
             float margin = overview ? 0 : LodMargin;
             float minX = area.MinX - margin, maxX = area.MaxX + margin, minZ = area.MinZ - margin, maxZ = area.MaxZ + margin;
