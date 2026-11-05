@@ -5,7 +5,8 @@
 <h1 align="center">SOCOM Map Builder</h1>
 
 <p align="center">
-  A map, model, texture and animation editor for SOCOM U.S. Navy SEALs II on the PlayStation 2.
+  A map, model, texture and animation editor for SOCOM U.S. Navy SEALs II on the PlayStation 2,<br>
+  with map and model support for SOCOM 1, Combined Assault, Fireteam Bravo 2, GTA: San Andreas and Star Wars: Battlefront.
 </p>
 
 <p align="center">
@@ -19,11 +20,11 @@
 
 Open a SOCOM II package and work across the whole map: its world, props, clutter, characters, weapons, textures, palettes, animations, actions and mission tables. Every page shares one in-memory session per package, so edits made anywhere are undone together and saved together, as a copy of the `.ZDB` / `.CDB` or as a memory-card pack for `mc0:`. A built-in MCP server lets AI assistants read and edit the same sessions while you watch.
 
-<img src="docs/screenshots/map-builder.jpg" alt="Map Builder showing M51 with action icons, objective flags, the HUD minimap and the Mission tab" width="850">
+<img src="docs/screenshots/map-builder.jpg" alt="Map Builder showing M51 in its baked lighting with action icons, objective flags, the HUD minimap and the Mission tab" width="850">
 
 > **Get started:** build the web client, run the server and open `http://127.0.0.1:8770`. See [Getting started](#getting-started).
 >
-> **Status** — SOCOM II is the primary, tested target. Combined Assault supports editing points, actor starts and headings, valves, allowed weapon slots and world placements. Edits save to an archive copy and reopen in the editor. In-game verification is pending. The Model Editor opens the PS2 GTA: San Andreas disc, edits native DFF models, and saves DFF or IMG copies; the Map Builder shows its map area by area and moves its placements. Star Wars: Battlefront models, textures and maps (with command posts, paths and regions) open, and map placements can be moved and saved to `.LVL` or disc copies; its models convert to SOCOM II. See [Game support](docs/game-support.md).
+> **Status** — SOCOM II is the primary, tested target. Five more games open in the same editors, each with map edits that save to copies of their own files or a patched disc image; see [Other games](#other-games) and [Game support](docs/game-support.md).
 
 ## Contents
 
@@ -35,6 +36,7 @@ Open a SOCOM II package and work across the whole map: its world, props, clutter
   - [Animation Editor](#animation-editor)
   - [Asset Viewer](#asset-viewer)
   - [AI-assisted editing](#ai-assisted-editing-with-mcp)
+- [Other games](#other-games)
 - [In game](#in-game)
 - [Getting started](#getting-started)
 - [Documentation](#documentation)
@@ -52,7 +54,9 @@ Open a SOCOM II package and work across the whole map: its world, props, clutter
 | **Textures and palettes** | Replace or create textures and palettes from images, import them from other packages, export PNG |
 | **Animation Editor** | Play and edit character clips, key bones, and fire mounted weapons with their muzzle effects |
 | **Asset Viewer** | Browse a whole disc down to archive records; preview every retail file type, from models and textures to sounds, movies and memory-card icons; edit records in place |
-| **Conversion** | SOCOM II models to SOCOM 3 / Combined Assault; Combined Assault and GTA: San Andreas models to SOCOM II |
+| **Other games** | SOCOM 1, Combined Assault, Fireteam Bravo 2 (PSP), GTA: San Andreas and Star Wars: Battlefront maps drawn and edited in the Map Builder |
+| **Conversion** | SOCOM II models to SOCOM 3 / Combined Assault; Combined Assault, GTA: San Andreas, Battlefront and Fireteam Bravo 2 models to SOCOM II |
+| **Disc images** | Save any game's edits straight into a copy of its `.ISO` |
 | **AI (MCP)** | An MCP server with tools to read, edit, validate and save packages, build weapons and characters, and drive the app's camera |
 | **Safety** | Undo for every edit, copy-on-save with backups, all-or-nothing writes and autosave recovery |
 
@@ -100,7 +104,7 @@ Edit props, vehicles, weapons and skinned characters from whole objects down to 
 
 <img src="docs/screenshots/model-editor-weights.png" alt="The skin weight view on a character" width="850">
 
-**Weapons, textures and conversion.** Import models and textures from other packages, export OBJ (optionally subdivided and rounded), and convert between SOCOM II, SOCOM 3 / Combined Assault and GTA: San Andreas.
+**Weapons, textures and conversion.** Import models and textures from other packages, export OBJ (optionally subdivided and rounded), convert between SOCOM II and SOCOM 3 / Combined Assault, and bring GTA: San Andreas, Battlefront and Fireteam Bravo 2 models into SOCOM II.
 
 <img src="docs/screenshots/model-editor-weapon.png" alt="The M4A1 with M203 in the Model Editor with the Texture tab open" width="850">
 
@@ -138,6 +142,36 @@ claude mcp add --transport http mapbuilder http://127.0.0.1:8770/mcp
 
 **[MCP server guide →](docs/mcp-server.md)**
 
+## Other games
+
+The same Map Builder, Model Editor and Asset Viewer open five more games. Each one's maps draw with their own lighting, and placements move with the same gizmo, undo and save as SOCOM II.
+
+| Game | Map Builder | Model Editor | To SOCOM II |
+|---|---|---|---|
+| **SOCOM U.S. Navy SEALs** | Maps from the disc's folders: world, props and clutter | Map packages open like SOCOM II's | (shared formats) |
+| **SOCOM: Combined Assault** | Locations and missions by name; move points, world objects, actor starts and headings; edit valves and allowed weapons | Models and textures | Models |
+| **SOCOM: Fireteam Bravo 2** (PSP) | The island, props, characters, missions and points; move props, vehicles, trees and points | Characters, weapons, props | Characters, weapons, props |
+| **GTA: San Andreas** (PS2) | The map by area with timed objects and water; place, move, turn and delete placements | DFF models, frames, materials, UVs; save DFF or IMG | Models and character clips |
+| **Star Wars: Battlefront** | All 22 maps with command posts, paths and regions; move props, command posts and vehicle spawns | Soldiers, vehicles, weapons, props | Soldiers, weapons, vehicles, props |
+
+Every game's edits can be saved into a copy of its disc image. Edits outside SOCOM II have not all been tried in game yet; [Game support](docs/game-support.md) lists what has.
+
+<img src="docs/screenshots/swbf-map-tatooine.jpg" alt="Star Wars: Battlefront's Tatooine (Mos Eisley) map in the Map Builder with its baked lighting, paths and command post regions" width="850">
+
+*Star Wars: Battlefront — Mos Eisley, with spawn and AI paths and command post regions.*
+
+<img src="docs/screenshots/ca-map-compound.jpg" alt="A Combined Assault location in the Map Builder with its baked lighting and objective flags" width="850">
+
+*SOCOM: Combined Assault — a city compound with its mission's objective flags.*
+
+<img src="docs/screenshots/ftb2-map-fort.jpg" alt="Fireteam Bravo 2's Fort island in the Map Builder with its baked lighting" width="850">
+
+*SOCOM: Fireteam Bravo 2 (PSP) — the Fort island.*
+
+<img src="docs/screenshots/gta-map-grove-street.png" alt="Grove Street in the Map Builder: CJ's house selected in the cul-de-sac" width="850">
+
+*GTA: San Andreas — Grove Street, with CJ's house selected.*
+
 ## In game
 
 Assets in game:
@@ -158,11 +192,11 @@ Assets in game:
 
 *A character asset from Combined Assault.*
 
-More, including GTA: San Andreas models, in [Game support](docs/game-support.md).
+More, including GTA: San Andreas models and maps, in [Game support](docs/game-support.md).
 
 ## Getting started
 
-**Requirements:** [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0), [Node.js](https://nodejs.org/) 20 or later, and your own SOCOM II game files (this repository ships none).
+**Requirements:** [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0), [Node.js](https://nodejs.org/) 20 or later, and your own game files: a SOCOM II disc or its `RUN` folder, or any of the other supported games (this repository ships none).
 
 ```bash
 cd web
@@ -199,7 +233,7 @@ Map Builder is actively developed, and support differs by game and asset type.
 - Map, model and animation edits round-trip through save and reopen. Imported models, imported textures and textures made from images render in the editors, but not every combination has been tested in game.
 - **Runtime VRAM is limited.** Large textures or many new textures may exceed what a map can use in game.
 - An imported character can appear correctly in the editors, but spawning it in a mission also needs the relevant character records.
-- SOCOM 3 and Combined Assault workflows vary by format and feature. GTA: San Andreas models convert to SOCOM II packs. Fireteam Bravo 2 (PSP) maps, models and textures open read-only; the other two Fireteam Bravo games have not been tested.
+- **Other games:** SOCOM 3 and Combined Assault workflows vary by format and feature; Combined Assault edits are not yet verified in game. GTA: San Andreas edits have booted on a patched disc. Battlefront and Fireteam Bravo 2 map edits keep file sizes (props cannot be added or deleted yet) and have not been tried in game, and their animations are not converted yet. SOCOM 1 saves are untested, and the other two Fireteam Bravo games have not been tried.
 - This repository does not include game assets, or the CodeDesigner runtime source used to inject map items and launch new maps.
 
 ## Related projects

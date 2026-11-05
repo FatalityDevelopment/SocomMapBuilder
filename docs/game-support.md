@@ -5,6 +5,7 @@ SOCOM U.S. Navy SEALs II is the primary target. Combined Assault also supports s
 | Game | Open | Edit | Convert |
 |---|---|---|---|
 | **SOCOM U.S. Navy SEALs II** | Packages (`.ZDB`, `.CDB`), loose `.ZED` / `.ZAR`, unpacked folders, the disc | Maps, models, textures, palettes, animations, mission tables and disc records | To SOCOM 3 / Combined Assault |
+| **SOCOM U.S. Navy SEALs** | Map folders on the disc (`RUN\MP\MP1`, `RUN\SP\M5`): world, props and clutter | As SOCOM II packages; saves untested in game. [Disc layout](formats/socom1.md) | — |
 | **SOCOM: Combined Assault** | Location archives by name, missions, world, actors, loadouts and named objective areas | Points, actor starts and headings, valve start values, allowed weapon slots and world placements. Save to a copy. | Models to SOCOM II |
 | **SOCOM 3** | Compatible asset archives | Map edits verified on the Combined Assault disc only | Compatible models to SOCOM II |
 | **Grand Theft Auto: San Andreas (PS2)** | Mounted disc, ISO, IMG or DFF; the map by area | Frame positions, geometry transforms and material properties; move and turn map placements. Save DFF, IMG or IPL copies, or a patched `.ISO`. | Models and selected character clips to SOCOM II |
