@@ -183,7 +183,7 @@ export function ModelEditorPage() {
               ))}
             </div>
             <div className="me-list">
-              {!s && <div className="me-empty">File › Open package… to load a SOCOM package or a GTA: San Andreas disc folder, ISO, IMG or DFF.</div>}
+              {!s && <div className="me-empty">File › Open package… to load a SOCOM package or a GTA: San Andreas disc folder, ISO, IMG or DFF, or a Star Wars: Battlefront .ISO / .LVL.</div>}
               {c.groups().map(group => (
                 <div key={group.kind}>
                   <div className="me-group-title">{c.kindLabel(group.kind)} <span className="lm-muted">{group.models.length}</span></div>

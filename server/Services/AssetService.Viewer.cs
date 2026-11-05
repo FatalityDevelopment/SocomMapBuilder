@@ -33,7 +33,8 @@ namespace MapBuilder.Server.Services
         private sealed record ViewerRequest(int[]? Inner, int? Sample, int? Rate, string? Session, string? Archive, int? Palette, int? Effect);
 
         // EntryPath: a .ZDB root entry's path in the package (what PACKAGE_EDIT names it by).
-        private sealed record ViewerNode(string Name, long Size, Func<byte[]> Bytes, byte[]? Loaded, string? EntryPath = null);
+        // Peek: the first bytes without reading the whole record (records of a disc image).
+        private sealed record ViewerNode(string Name, long Size, Func<byte[]> Bytes, byte[]? Loaded, string? EntryPath = null, Func<int, byte[]>? Peek = null);
 
         private sealed class Place
         {
@@ -43,6 +44,7 @@ namespace MapBuilder.Server.Services
             public required long Size { get; init; }
             public required Func<byte[]> Bytes { get; init; }
             public byte[]? Loaded { get; init; }
+            public Func<int, byte[]>? Peek { get; init; }
         }
 
         private static void RegisterViewer(CommandRegistry reg)
@@ -83,7 +85,7 @@ namespace MapBuilder.Server.Services
                 int i = inner[depth];
                 if (i < 0 || i >= children.Count) throw new KeyNotFoundException($"{place.Name} has no entry #{i}");
                 var child = children[i];
-                place = new Place { Path = full, Inner = inner[..(depth + 1)], Name = child.Name, Size = child.Size, Bytes = child.Bytes, Loaded = child.Loaded };
+                place = new Place { Path = full, Inner = inner[..(depth + 1)], Name = child.Name, Size = child.Size, Bytes = child.Bytes, Loaded = child.Loaded, Peek = child.Peek };
             }
             return place;
         }
@@ -92,6 +94,8 @@ namespace MapBuilder.Server.Services
         private static IReadOnlyList<ViewerNode>? Children(Place p)
         {
             if (p.Inner.Length == 0 && ZdbArchive.IsArchivePath(p.Path)) return ZdbNodes(p.Path);
+            if (p.Inner.Length == 0 && IsDiscImage(p.Path)) return DiscNodes(p.Path);
+            if (p.Peek != null && p.Size > ViewerReadWhole) return null;
             if (p.Inner.Length == 0 && IsContainerFile(p.Path) && p.Loaded == null) return LooseNodes(p.Path);
             byte[] data = p.Loaded ?? (p.Size <= ViewerReadWhole ? p.Bytes() : Array.Empty<byte>());
             if (!LooksLikeContainer(data)) return null;
@@ -161,6 +165,7 @@ namespace MapBuilder.Server.Services
         private static byte[] Head(Place p, int count)
         {
             if (p.Loaded != null) return p.Loaded.Length <= count ? p.Loaded : p.Loaded[..count];
+            if (p.Peek != null) return p.Peek(count);
             if (p.Inner.Length == 0)
             {
                 using var fs = new FileStream(p.Path, FileMode.Open, FileAccess.Read, FileShare.Read);
@@ -182,6 +187,8 @@ namespace MapBuilder.Server.Services
             if (kind is "models" or "textures" or "palettes" or "geo" or "clips" or "archive" && head.Length > 0 && !LooksLikeContainer(head)) kind = "binary";
             // The HDD install's icon.sys is the text form ("PS2X", key = value lines).
             if (kind == "iconsys" && head.Length >= 4 && !head[..4].SequenceEqual("PS2D"u8)) kind = "binary";
+            // A .LVL that is not a ZeroEngine level (TEST/TESTH.LVL is a zip).
+            if (kind == "level" && head.Length >= 8 && !CodeDesigner.Ps2.FileFormats.Swbf.Ucfb.IsLevel(head)) kind = "binary";
             if (kind != "binary" || head.Length < 4) return kind;
             if (head[0] == 0x7F && head[1] == 'E' && head[2] == 'L' && head[3] == 'F') return "program";
             if (head[..4].SequenceEqual("VAGp"u8)) return "sound";
@@ -195,8 +202,13 @@ namespace MapBuilder.Server.Services
 
         private static string KindByName(string name)
         {
+            // Records of a disc image are named by their path on the disc.
+            string full = name.Replace('\\', '/');
+            name = System.IO.Path.GetFileName(full.TrimEnd('/')) is { Length: > 0 } leaf ? leaf : name;
             string ext = System.IO.Path.GetExtension(name).ToUpperInvariant();
             if (ext is ".ZDB" or ".CDB") return "package";
+            if (ext == ".ISO") return "disc";
+            if (ext == ".LVL") return CodeDesigner.Ps2.FileFormats.Swbf.SwbfPackage.IsStreamLevel(full) ? "binary" : "level";
             if (name.Equals("WORL_MDL.ZED", StringComparison.OrdinalIgnoreCase)) return "models";
             if (FamilyRx.Match(name) is { Success: true } m)
                 return m.Groups["kind"].Value.ToUpperInvariant() switch { "MDL" => "models", "TXR" => "textures", "PAL" => "palettes", _ => "geo" };
@@ -269,6 +281,7 @@ namespace MapBuilder.Server.Services
             var place = Resolve(full, req?.Inner);
             string kind = KindOf(place);
             var crumbs = Crumbs(full, place.Inner);
+            if (kind == "level" && SwbfLevelOf(place) is { } level) return SwbfLevelListing(full, place, crumbs, level.Session, level.Archive);
             string? pkg = PackageOf(place, kind);
             if (pkg != null && kind is "models" or "textures" or "palettes" or "geo" or "clips")
             {
@@ -435,6 +448,8 @@ namespace MapBuilder.Server.Services
                 return kind switch
                 {
                     "package" => PackagePreview(place, common),
+                    "disc" => DiscPreview(place, common),
+                    "level" => LevelPreview(place, common),
                     "geo" => GeoPreview(place, common),
                     "models" or "textures" or "palettes" or "clips" or "archive" => ArchivePreview(place, kind, common),
                     "rdr" => RdrPreview(place, common),

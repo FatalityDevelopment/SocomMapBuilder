@@ -10,12 +10,12 @@ import { BytePatch, IconSysEditor, MpsEditor, RdrEditor, TextEditor } from './ed
 import { ClutterEditor, GeoEditor, PaletteEditor, ZanimEditor } from './scene-editors';
 
 const KIND_ICON: Record<ItemKind, string> = {
-  folder: 'library', package: 'harddrive', models: 'database', textures: 'image', palettes: 'sparkles', geo: 'workflow',
+  folder: 'library', disc: 'disc3', level: 'globe', package: 'harddrive', models: 'database', textures: 'image', palettes: 'sparkles', geo: 'workflow',
   clips: 'repeat', archive: 'memorystick', group: 'tag', model: 'globe', texture: 'image', palette: 'sparkles', clip: 'play',
   rdr: 'filecode', mps: 'network', sound: 'radiotower', bank: 'radiotower', movie: 'monitor', image: 'camera', icon: 'star',
   iconsys: 'tag', program: 'terminal', text: 'bookopen', binary: 'code',
 };
-const MODEL_ICON: Record<string, string> = { character: 'bot', weapon: 'zap', world: 'globe', sky: 'sparkles', prop: 'database', library: 'library' };
+const MODEL_ICON: Record<string, string> = { character: 'bot', weapon: 'zap', world: 'globe', sky: 'sparkles', prop: 'database', library: 'library', vehicle: 'workflow', 'first-person': 'eye' };
 
 function kindIcon(item: ViewerItem): string {
   return item.kind === 'model' ? MODEL_ICON[item.ref?.modelKind ?? ''] ?? 'database' : KIND_ICON[item.kind];

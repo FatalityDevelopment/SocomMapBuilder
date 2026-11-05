@@ -25,11 +25,11 @@ export interface Menu { id: string; label: string; items: MenuItem[] }
 
 // GS pixel storage modes (TEX0.PSM).
 const PSM: Record<string, string> = { '0x00': 'PSMCT32', '0x01': 'PSMCT24', '0x02': 'PSMCT16', '0x0A': 'PSMCT16S', '0x13': 'PSMT8', '0x14': 'PSMT4', '0x1B': 'PSMT8H', '0x24': 'PSMT4HL', '0x2C': 'PSMT4HH' };
-const BROWSABLE = new Set<ItemKind>(['folder', 'package', 'models', 'textures', 'palettes', 'geo', 'clips', 'archive']);
+const BROWSABLE = new Set<ItemKind>(['folder', 'disc', 'level', 'package', 'models', 'textures', 'palettes', 'geo', 'clips', 'archive']);
 const LAST_PLACE = 'mapbuilder.viewer.place';
 
 export const KIND_LABEL: Record<ItemKind, string> = {
-  folder: 'Folder', package: 'Package', models: 'Models', textures: 'Textures', palettes: 'Palettes', geo: 'GEO definitions',
+  folder: 'Folder', disc: 'Disc image', level: 'Battlefront level', package: 'Package', models: 'Models', textures: 'Textures', palettes: 'Palettes', geo: 'GEO definitions',
   clips: 'Animations', archive: 'Archive', group: 'Group', model: 'Model', texture: 'Texture', palette: 'Palette', clip: 'Animation clip',
   rdr: 'RDR data', mps: 'AI maps', sound: 'Sound', bank: 'Sound bank', movie: 'Movie', image: 'Screen image', icon: 'Memory-card icon',
   iconsys: 'Icon list', program: 'Program', text: 'Text', binary: 'Data',

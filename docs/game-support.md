@@ -8,6 +8,7 @@ SOCOM U.S. Navy SEALs II is the primary target. Combined Assault also supports s
 | **SOCOM: Combined Assault** | Location archives by name, missions, world, actors, loadouts and named objective areas | Points, actor starts and headings, valve start values, allowed weapon slots and world placements. Save to a copy. | Models to SOCOM II |
 | **SOCOM 3** | Compatible asset archives | Map edits verified on the Combined Assault disc only | Compatible models to SOCOM II |
 | **Grand Theft Auto: San Andreas (PS2)** | Mounted disc, ISO, IMG or DFF | Frame positions, geometry transforms and material properties. Save DFF or IMG copies. | Models and selected character clips to SOCOM II |
+| **Star Wars: Battlefront** | `.ISO` or a `.LVL`, read-only: models, textures and maps | — | — |
 | **SOCOM: Fireteam Bravo** | Not tested | — | — |
 
 ## SOCOM II
@@ -55,6 +56,17 @@ In the **Item** tab, select a frame to change its position relative to its paren
 On the US PS2 disc (SLUS-20946), the editor produces geometry for all 15,208 source DFFs and the assembled CJ preview. All 32,555 texture records decode. The loader uses declared texture dictionaries, their parents, placement links to higher-detail models, and exact raster names. When it searches across archives it requires all candidates to agree on the pixels and keeps the player clothing separate. Of the original 219 unresolved material references, 47 now resolve. The remaining 172 appear in the editor for manual repair.
 
 <img src="screenshots/gta-character.png" alt="CJ from PLAYER.IMG in the Model Editor" width="850">
+
+## Star Wars: Battlefront (read-only)
+
+Open the disc image (`Star Wars - Battlefront (USA).iso`) or a loose `.LVL` in the Model Editor or Asset Viewer. Every level under `DATA/_LVL_PS2` except the streamed sound and movie stores is indexed when the disc opens, which takes a few seconds. Models are named by their level, such as `SIDE/IMP.LVL` for `imp_inf_stormtrooper`.
+
+- **Model Editor:** characters, vehicles, weapons, first-person models, props and sky domes, textured. Characters show in their bind pose; animations are not read yet.
+- **Asset Viewer:** a `.ISO` lists its files by disc path, and a `.LVL` lists its models and textures for preview.
+- **Map Builder:** pick one of the disc's 22 maps from the **Map** list. It draws the terrain (heights, the base texture layer and the baked lighting, with the cut patches of caves and hangars), the placed objects and the sky dome (turn on the Sky layer). The game draws its sky in a small dome that follows the camera; here it is scaled to enclose the map. Sound emitters and particle effects are not drawn.
+- **Command posts, paths and regions:** command posts (with their starting team) and vehicle spawns are map points. The **Paths** layer draws spawn paths (green), AI paths (blue) and the map's boundary (red); the **Regions** layer draws each command post's capture (yellow) and control (orange) regions and the map's other regions. Click a name in the outliner to frame it. Ambient sound regions are left out. Cylinder regions are drawn with the first and third sizes as radii, which is not confirmed.
+
+The terrain's blended texture layers, editing and conversion to SOCOM II are planned. The PS2 position quantisation, bone-space vertices and the terrain and world layouts follow research by the [openbf](https://github.com/sprucey149/openbf) project (MIT).
 
 ## Not included
 
