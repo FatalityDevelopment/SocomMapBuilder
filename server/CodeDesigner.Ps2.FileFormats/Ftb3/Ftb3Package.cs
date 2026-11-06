@@ -132,6 +132,10 @@ namespace CodeDesigner.Ps2.FileFormats.Ftb3
                         data.TexturesByName.TryAdd(e.Name, (a, e));
                     }
             var instanced = Instances(data, level).Where(i => i.Model != null).Select(i => i.Model!).ToHashSet(StringComparer.Ordinal);
+            var modelNames = data.Meshes.Entries.Where(e => e.Type == SsgArchive.Model).Select(e => e.Name).ToList();
+            // Tiles of one object (000Cargoship_Cargoship, 100…, 200…) that no instance places hold world-space
+            // vertices; so does every other tile of that object, instanced or not (WorldTile).
+            var unplacedTiles = modelNames.Where(n => TileOf(n) != null && !instanced.Contains(n)).Select(n => TileOf(n)!).ToHashSet(StringComparer.Ordinal);
             for (int i = 0; i < data.Meshes.Entries.Count; i++)
             {
                 var e = data.Meshes.Entries[i];
@@ -140,10 +144,35 @@ namespace CodeDesigner.Ps2.FileFormats.Ftb3
                 int vertices = list.Sum(p => (int)data.Meshes.U32(p.Offset + 0x68));
                 string kind = e.Name.EndsWith("_LOD", StringComparison.OrdinalIgnoreCase) ? "lod"
                     : IsSky(e.Name) ? "sky"
-                    : instanced.Contains(e.Name) ? "prop" : "world";
+                    : !instanced.Contains(e.Name) || TileOf(e.Name) is { } tile && unplacedTiles.Contains(tile) ? "world" : "prop";
                 data.Models.Add(new Model(e.Name, kind, level, i, list.Count, vertices));
             }
             return _loaded[level] = data;
+        }
+
+        /// <summary>
+        /// The object a tile belongs to: a model named with a tile prefix (<c>000</c>–<c>999</c> or <c>[n]</c>:
+        /// <c>200Cargoship_Cargoship</c>, <c>[3]Valley_terrainmeshRoot1</c>) gives the rest of its name; others null.
+        /// </summary>
+        public static string? TileOf(string name)
+        {
+            var m = System.Text.RegularExpressions.Regex.Match(name, @"^(?:\d{3}|\[\d+\])(.+)$");
+            return m.Success ? m.Groups[1].Value : null;
+        }
+
+        /// <summary>
+        /// Whether an instance of a world model (its vertices already in world space, so it is drawn where it is) is a
+        /// repeat of it elsewhere: one moved by at least the model's own width. Every such instance on the disc is one
+        /// (the carrier's ocean tiles every 509 units, wakes, Soviet Base's distant scenery, the bonus level's rainbows:
+        /// 1.4 to 8 widths away). The others are not drawn: Baltiysk Port's cargo ship and Crossfire Cove's ship each
+        /// have an instance on one tile a third of the ship's length off, which drew that piece of hull beside the ship.
+        /// An instance that does not move the model is the model itself.
+        /// </summary>
+        public static bool IsRepeat(ModelMesh mesh, float[] matrix)
+        {
+            float offset = MathF.Sqrt(matrix[12] * matrix[12] + matrix[13] * matrix[13] + matrix[14] * matrix[14]);
+            float width = Math.Max(mesh.BoundsMax[0] - mesh.BoundsMin[0], mesh.BoundsMax[2] - mesh.BoundsMin[2]);
+            return offset > 1e-3f && offset >= width;
         }
 
         private static bool IsSky(string name) =>

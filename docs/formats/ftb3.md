@@ -73,7 +73,7 @@ Alpha runs 0–255 and fades softly (a conifer's averages 55), so alpha textures
 A level draws:
 
 1. **Instances** (`_inst.ssg`, type `0x07`): `+0x00` a 4×4 matrix (row vectors, translation in row 3, w 1), `+0x40` 1, `+0x48` −1, `+0x50` the model's entry name. Entry names put a number before a bar (`161|Grass_Tall`) to keep copies apart. An instance whose name is no model marks a place; none of Valley's do.
-2. **World models**: the models no instance places (terrain tiles `[n]Valley_terrainmeshRoot1`, water, buildings built in place). Their vertices are already where the level has them.
+2. **World models**: the models no instance places (terrain tiles `[n]Valley_terrainmeshRoot1`, water, buildings built in place). Their vertices are already where the level has them. Big objects are split into tiles named with a prefix (`000Cargoship_Cargoship`, `100…`, `200…`, or `[n]`); when any tile of an object is unplaced, every tile of it is world geometry, instanced or not: the tiles share their edges as stored. An instance of a world tile that moves it is drawn as an extra copy only when it is at least the tile's width away (the carrier's ocean tiles every 509 units, wakes, distant scenery, rainbows: 1.4 to 8 widths). Baltiysk Port's cargo ship and Crossfire Cove's ship each have an instance on one tile a third of the ship's length off; drawing it put a stray piece of hull beside the ship, so it is left out.
 3. **Sky**: the dome and parallax scenery.
 
 Coverage (2026-11-06): all 26 levels draw, with 30,000–134,000 triangles each (Valley: 107 models, 493 instances, 55,800 triangles).

@@ -203,17 +203,26 @@ namespace MapBuilder.Server.Services.Assets
                 geoIndex = (int?)null, clutterIndex = (int?)null, source = $"{s.Level}:{model}", caNode = movable, multiMove = movable,
             };
             var models = pkg.Models(s.Level);
-            int props = 0, world = 0, sky = 0, markers = 0;
+            int props = 0, world = 0, sky = 0, markers = 0, copies = 0, overlapping = 0;
             foreach (var i in pkg.Instances(s.Level))
             {
                 if (i.Model == null) { markers++; continue; }
                 var m = pkg.FindModel(s.Level, i.Model)!;
                 if (m.Kind == "sky") { sky++; instances.Add(Item(m.Name, i.Id, $"/sky/{i.Id}", i.Matrix)); continue; }
+                if (m.Kind == "world")
+                {
+                    // A world tile is drawn where its vertices are (below); an instance of it is drawn as well only when
+                    // it repeats the tile elsewhere.
+                    if (!Ftb3Package.IsRepeat(pkg.BuildMesh(m), i.Matrix)) { overlapping++; continue; }
+                    copies++;
+                    instances.Add(Item(m.Name, i.Id, $"/props/{i.Id}", i.Matrix, movable: true));
+                    continue;
+                }
                 props++;
                 instances.Add(Item(m.Name, i.Id, $"/props/{i.Id}", i.Matrix, movable: true));
             }
             var placed = pkg.Instances(s.Level).Where(i => i.Model != null).Select(i => i.Model!).ToHashSet(StringComparer.Ordinal);
-            foreach (var m in models.Where(m => !placed.Contains(m.Name) && m.Kind is "world" or "sky"))
+            foreach (var m in models.Where(m => m.Kind == "world" || m.Kind == "sky" && !placed.Contains(m.Name)))
             {
                 if (m.Kind == "sky") sky++; else world++;
                 instances.Add(Item(m.Name, m.Name, m.Kind == "sky" ? $"/sky/{m.Name}" : $"/world/{m.Name}", Identity));
@@ -221,7 +230,7 @@ namespace MapBuilder.Server.Services.Assets
             return new
             {
                 sceneNamespace = s.Level,
-                counts = new Dictionary<string, int> { ["prop"] = props, ["world"] = world, ["sky"] = sky, ["not drawn"] = markers },
+                counts = new Dictionary<string, int> { ["prop"] = props, ["world"] = world, ["copy"] = copies, ["sky"] = sky, ["not drawn"] = markers + overlapping },
                 returned = instances.Count, instances, game = Game,
             };
         }
