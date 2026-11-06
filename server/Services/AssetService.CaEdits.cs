@@ -137,19 +137,19 @@ internal sealed partial class ZipperAssetService
     }
 
     /// <summary>
-    /// Fireteam Bravo 2: every ZDB with an edit, written into the output folder at its place under RUN
+    /// Fireteam Bravo and Fireteam Bravo 2: every ZDB with an edit, written into the output folder at its place under RUN
     /// (<c>&lt;output&gt;\FORT_MP\ISLAND_F.ZDB</c>), so a folder save mirrors the disc and a disc-image save finds each
     /// file's place.
     /// </summary>
     private static object PspSave(CaSession s, SaveArgs? args)
     {
         if (args?.Mode != null && !args.Mode.Equals("zdb", StringComparison.OrdinalIgnoreCase))
-            throw new NotSupportedException("Fireteam Bravo 2 maps save as ZDB copies.");
+            throw new NotSupportedException($"{GameOf(s)} maps save as ZDB copies.");
         if (s.Dirty.Count == 0) throw new InvalidOperationException("No changes to save");
         if (string.IsNullOrWhiteSpace(args?.OutputPath)) throw new ArgumentException("Choose a writable output folder for the edited ZDBs.");
         string folder = Path.GetFullPath(args.OutputPath);
         if (File.Exists(folder) || Path.HasExtension(folder) && !Directory.Exists(folder))
-            throw new ArgumentException("Fireteam Bravo 2 saves write a folder of ZDBs: choose a folder (or a .ISO for a disc copy).");
+            throw new ArgumentException($"{GameOf(s)} saves write a folder of ZDBs: choose a folder (or a .ISO for a disc copy).");
         var written = new List<string>();
         lock (CaWriteGate)
         {

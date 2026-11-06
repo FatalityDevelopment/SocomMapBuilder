@@ -137,7 +137,7 @@ export class ModelEditorPageLogic {
     if (s.game) {
       if (/GTA/.test(s.game)) { return ['character', 'weapon', 'vehicle', 'prop', 'model'].includes(m.kind) ? 'SOCOM II' : null; }
       if (/Battlefront/.test(s.game)) { return ['character', 'weapon', 'vehicle', 'prop', 'sky', 'first-person'].includes(m.kind) ? 'SOCOM II' : null; }
-      return /Combined Assault|Fireteam Bravo/.test(s.game) && ['character', 'weapon', 'prop'].includes(m.kind) ? 'SOCOM II' : null;
+      return /Combined Assault|Fireteam Bravo( 2)?$/.test(s.game) && ['character', 'weapon', 'prop'].includes(m.kind) ? 'SOCOM II' : null;
     }
     const skinned = m.kind === 'character' && /^MESH_/i.test(m.name);
     return skinned || ['weapon', 'prop', 'library'].includes(m.kind) ? 'SOCOM 3 / CA' : null;

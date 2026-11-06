@@ -32,10 +32,15 @@ namespace MapBuilder.Server.Services
 
         private const string CaGame = "SOCOM 3 / Combined Assault";
 
-        /// <summary>SOCOM: Fireteam Bravo 2 (PSP) sessions run on the CA code path, read-only.</summary>
+        /// <summary>SOCOM: Fireteam Bravo 2 (PSP) sessions run on the CA code path.</summary>
         private const string FtbGame = "SOCOM: Fireteam Bravo 2";
 
-        private static string GameOf(CaSession s) => s.Package.IsPsp ? FtbGame : CaGame;
+        /// <summary>SOCOM: Fireteam Bravo (PSP, the first game) sessions run on the same path.</summary>
+        private const string Ftb1Game = "SOCOM: Fireteam Bravo";
+
+        private static string GameOf(CaSession s) => GameOf(s.Package);
+
+        private static string GameOf(CaPackage p) => p.IsFtb1 ? Ftb1Game : p.IsPsp ? FtbGame : CaGame;
 
         /// <summary>
         /// Opens a CA archive, or a location / mission path on the disc that names one (<c>G:\RUN\WHARF</c>,
@@ -81,7 +86,7 @@ namespace MapBuilder.Server.Services
         /// <summary>Answers <paramref name="command"/> when the message names a CA session; null otherwise.</summary>
         private static string? CaRoute(CommandMessage c, string command)
         {
-            if (c.AssetSession == null || !CaSessions.TryGetValue(c.AssetSession, out var s)) return Assets.GtaAssetService.Route(c, command) ?? Assets.SwbfAssetService.Route(c, command);
+            if (c.AssetSession == null || !CaSessions.TryGetValue(c.AssetSession, out var s)) return Assets.GtaAssetService.Route(c, command) ?? Assets.SwbfAssetService.Route(c, command) ?? Assets.Ftb3AssetService.Route(c, command);
             try
             {
                 object result;
@@ -169,16 +174,17 @@ namespace MapBuilder.Server.Services
                 return new { revision = s.Revision, missionId = s.Mission, hasReader = false, objectives = Array.Empty<object>(), actors = Array.Empty<object>(), loadoutSource = (string?)null,
                     mission = (object?)null, world = (object?)null, extents = (object?)null, cams = Array.Empty<object>(), valves = Array.Empty<object>(), texts = new Dictionary<string, string>() };
 
-            var actors = p.MissionResource(s.Mission, "MSNv") is { } vehiclesRes ? CaMissionTables.ParseActors(vehiclesRes.Data, p.IsPsp) : new List<CaMissionTables.Actor>();
-            // Fireteam Bravo 2's mission header is laid out differently and is not read yet.
-            var types = p.MissionResource(s.Mission, "CHAR") is { } charRes
-                ? p.IsPsp ? CaMissionTables.ParsePspCharacterTypes(charRes.Data) : CaMissionTables.ParseCharacterTypes(charRes.Data)
+            var actors = p.MissionResource(s.Mission, "MSNv") is { } vehiclesRes ? CaMissionTables.ParseActors(vehiclesRes.Data, p.IsPsp, p.IsFtb1) : new List<CaMissionTables.Actor>();
+            // The Fireteam Bravo games' mission headers are laid out differently and are not read yet.
+            var types = p.CharacterTable(s.Mission) is { } charRes
+                ? p.IsPsp ? CaMissionTables.ParsePspCharacterTypes(charRes.Data, p.IsFtb1) : CaMissionTables.ParseCharacterTypes(charRes.Data)
                 : new List<CaMissionTables.CharacterType>();
             var header = !p.IsPsp && p.MissionResource(s.Mission, "MISN") is { } misn ? CaMissionTables.ParseHeader(misn.Data) : null;
             var valveValues = p.MissionResource(s.Mission, "VALV") is { } valv ? CaMissionTables.ParseValves(valv.Data) : new List<(uint Hash, int Value)>();
             var weaponTable = p.GlobalResource("WEAP")?.Data;
             var wanted = types.SelectMany(t => t.Weapons).Concat(header?.Weapons ?? new List<uint>());
             var weapons = weaponTable == null ? new Dictionary<uint, CaMissionTables.Weapon>()
+                : p.IsFtb1 ? CaMissionTables.FindFtb1Weapons(weaponTable, wanted, p.WeaponModelHashes())
                 : p.IsPsp ? CaMissionTables.FindPspWeapons(weaponTable, wanted, p.WeaponModelHashes())
                 : CaMissionTables.FindWeapons(weaponTable, wanted);
 

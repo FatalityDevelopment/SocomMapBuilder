@@ -14,7 +14,7 @@ import { ThumbnailRenderer, type ThumbPart } from './viewport/thumbnails';
 import { AssetBrowser, ASSET_DRAG_TYPE, type AssetDrag } from './components/AssetBrowser';
 import { LIGHTINGS, type Lighting, type Shading, type ViewPreset } from './webview/zipper-core/viewport-core';
 import { pathDetail, regionDetail } from './viewport/mapShapes';
-import { LAYERS, errText, isCaFamily, layerOf, missionLabel, movable, pointKindCounts, problemTarget, type ModelGroup } from './mapModel';
+import { LAYERS, errText, isCaFamily, isFtb3, layerOf, missionLabel, movable, pointKindCounts, problemTarget, type ModelGroup } from './mapModel';
 
 import { MenuBar, type Menu } from './components/MenuBar';
 import { PageHeader } from './shared/PageHeader';
@@ -58,11 +58,14 @@ export function MapPage() {
     busy, progress, loading, loadWarnings, connectionIssue, message, messageIsError, say,
     retryScene, edit, history, saveCopy, saveDisc, exportPack, openDialog, loadModel, texturePixels, jump, sceneReady, reload } = mapSession;
   const ca = isCaFamily(status?.game);
-  const ftb = /^SOCOM: Fireteam Bravo/.test(status?.game ?? '');
+  const ftb = /^SOCOM: Fireteam Bravo( 2)?$/.test(status?.game ?? '');
   const battlefront = status?.game === 'Star Wars: Battlefront';
+  const ftb3 = isFtb3(status?.game);
+  // Each "mission" is a whole map elsewhere (a Battlefront map, a Fireteam Bravo 3 level).
+  const wholeMaps = battlefront || ftb3;
   const gta = status?.game === 'GTA: San Andreas';
   const viewOnly = mapViewOnly(status);
-  const socomTools = !!status && !viewOnly && !ca && !battlefront && !gta;
+  const socomTools = !!status && !viewOnly && !ca && !wholeMaps && !gta;
   const canPlace = socomTools || (gta && !viewOnly && !status?.mission?.startsWith('lod-'));
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   // The Map tab's check: rerun while the tab is open whenever the session changes.
@@ -303,8 +306,8 @@ export function MapPage() {
       await client.mapPoints(mission);
       setStatus(await client.status());
       setSelectedPoint(null);
-      // A Battlefront "mission" (a GTA area) is a whole map elsewhere: frame it. CA missions share the location's models.
-      await reload(!battlefront && !gta, false);
+      // A Battlefront "mission" (a GTA area, a Fireteam Bravo 3 level) is a whole map elsewhere: frame it. CA missions share the location's models.
+      await reload(!wholeMaps && !gta, false);
       say(`${mission}: ${mapSession.pointsRef.current.length} points.`);
     } catch (error) {
       say(`Mission ${mission} could not be read: ${errText(error)}`, true);
@@ -930,14 +933,14 @@ export function MapPage() {
 
   return (
     <div className="me-app mp-app has-header" onPointerDown={e => { if (!(e.target as HTMLElement).closest('.me-menu')) { setOpenMenu(null); } }}>
-      <PageHeader icon="globe" title="Map Builder" subtitle={ftb ? `${status?.game?.replace('SOCOM: ', '')} maps: move props, vehicles and points` : ca ? 'Combined Assault maps and missions' : battlefront ? 'Star Wars: Battlefront maps: move props, command posts and vehicle spawns' : gta ? 'GTA: San Andreas map areas: move and turn buildings and props' : 'Props, clutter and spawn points of SOCOM II maps'} />
+      <PageHeader icon="globe" title="Map Builder" subtitle={ftb3 ? 'Fireteam Bravo 3 levels (view only)' : ftb ? `${status?.game?.replace('SOCOM: ', '')} maps: move props, vehicles and points` : ca ? 'Combined Assault maps and missions' : battlefront ? 'Star Wars: Battlefront maps: move props, command posts and vehicle spawns' : gta ? 'GTA: San Andreas map areas: move and turn buildings and props' : 'Props, clutter and spawn points of SOCOM II maps'} />
       <MenuBar {...menuBarProps} />
       {shortcutsOpen && <ShortcutReference onClose={() => setShortcutsOpen(false)} />}
       {paletteOpen && <CommandPalette commands={commandsFromMenus(menus)} onClose={() => setPaletteOpen(false)} />}
 
       <div className="me-header">
         {!!status?.missions?.length && (
-          <label className="me-toggle" title={gta ? `The area drawn (an IPL zone, with the nearby zones' low-detail blocks): the disc holds ${status.missions.length}` : battlefront ? `The map drawn: the disc holds ${status.missions.length}` : `The mission whose points are shown: ${status.location ?? 'this location'} holds ${status.missions.length}`}>{gta ? 'Area' : battlefront ? 'Map' : 'Mission'}
+          <label className="me-toggle" title={gta ? `The area drawn (an IPL zone, with the nearby zones' low-detail blocks): the disc holds ${status.missions.length}` : wholeMaps ? `The map drawn: the disc holds ${status.missions.length}` : `The mission whose points are shown: ${status.location ?? 'this location'} holds ${status.missions.length}`}>{gta ? 'Area' : wholeMaps ? 'Map' : 'Mission'}
             <select aria-label="Mission" value={status.mission ?? ''} disabled={busy || loading} onChange={e => void pickMission(e.target.value)}>
               {status.missions.map(m => <option key={m.id} value={m.id}>{missionLabel(m)}</option>)}
             </select>

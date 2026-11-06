@@ -11,7 +11,8 @@ SOCOM U.S. Navy SEALs II is the primary target. Combined Assault also supports s
 | **Grand Theft Auto: San Andreas (PS2)** | Mounted disc, ISO, IMG or DFF; the map by area | Frame positions, geometry transforms and material properties; move and turn map placements. Save DFF, IMG or IPL copies, or a patched `.ISO`. | Models and selected character clips to SOCOM II |
 | **Star Wars: Battlefront** | `.ISO` or a `.LVL`: models, textures and maps | Move and turn props, command posts and vehicle spawns. Save `.LVL` copies or a patched `.ISO`. | Soldiers, weapons, vehicles and props to SOCOM II |
 | **SOCOM: Fireteam Bravo 2 (PSP)** | A map folder or any ZDB in it: the world, props, characters (bind pose), weapons, textures, missions and points | Move placed props, vehicles and trees; move and rename points; actor starts. Save ZDB copies or a patched disc image | Characters (skinned), weapons and placed props to SOCOM II |
-| **SOCOM: Fireteam Bravo / Fireteam Bravo 3** | Not tested | — | — |
+| **SOCOM: Fireteam Bravo (PSP)** | A map folder or any ZDB in it, as Fireteam Bravo 2: the world, props, characters, weapons, missions and points | As Fireteam Bravo 2 (node and point moves); not tried in game | As Fireteam Bravo 2; not tried |
+| **SOCOM: Fireteam Bravo 3 (PSP)** | The disc, its `levels` folder, a level folder or a `.ssg`: every level's terrain, buildings and placed props, textured | — (view only) | — |
 
 ## SOCOM II
 
@@ -83,6 +84,14 @@ Open the disc image (`Star Wars - Battlefront (USA).iso`) or a loose `.LVL` in t
 - **Editing:** move and turn props with the gizmo or the Item fields, and drag command posts and vehicle spawns. Placements cannot be scaled, and props cannot be added or deleted yet. A command post's regions and spawn path stay where they are when it moves. **File › Save copy** writes the edited levels into a folder at their disc paths (`TAT/TAT2.LVL`); saving to a path ending `.ISO` (for example through the assistant's `assets_save`) writes a copy of the whole disc with the edited levels in place, which needs the disc's size free. Edits keep every file's size, so the copy is otherwise byte for byte the original. Not yet tested in game.
 
 The terrain's blended texture layers, map edits that change sizes (adding or deleting props, editing paths and regions) and animations are planned. The PS2 position quantisation, bone-space vertices and the terrain and world layouts follow research by the [openbf](https://github.com/sprucey149/openbf) project (MIT).
+
+## SOCOM: Fireteam Bravo (PSP)
+
+The first game opens like Fireteam Bravo 2: open a map folder such as `I:\PSP_GAME\USRDIR\RUN\BANG_BUNKER` (campaign) or `MP_BANG_BUNKER` (online), or any `.ZDB` in it. All 27 maps draw. Campaign missions (`P323`, and its objective variants such as `P323_HE`) show their points, and the Mission tab lists their actors by display name (Sandman, Al Shakoosh Elite) with their character model and loadout. Online game modes hold almost no named points. Edits, saves and **Export to SOCOM II** use Fireteam Bravo 2's code and have not been tried in game. [File layouts](formats/psp.md#fireteam-bravo-ucus-98615)
+
+## SOCOM: Fireteam Bravo 3 (PSP)
+
+Open the disc (`K:\`), its `PSP_GAME\USRDIR\levels` folder, a level folder or any `.ssg` in one. Pick a level from **Map**: the Map Builder draws its terrain, buildings and placed props, textured, with the sky dome and distant scenery in the **Sky** layer. The Model Editor lists the level's models. Levels are view only: points, characters, animations, editing and conversion are not done yet. [File layouts](formats/ftb3.md)
 
 ## SOCOM: Fireteam Bravo 2 (PSP)
 

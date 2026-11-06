@@ -55,7 +55,7 @@ namespace MapBuilder.Server.Services
             reg.Add(c => CaRoute(c, "ASSET_LIST_MODELS") ?? WithSession(c.AssetSession, "ASSET_LIST_MODELS", s => ListModels(s, c.AssetJson)), "ASSET_LIST_MODELS");
             reg.Add(c => CaRoute(c, "ASSET_DESCRIBE_MODEL") ?? WithSession(c.AssetSession, "ASSET_DESCRIBE_MODEL", s => DescribeModel(s, c.AssetArchive, c.AssetName)), "ASSET_DESCRIBE_MODEL");
             reg.Add(c => CaRoute(c, "ASSET_TEXTURE") ?? WithSession(c.AssetSession, "ASSET_TEXTURE", s => Texture(s, c.AssetName, c.AssetArchive)), "ASSET_TEXTURE");
-            reg.Add(c => Assets.SwbfAssetService.Route(c, "ASSET_LIST_TEXTURES") ?? WithSession(c.AssetSession, "ASSET_LIST_TEXTURES", s => ListTextures(s)), "ASSET_LIST_TEXTURES");
+            reg.Add(c => Assets.SwbfAssetService.Route(c, "ASSET_LIST_TEXTURES") ?? Assets.Ftb3AssetService.Route(c, "ASSET_LIST_TEXTURES") ?? WithSession(c.AssetSession, "ASSET_LIST_TEXTURES", s => ListTextures(s)), "ASSET_LIST_TEXTURES");
             reg.Add(c => WithSession(c.AssetSession, "ASSET_LIST_PALETTES", s => ListPalettes(s)), "ASSET_LIST_PALETTES");
             reg.Add(c => CaRoute(c, "ASSET_MODEL_MESH") ?? WithSession(c.AssetSession, "ASSET_MODEL_MESH", s => Mesh(s, c.AssetArchive, c.AssetName, c.AssetJson)), "ASSET_MODEL_MESH");
             reg.Add(c => Assets.GtaAssetService.Route(c, "ASSET_MODEL_MESH_BATCH") ?? Responses.Error("A GTA session is required for mesh batches."), "ASSET_MODEL_MESH_BATCH");
@@ -1403,6 +1403,8 @@ namespace MapBuilder.Server.Services
                 if (Assets.GtaAssetService.TryOpen(full) is string gta) return gta;
                 // Star Wars: Battlefront (the disc image or a .LVL) opens as a read-only Battlefront session.
                 if (Assets.SwbfAssetService.TryOpen(full) is string swbf) return swbf;
+                // SOCOM: Fireteam Bravo 3 (the disc, its levels folder, a level or a .ssg) opens read-only.
+                if (Assets.Ftb3AssetService.TryOpen(full) is string ftb3) return ftb3;
                 AssetSession session = OpenSession(full, out bool reused);
                 // A session the Asset Viewer opened to browse becomes an editor's (or an agent's) once they open it.
                 lock (ViewerOwned) ViewerOwned.Remove(session.Id);
@@ -1459,6 +1461,7 @@ namespace MapBuilder.Server.Services
             }
             if (id != null && Assets.GtaAssetService.Close(id) is int discarded) return Ok("ASSET_CLOSE", new { session = id, discardedEdits = discarded });
             if (id != null && Assets.SwbfAssetService.Close(id)) return Ok("ASSET_CLOSE", new { session = id, discardedEdits = 0 });
+            if (id != null && Assets.Ftb3AssetService.Close(id)) return Ok("ASSET_CLOSE", new { session = id, discardedEdits = 0 });
             if (Find(id) is not { } s) return Responses.Error($"No asset session '{id}'");
             // Wait for an edit in progress on it to finish.
             lock (s.Gate) Sessions.TryRemove(s.Id, out _);
@@ -1466,7 +1469,7 @@ namespace MapBuilder.Server.Services
         }
 
         private static string HandleSessions() =>
-            Ok("ASSET_SESSIONS", Sessions.Values.Select(StatusObject).Concat(CaSessions.Values.Select(CaStatus)).Concat(Assets.GtaAssetService.Statuses()).Concat(Assets.SwbfAssetService.Statuses()).ToList());
+            Ok("ASSET_SESSIONS", Sessions.Values.Select(StatusObject).Concat(CaSessions.Values.Select(CaStatus)).Concat(Assets.GtaAssetService.Statuses()).Concat(Assets.SwbfAssetService.Statuses()).Concat(Assets.Ftb3AssetService.Statuses()).ToList());
 
         private static string WithSession(string? id, string command, Func<AssetSession, object> body)
         {

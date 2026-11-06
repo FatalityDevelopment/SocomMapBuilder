@@ -67,11 +67,15 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         /// </summary>
         /// <remarks>Fireteam Bravo 2 (<paramref name="psp"/>): 0x1BC-byte records without the display key: character type (a character.rdr record hash; +0x20 is another hash)
         /// +0x24, group +0x30, start count +0x34, starts from +0x38. Its player actor leaves the start's name empty
-        /// (a position follows instead), which is not read.</remarks>
-        public static List<Actor> ParseActors(byte[] data, bool psp = false)
+        /// (a position follows instead), which is not read.
+        /// Fireteam Bravo (<paramref name="ftb1"/>): 0x1A0-byte records with CA's display key (a display name: "SANDMAN",
+        /// "Al Shakoosh Elite"), type hash +0x40, group +0x48, start count +0x4C, starts from +0x50.</remarks>
+        public static List<Actor> ParseActors(byte[] data, bool psp = false, bool ftb1 = false)
         {
-            int size = psp ? PspActorSize : ActorSize;
-            int hash = psp ? 0x24 : 0x40, group = psp ? 0x30 : 0x54, count = psp ? 0x34 : 0x58, first = psp ? 0x38 : 0x5C;
+            int size = ftb1 ? Ftb1ActorSize : psp ? PspActorSize : ActorSize;
+            int hash = ftb1 ? 0x40 : psp ? 0x24 : 0x40, group = ftb1 ? 0x48 : psp ? 0x30 : 0x54,
+                count = ftb1 ? 0x4C : psp ? 0x34 : 0x58, first = ftb1 ? 0x50 : psp ? 0x38 : 0x5C;
+            bool display = ftb1 || !psp;
             int b = (int)U32(data, 0), e = (int)U32(data, 4);
             if (b < 8 || e > data.Length || e < b || (e - b) % size != 0) throw new InvalidDataException("vehicles.rdr: bad actor table");
             var list = new List<Actor>();
@@ -84,12 +88,12 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
                     int offset = o + first + i * 32;
                     if (Str(data, offset, 28) is { } point) starts.Add(new Start(point, (int)U32(data, offset + 28), offset));
                 }
-                list.Add(new Actor(row, Str(data, o, 32) ?? $"actor{row}", psp ? null : Str(data, o + 0x20, 32), U32(data, o + hash), (int)U32(data, o + group), starts));
+                list.Add(new Actor(row, Str(data, o, 32) ?? $"actor{row}", display ? Str(data, o + 0x20, 32) : null, U32(data, o + hash), (int)U32(data, o + group), starts));
             }
             return list;
         }
 
-        private const int PspActorSize = 0x1BC;
+        private const int PspActorSize = 0x1BC, Ftb1ActorSize = 0x1A0;
 
         /// <summary>
         /// character.rdr: +0x08 / +0x0C a list of record offsets. A record: hash, model (+0x04), low-detail model
@@ -119,16 +123,19 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         /// (a stale pointer, then begin, end, capacity, size); the one at +0x2FC (begin +0x300) is the loadout, the
         /// weapon table hashes of its slots. No display name is stored.
         /// </summary>
-        public static List<CharacterType> ParsePspCharacterTypes(byte[] data)
+        /// <remarks>Fireteam Bravo (<paramref name="ftb1"/>) keeps one character.rdr, in GLOBAL.ZDB: +0x18 / +0x1C the
+        /// record list, 0x3C0-byte records (hash, model +0x04), vectors from +0x258 (begin, end, capacity, size, then a
+        /// pointer to the vector itself); the loadout's begins at +0x294.</remarks>
+        public static List<CharacterType> ParsePspCharacterTypes(byte[] data, bool ftb1 = false)
         {
-            int lb = (int)U32(data, 0x24), le = (int)U32(data, 0x28);
+            int lb = (int)U32(data, ftb1 ? 0x18 : 0x24), le = (int)U32(data, ftb1 ? 0x1C : 0x28), loadout = ftb1 ? 0x294 : 0x300;
             if (le < lb || (le - lb) % 4 != 0) throw new InvalidDataException("character.rdr: bad record list");
             var list = new List<CharacterType>();
             foreach (uint off in U32s(data, lb, (le - lb) / 4))
             {
                 int o = (int)off;
-                if (o + 0x308 > data.Length) throw new InvalidDataException($"character.rdr: record at 0x{o:X} is outside the table");
-                int vb = (int)U32(data, o + 0x300), ve = (int)U32(data, o + 0x304);
+                if (o + loadout + 8 > data.Length) throw new InvalidDataException($"character.rdr: record at 0x{o:X} is outside the table");
+                int vb = (int)U32(data, o + loadout), ve = (int)U32(data, o + loadout + 4);
                 var weapons = ve > vb && ve <= data.Length && (ve - vb) % 4 == 0 && ve - vb <= 64 ? U32s(data, vb, (ve - vb) / 4) : new List<uint>();
                 list.Add(new CharacterType(U32(data, o), U32(data, o + 4), 0, null, weapons));
             }
@@ -167,6 +174,40 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
             }
             return found;
         }
+
+        /// <summary>
+        /// Fireteam Bravo's weapon table entries for <paramref name="hashes"/> (the same CRC32 hashes as Fireteam Bravo
+        /// 2's). An entry starts with a pointer to itself, then the hash and the short name inline (<c>M8</c>,
+        /// <c>M67</c>, <c>C4</c>); the model's root hash is among its next words (+0x18 on the disc). A gun's entry
+        /// also holds its display name as "CATEGORY: NAME" (<c>ASSAULT RIFLE: M8</c>, +0x44), which says it is a gun;
+        /// grenades, explosives and gear have none and are items named by their short name. A hash can head more
+        /// than one entry (a projectile's and the weapon's); the one with a model wins.
+        /// </summary>
+        public static Dictionary<uint, Weapon> FindFtb1Weapons(byte[] table, IEnumerable<uint> hashes, IReadOnlyDictionary<uint, string> models)
+        {
+            var want = hashes.Where(h => h != 0).ToHashSet();
+            var found = new Dictionary<uint, Weapon>();
+            for (int o = 4; o + 0x80 <= table.Length; o += 4)
+            {
+                uint h = BitConverter.ToUInt32(table, o);
+                if (!want.Contains(h) || BitConverter.ToUInt32(table, o - 4) != o - 4 || Str(table, o + 4, 28) is not { } name
+                    || !Regex.IsMatch(name, @"^[\x20-\x7E]+$")) continue;
+                if (found.TryGetValue(h, out var seen) && seen.Model != null) continue;
+                uint? model = null;
+                for (int k = 8; k < 0x80 && model == null; k += 4)
+                    if (models.ContainsKey(BitConverter.ToUInt32(table, o + k))) model = BitConverter.ToUInt32(table, o + k);
+                // The gun's "CATEGORY: NAME" string, among the entry's first 0x100 bytes.
+                string? display = null;
+                foreach (Match m in Ftb1Display.Matches(Encoding.Latin1.GetString(table, o + 8, Math.Min(0x100, table.Length - o - 8))))
+                    if (m.Groups[2].Value.Trim().Equals(name, StringComparison.OrdinalIgnoreCase) || display == null) display = m.Value;
+                found[h] = new Weapon(h, display != null && Ftb1Gun.IsMatch(display) ? "weapon" : "item", display ?? name, null, model);
+            }
+            return found;
+        }
+
+        private static readonly Regex Ftb1Display = new(@"([A-Z][A-Z ]{2,20}): ([\x21-\x7E][\x20-\x7E]{0,30})", RegexOptions.Compiled);
+
+        private static readonly Regex Ftb1Gun = new(@"^(ASSAULT RIFLE|SNIPER RIFLE|SUB ?MACHINE ?GUN|SMG|SHOTGUN|MACHINE ?GUN|PISTOL|LAUNCHER|GRENADE LAUNCHER|ROCKET LAUNCHER|RIFLE):", RegexOptions.Compiled);
 
         private static readonly Regex PspGun = new(@"^_\d+_(ASSAULTRIFLE|SNIPERRIFLE|SMG|SHOTGUN|MACHINEGUN|PISTOL|LAUNCHER)", RegexOptions.Compiled);
 

@@ -1,8 +1,8 @@
-# SOCOM: Fireteam Bravo 2 (PSP)
+# SOCOM: Fireteam Bravo and Fireteam Bravo 2 (PSP)
 
 *SOCOM: U.S. Navy SEALs Fireteam Bravo 2* (UCUS-98645) uses the SOCOM 3 / Combined Assault package and library formats, with the PS2's VIF and GS records replaced by the PSP graphics engine (GE). Map Builder opens it read-only through the Combined Assault code path. Code: `ZDB/ZdbArchive.cs` (version 7), `Ca/PspGe.cs`, `Ca/CaLibrary.cs` and `Ca/CaPackage.cs` (`IsPsp`, `OpenPsp`, `PspWorldObjects`). Tests: `FtbTests` (the retail checks need `MAPBUILDER_FTB2_DISC`, the UMD root, e.g. `K:\`).
 
-The other two Fireteam Bravo games have not been checked yet. The layouts below were observed on this disc only.
+The layouts below were observed on the Fireteam Bravo 2 disc. *Fireteam Bravo* (the first game, UCUS-98615) uses the same files with a few older layouts; see [Fireteam Bravo](#fireteam-bravo-ucus-98615) at the end. *Fireteam Bravo 3* is another engine: see [Fireteam Bravo 3](ftb3.md).
 
 ## Disc layout
 
@@ -113,4 +113,34 @@ Checked: the Village squad's character, the AK-47 and the Village truck convert 
 - Objectives and team spawns; names for the weapon models CA's word list does not crack.
 - Skinning, animations (`BONE`, `ZANM`) and the terrain tiles' own records.
 - Editing, saving and conversion to and from SOCOM II and Combined Assault.
-- Fireteam Bravo and Fireteam Bravo 3.
+
+## Fireteam Bravo (UCUS-98615)
+
+The first game's disc (`PSP_GAME\USRDIR\RUN`, 407 ZDBs) has the same layout as Fireteam Bravo 2's: version-7 ZDBs (all 407 open and write back byte for byte), one folder per map with its island, world, `VCOMMON_*.ZDB` characters and one ZDB per mission, and `RUN\GLOBAL.ZDB`. Its resources are older (ISLE 53, ASST 42, MSNv 1; Fireteam Bravo 2: 70, 59, 10), which is how `CaPackage.IsFtb1` tells the games apart. The session game is "SOCOM: Fireteam Bravo". Retail tests need `MAPBUILDER_FTB1_DISC`.
+
+**Folders.** Online maps start `MP_` (`MP_BANG_BUNKER`: `PM23.ZDB` and its modes `PM23FFA`, `PM23SUP`, `PM23TAG`); the others are campaign maps (`BANG_BUNKER`: `P323.ZDB` and its objective variants `P323_HE`, `P323_SAB` …), listed as SP with the suffix as the mode.
+
+**Mesh objects** are type `0x008566A8`, static and skinned alike, and hold one vertex block instead of a display list per batch:
+
+| Offset | Field |
+|---|---|
+| +0x6C | The vertex block's size |
+| +0x70 | Where it starts, from the object |
+| +0x74 | The first batch (0x80) |
+| +0x78 | The batch count (low half) |
+
+Batch *i* is 0x180 bytes at `+0x80 + 0x180·i`: `+0x00` the material's GE commands (the culling test reads the first 0x98 bytes), `+0x98` a display-list template the game fills in (VTYPE, BASE, VADDR, PRIM, RET, all 0), `+0xB0` the texture's name hash, `+0xC0` the batch's bounding box, `+0x120` its vertices (from the block), `+0x128` stride (top byte), GE primitive (bits 16–23: 3 triangles, 4 strips) and vertex count (low half), `+0x12C` the VTYPE, `+0x130` the bone list (from the batch) and `+0x134` low byte the bone count. Each batch's vertices follow the last's; their sizes add up to the block's. Skinned weights and bone lists read as Fireteam Bravo 2's (list entry *i* is node *i* + 3).
+
+**Worlds.** There are no instance records and no free world-space objects: the island's node tree places everything. The sky dome is a node object, moved to the **Sky** layer when its bounds enclose all but two of the world's other objects. Coverage (2026-11-06): all 27 maps draw, with 12,000–82,000 triangles each, and at most one texture name per map is not found.
+
+**`global_assets.rdr`** is library version 4: version 3's header with one more word, a third library (empty on the disc) at word 4. The nested weapon library is at word 3 as in version 3: 42 weapon models.
+
+**Actors** (`vehicles.rdr`) are 0x1A0 bytes and keep CA's display key: name `char[32]`, display name `char[32]` (`SANDMAN`, `Al Shakoosh Elite`; online players a message key), character type `+0x40`, group `+0x48`, start count `+0x4C`, starts from `+0x50`.
+
+**Character types.** There is one `character.rdr` (`CHAR` v9) for the whole game, in `GLOBAL.ZDB`: `+0x18`/`+0x1C` the record list, 252 records of 0x3C0 bytes (hash, `clib` model `+0x04`), vectors from `+0x258` of 20 bytes (begin, end, capacity, size, then a pointer to the vector itself). The loadout's begins at `+0x294`.
+
+**Weapons** (`wep_weapon.rdr`, WEAP v59) has no UI message keys. An entry starts with a pointer to itself, then the hash (the same CRC32 hashes as Fireteam Bravo 2's) and the short name inline (`M8`, `M67`, `C4`); the model's root hash is among the next words (`+0x18` on the disc). A gun's entry also holds its display name as `CATEGORY: NAME` (`ASSAULT RIFLE: M8`, `+0x44`). The game files the M60E3 and F90 under ASSAULT RIFLE too. A hash can head a projectile's entry and the weapon's; the one with a model wins.
+
+**Missions.** Campaign missions' `mission.rdr` points read with CA's layout (61 on Bunker's `P323`). Online game modes hold almost no named points (0–30 a map). Point moves snap to the AI grid's cells, as in CA.
+
+Editing, saving and export to SOCOM II go through Fireteam Bravo 2's code: node and point moves on Bunker write same-size patches (6 bytes in each file). Nothing has been tried in game.

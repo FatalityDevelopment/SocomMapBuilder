@@ -5,7 +5,7 @@ using CodeDesigner.Ps2.FileFormats.Zipper.Conversion;
 namespace MapBuilder.Server.Services
 {
     /// <summary>
-    /// ASSET_EXPORT for Fireteam Bravo 2: a character, weapon, prop or vehicle as a SOCOM II pack through the shared
+    /// ASSET_EXPORT for Fireteam Bravo and Fireteam Bravo 2: a character, weapon, prop or vehicle as a SOCOM II pack through the shared
     /// converter (<see cref="ModelToSocom2"/>). FTB2 models are already in SOCOM II's frame (characters face -Z, weapons
     /// point along +X), so nothing is turned. Character bones carry CA's names (<see cref="CaBones"/>), which map onto
     /// alg_UN01. One scale is used for every model: SOCOM II's character height over FTB2's (head to foot), so a
@@ -17,7 +17,7 @@ namespace MapBuilder.Server.Services
         private static object FtbExport(CaSession s, CaPackage.Model m, ExportArgs a)
         {
             if (m.Kind is "world" or "ui") throw new NotSupportedException("A whole island does not convert; export its props one at a time.");
-            if (a.Clips is { Length: > 0 }) throw new NotSupportedException($"{FtbGame} animations are not read yet, so no clips can be exported.");
+            if (a.Clips is { Length: > 0 }) throw new NotSupportedException($"{GameOf(s)} animations are not read yet, so no clips can be exported.");
             var (templates, run) = Socom2TemplatesFor(a.Socom2Run);
             var p = s.Package;
             var mesh = p.BuildMesh(m);
