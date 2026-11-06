@@ -22,7 +22,8 @@ export const isFtb3 = (game?: string | null) => game === 'SOCOM: Fireteam Bravo 
 export interface ModelGroup { source: string; model: string; indices: number[] }
 
 // Sky models go by many names (sky, sky_m72, mp62_sky, alaska4d_sky, sky_follow, sun); skylines and skylights are scenery.
-const SKY_NAME = /^(thesun|flare|mist)|^sun$|sky(?!line|light|scraper|way)/i;
+// Fireteam Bravo 3's distant mountains are "parallax" tiles ([6]Valley_terrainparallax).
+const SKY_NAME = /^(thesun|flare|mist)|^sun$|sky(?!line|light|scraper|way)|parallax/i;
 // Most maps draw their sky inside the world model: a skydome / sky / cloudlayer node, or a node with sky or cloud textures.
 const SKY_PART = /sky(?!line|light|scraper)|cloud|whispy/i;
 // Retail maps also keep celestial cards outside the dome node (MP7's moon / stars,

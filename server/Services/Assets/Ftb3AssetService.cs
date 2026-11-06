@@ -196,10 +196,12 @@ namespace MapBuilder.Server.Services.Assets
         {
             var pkg = s.Package;
             var instances = new List<object>();
-            // caNode: moved by its instance id (moveInstance); multiMove: several move in one batch.
-            object Item(string model, string instance, string path, float[] m, bool movable = false) => new
+            // caNode: moved by its instance id (moveInstance); multiMove: several move in one batch. Kind "model" puts the
+            // terrain, buildings built in place, their repeats and the sky in the outliner's World (and Sky) layers;
+            // placed props are "reference" (Props).
+            object Item(string model, string instance, string path, float[] m, bool movable = false, string kind = "reference") => new
             {
-                kind = "reference", model, instance, path, position = new[] { m[12], m[13], m[14] }, scale = 1f, matrix = m,
+                kind, model, instance, path, position = new[] { m[12], m[13], m[14] }, scale = 1f, matrix = m,
                 geoIndex = (int?)null, clutterIndex = (int?)null, source = $"{s.Level}:{model}", caNode = movable, multiMove = movable,
             };
             var models = pkg.Models(s.Level);
@@ -208,14 +210,14 @@ namespace MapBuilder.Server.Services.Assets
             {
                 if (i.Model == null) { markers++; continue; }
                 var m = pkg.FindModel(s.Level, i.Model)!;
-                if (m.Kind == "sky") { sky++; instances.Add(Item(m.Name, i.Id, $"/sky/{i.Id}", i.Matrix)); continue; }
+                if (m.Kind == "sky") { sky++; instances.Add(Item(m.Name, i.Id, $"/sky/{i.Id}", i.Matrix, kind: "model")); continue; }
                 if (m.Kind == "world")
                 {
                     // A world tile is drawn where its vertices are (below); an instance of it is drawn as well only when
                     // it repeats the tile elsewhere.
                     if (!Ftb3Package.IsRepeat(pkg.BuildMesh(m), i.Matrix)) { overlapping++; continue; }
                     copies++;
-                    instances.Add(Item(m.Name, i.Id, $"/props/{i.Id}", i.Matrix, movable: true));
+                    instances.Add(Item(m.Name, i.Id, $"/world/{i.Id}", i.Matrix, movable: true, kind: "model"));
                     continue;
                 }
                 props++;
@@ -225,7 +227,7 @@ namespace MapBuilder.Server.Services.Assets
             foreach (var m in models.Where(m => m.Kind == "world" || m.Kind == "sky" && !placed.Contains(m.Name)))
             {
                 if (m.Kind == "sky") sky++; else world++;
-                instances.Add(Item(m.Name, m.Name, m.Kind == "sky" ? $"/sky/{m.Name}" : $"/world/{m.Name}", Identity));
+                instances.Add(Item(m.Name, m.Name, m.Kind == "sky" ? $"/sky/{m.Name}" : $"/world/{m.Name}", Identity, kind: "model"));
             }
             return new
             {

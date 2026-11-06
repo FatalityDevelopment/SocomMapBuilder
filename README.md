@@ -144,7 +144,7 @@ claude mcp add --transport http mapbuilder http://127.0.0.1:8770/mcp
 
 ## Other games
 
-The same Map Builder, Model Editor and Asset Viewer open five more games. Each one's maps draw with their own lighting, and placements move with the same gizmo, undo and save as SOCOM II.
+The same Map Builder, Model Editor and Asset Viewer open seven more games. Each one's maps draw with their own lighting, and placements move with the same gizmo, undo and save as SOCOM II.
 
 | Game | Map Builder | Model Editor | To SOCOM II |
 |---|---|---|---|
@@ -166,9 +166,17 @@ Every game's edits can be saved into a copy of its disc image. Edits outside SOC
 
 *SOCOM: Combined Assault — a city compound with its mission's objective flags.*
 
+<img src="docs/screenshots/ftb1-map-bang-village.jpg" alt="Fireteam Bravo's Bangladesh village campaign map in the Map Builder: jungle huts along a river and waterfall, with its baked lighting" width="850">
+
+*SOCOM: Fireteam Bravo (PSP) — the Bangladesh village campaign map.*
+
 <img src="docs/screenshots/ftb2-map-fort.jpg" alt="Fireteam Bravo 2's Fort island in the Map Builder with its baked lighting" width="850">
 
 *SOCOM: Fireteam Bravo 2 (PSP) — the Fort island.*
+
+<img src="docs/screenshots/ftb3-map-valley.jpg" alt="Fireteam Bravo 3's snowy Valley online level in the Map Builder: barracks, a bunker and a river below snow-capped mountains" width="850">
+
+*SOCOM: Fireteam Bravo 3 (PSP) — the Valley online level, with its distant mountains.*
 
 <img src="docs/screenshots/gta-map-grove-street.png" alt="Grove Street in the Map Builder: CJ's house selected in the cul-de-sac" width="850">
 
