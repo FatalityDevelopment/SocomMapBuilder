@@ -173,6 +173,27 @@ public sealed class Ftb3Tests
     }
 
     [Fact]
+    public void Retail_world_tiles_stay_put_and_only_far_instances_repeat_them()
+    {
+        if (Disc is not string disc) return;
+        var pkg = Ftb3Package.Open(disc);
+        // Baltiysk Port's cargo ship is three world tiles; one has an instance 29 units off (a third of the ship),
+        // which is not drawn: the tiles share their edges where they are.
+        const string port = "BaltiyskPort_cust";
+        var ship = pkg.FindModel(port, "000Cargoship_Cargoship")!;
+        Assert.Equal("world", ship.Kind);
+        Assert.Equal("Cargoship_Cargoship", Ftb3Package.TileOf(ship.Name));
+        var shipInstance = pkg.Instances(port).Single(i => i.Model == ship.Name);
+        Assert.False(Ftb3Package.IsRepeat(pkg.BuildMesh(ship), shipInstance.Matrix));
+        // The carrier's ocean tiles are repeated 509 units out.
+        var water = pkg.FindModel("Carrier_mis", "003Carrier_water")!;
+        Assert.Equal("world", water.Kind);
+        Assert.All(pkg.Instances("Carrier_mis").Where(i => i.Model == water.Name), i => Assert.True(Ftb3Package.IsRepeat(pkg.BuildMesh(water), i.Matrix)));
+        // A placed prop is still a prop.
+        Assert.Equal("prop", pkg.FindModel("Valley_multi", "Grass_TallGrass_Tall")!.Kind);
+    }
+
+    [Fact]
     public void Retail_props_and_points_move_and_save_in_place()
     {
         if (Disc is not string disc) return;
