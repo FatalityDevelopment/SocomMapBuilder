@@ -93,6 +93,7 @@ export const PACKAGE_FILTERS: FileFilter[] = [
   { label: 'SOCOM packages and archives', extensions: ['zdb', 'cdb', 'zar', 'zed'] },
   { label: 'GTA: San Andreas discs, archives and models', extensions: ['iso', 'img', 'dff'] },
   { label: 'Star Wars: Battlefront disc or level', extensions: ['iso', 'lvl'] },
+  { label: 'SOCOM: Fireteam Bravo 3 level (or open the disc folder)', extensions: ['ssg'] },
 ];
 
 const LAST_FOLDER = 'mapbuilder.lastFolder.';
@@ -165,9 +166,13 @@ export const host = {
 
   async pickPackageCopy(s: { path: string; game?: string }): Promise<string | null> {
     // CA location archives keep their disc filename in the selected output directory.
-    // Fireteam Bravo 2: the edited ZDBs, each at its place under RUN (FORT_MP/ISLAND_F.ZDB) in the folder.
-    if (/^SOCOM: Fireteam Bravo/.test(s.game ?? '')) {
+    // Fireteam Bravo 1 and 2: the edited ZDBs, each at its place under RUN (FORT_MP/ISLAND_F.ZDB) in the folder.
+    if (/^SOCOM: Fireteam Bravo( 2)?$/.test(s.game ?? '')) {
       return host.browse({ mode: 'folder', title: 'Choose a folder for the edited ZDBs', key: 'ftb-save', submitLabel: 'Save here' });
+    }
+    // Fireteam Bravo 3: the edited .ssg files, each at its place under levels (Valley_multi/Valley_multi_inst.ssg).
+    if (s.game === 'SOCOM: Fireteam Bravo 3') {
+      return host.browse({ mode: 'folder', title: 'Choose a folder for the edited level files', key: 'ftb3-save', submitLabel: 'Save here' });
     }
     if (s.game === 'SOCOM 3 / Combined Assault') {
       return host.browse({ mode: 'folder', title: 'Choose a folder for the edited archive', key: 'ca-save', submitLabel: 'Save here' });

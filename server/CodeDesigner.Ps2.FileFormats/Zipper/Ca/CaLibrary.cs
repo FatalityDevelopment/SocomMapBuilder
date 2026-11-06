@@ -57,10 +57,11 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         public List<int> Textures => Vector(_base + 0x20);
         public List<int> Palettes => Vector(_base + 0x30);
 
-        /// <summary>The second library of a version-3 header (word 3), or null.</summary>
+        /// <summary>The second library of a version-3 header (word 3), or null. Fireteam Bravo's global_assets is
+        /// version 4: the same, with one more library (empty on the disc) at word 4.</summary>
         public CaLibrary? Nested()
         {
-            if (Version != 3) return null;
+            if (Version is not (3 or 4)) return null;
             int o = (int)U32(0x0C);
             return o > 0 && o < Data.Length - 0x58 ? new CaLibrary(Data, o + 0x18, Psp) : null;
         }

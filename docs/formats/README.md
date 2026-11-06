@@ -20,7 +20,8 @@ All values are little-endian. Offsets are in hex. "Confirmed in game" means a fi
 | [HUD radar and tactical maps](hud.md) | `HUD2_TXR.ZED` radar art, `MM<nn>_TXR.ZED` map pages and where they sit in the world | `Services/AssetService.MapHud.cs`, `web/src/viewport/minimap.ts` |
 | [Combined Assault missions](ca-missions.md) | CA location archives (CRC32 names), missions, `mission.rdr` points and `AIMi` grids; actors, character types, the weapon table, mission headers and valves | `Ca/CaMissions.cs`, `Ca/CaDisc.cs`, `Ca/CaPackage.cs` |
 | [Combined Assault worlds](ca-worlds.md) | CA scatter instances (0x70-byte records), and the GS blend / alpha test / clamp state of CA surfaces and water | `Ca/CaLibrary.cs`, `Ca/CaPackage.cs` |
-| [Fireteam Bravo 2 (PSP)](psp.md) | Version-7 ZDBs, GE display lists, PSP textures and how a map's world is assembled | `Ca/PspGe.cs` |
+| [Fireteam Bravo and Fireteam Bravo 2 (PSP)](psp.md) | Version-7 ZDBs, GE display lists and vertex blocks, PSP textures and how a map's world is assembled; Fireteam Bravo's actors, characters and weapons | `Ca/PspGe.cs` |
+| [Fireteam Bravo 3 (PSP)](ftb3.md) | `.ssg` files, levels, mesh pieces, textures and instances | `Ftb3/SsgArchive.cs`, `Ftb3/Ftb3Package.cs` |
 | [SOCOM 1 maps](socom1.md) | SOCOM 1's loose map folders on the disc, `assetlibs`, and the SOCOM II names its archives are read as | `Package/Socom1DiscMap.cs` |
 | [Animations](animations.md) | Motion clips (MOTION_S / MOTION_P) and ZANIM effect scripts | `Anim/MotionClip.cs`, `Anim/ZanimFile.cs` |
 

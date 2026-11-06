@@ -14,8 +14,10 @@ export const LAYERS: Array<{ id: MapLayer; label: string }> = [
   { id: 'regions', label: 'Regions' },
 ];
 
-// Combined Assault and the Fireteam Bravo games (PSP) share the CA session: ISLE worlds, placements and points only.
-export const isCaFamily = (game?: string | null) => game === 'SOCOM 3 / Combined Assault' || /^SOCOM: Fireteam Bravo/.test(game ?? '');
+// Combined Assault and Fireteam Bravo 1 and 2 (PSP) share the CA session: ISLE worlds, placements and points only.
+// Fireteam Bravo 3 is another engine with its own (view-only) session.
+export const isCaFamily = (game?: string | null) => game === 'SOCOM 3 / Combined Assault' || /^SOCOM: Fireteam Bravo( 2)?$/.test(game ?? '');
+export const isFtb3 = (game?: string | null) => game === 'SOCOM: Fireteam Bravo 3';
 
 export interface ModelGroup { source: string; model: string; indices: number[] }
 
@@ -97,7 +99,7 @@ export function pointColor(kind: string): number {
     : kind === 'command post' ? 0xffd23e : kind === 'vehicle spawn' ? 0xd070ff : 0xb4b4b4;
 }
 
-const MISSION_KINDS: Record<string, string> = { SP: 'campaign', MP: 'online', IA: 'instant action', TR: 'training' };
+const MISSION_KINDS: Record<string, string> = { SP: 'campaign', MP: 'online', IA: 'instant action', TR: 'training', custom: 'custom' };
 
 /** A SOCOM 3 / CA mission for the picker: "MP414CTR · online CTR", "SP414 · campaign". */
 export function missionLabel(m: { id: string; kind: string; mode: string; label?: string }): string {

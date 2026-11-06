@@ -225,6 +225,125 @@ public sealed class FtbTests
             Path.Combine(scratch, "FORT_MP", "ISLAND_F.ZDB"), scratch, Path.Combine("K:", "PSP_GAME", "USRDIR", "RUN", "FORT_MP"), entries, null));
     }
 
+    // ------------------------------------------------------------------ Fireteam Bravo (the first game)
+
+    [Fact]
+    public void Fireteam_Bravo_batches_draw_one_primitive_from_their_place_in_the_vertex_block()
+    {
+        // One object, two batches: a triangle (3 vertices) then a strip (4), both in one vertex block at +0x400.
+        var d = new byte[0x800];
+        int obj = 0x10, block = 0x400;
+        Put(d, obj, PspGe.Ftb1ObjectType);
+        Put(d, obj + 0x6C, 7 * 24); Put(d, obj + 0x70, (uint)block); Put(d, obj + 0x74, 0x80); Put(d, obj + 0x78, 2);
+        for (int i = 0; i < 2; i++)
+        {
+            int b = obj + 0x80 + PspGe.Ftb1BatchSize * i;
+            Put(d, b + 0xB0, 0xCAFE0000u + (uint)i);
+            Put(d, b + 0x120, i == 0 ? 0u : 3 * 24);
+            Put(d, b + 0x128, i == 0 ? 0x18030003u : 0x18040004u);
+            Put(d, b + 0x12C, 0x1BE);
+        }
+        for (int v = 0; v < 7; v++)
+        {
+            int at = obj + block + 24 * v;
+            Put(d, at + 4, 0xFFFFFFFF);
+            PutF(d, at + 12, v); PutF(d, at + 16, 0); PutF(d, at + 20, v % 2);
+        }
+        var lib = new CaLibrary(d, vectorsAt: 0x700, psp: true);
+        var chunks = PspGe.Chunks(lib, obj, Matrix4.Identity(), "x", 0);
+        Assert.Equal(2, chunks.Count);
+        Assert.Equal(("ca_cafe0000", 3), (chunks[0].Texture, chunks[0].VertexCount));
+        Assert.Equal(new[] { 0, 1, 2 }, chunks[0].Triangles);
+        Assert.Equal(("ca_cafe0001", 4), (chunks[1].Texture, chunks[1].VertexCount));
+        Assert.Equal(new[] { 0, 1, 2, 2, 1, 3 }, chunks[1].Triangles);
+        Assert.Equal(3f, chunks[1].Positions[0]); // the strip starts at the block's fourth vertex
+    }
+
+    [Fact]
+    public void Fireteam_Bravo_actors_keep_their_display_names()
+    {
+        // One 0x1A0-byte actor at 0x14: name, display +0x20, type +0x40, group +0x48, one start at +0x50.
+        var d = new byte[0x14 + 0x1A0];
+        Put(d, 0, 0x14); Put(d, 4, 0x14 + 0x1A0);
+        System.Text.Encoding.ASCII.GetBytes("able2").CopyTo(d, 0x14);
+        System.Text.Encoding.ASCII.GetBytes("LONESTAR").CopyTo(d, 0x14 + 0x20);
+        Put(d, 0x14 + 0x40, 0x0529DD47); Put(d, 0x14 + 0x48, 1); Put(d, 0x14 + 0x4C, 1);
+        System.Text.Encoding.ASCII.GetBytes("s_able2").CopyTo(d, 0x14 + 0x50); Put(d, 0x14 + 0x50 + 28, 2);
+        var a = Assert.Single(CaMissionTables.ParseActors(d, psp: true, ftb1: true));
+        Assert.Equal(("able2", (string?)"LONESTAR", 0x0529DD47u, 1), (a.Name, a.Display, a.Type, a.Group));
+        Assert.Equal(("s_able2", 2), (a.Starts[0].Point, a.Starts[0].Heading));
+    }
+
+    [Fact]
+    public void Fireteam_Bravo_character_types_and_weapons_are_found()
+    {
+        // character.rdr: the record list at +0x18, one record at 0x40 whose loadout vector begins at +0x294.
+        var c = new byte[0x400];
+        Put(c, 0x18, 0x30); Put(c, 0x1C, 0x34); Put(c, 0x30, 0x40);
+        Put(c, 0x40, 0x9C208CFD); Put(c, 0x44, 0xE537D165);
+        Put(c, 0x40 + 0x294, 0x3E0); Put(c, 0x40 + 0x298, 0x3E8);
+        Put(c, 0x3E0, 0xF03B2FCC); Put(c, 0x3E4, 0xB6A2F3FB);
+        var t = Assert.Single(CaMissionTables.ParsePspCharacterTypes(c, ftb1: true));
+        Assert.Equal((0x9C208CFDu, 0xE537D165u), (t.Hash, t.Model));
+        Assert.Equal(new[] { 0xF03B2FCCu, 0xB6A2F3FBu }, t.Weapons);
+
+        // wep_weapon.rdr: entries start with a pointer to themselves, the hash and the short name; a gun's display
+        // name is "CATEGORY: NAME". The grenade's first entry (a projectile) has no model; its second does.
+        var w = new byte[0x400];
+        void Entry(int at, uint hash, string name, uint model, string? display)
+        {
+            Put(w, at - 4, (uint)(at - 4)); Put(w, at, hash);
+            System.Text.Encoding.ASCII.GetBytes(name).CopyTo(w, at + 4);
+            Put(w, at + 0x18, model);
+            if (display != null) System.Text.Encoding.ASCII.GetBytes(display).CopyTo(w, at + 0x44);
+        }
+        Entry(0x010, 0xB6A2F3FB, "M67 grenade", 0, null);
+        Entry(0x100, 0xF03B2FCC, "M8", 0xAAAA0001, "ASSAULT RIFLE: M8");
+        Entry(0x200, 0xB6A2F3FB, "M67", 0xAAAA0002, null);
+        var models = new Dictionary<uint, string> { [0xAAAA0001] = "m8", [0xAAAA0002] = "w887d53fc" };
+        var found = CaMissionTables.FindFtb1Weapons(w, t.Weapons, models);
+        Assert.Equal(("weapon", "ASSAULT RIFLE: M8", (uint?)0xAAAA0001u), (found[0xF03B2FCC].Kind, found[0xF03B2FCC].Display, found[0xF03B2FCC].Model));
+        Assert.Equal(("item", "M67", (uint?)0xAAAA0002u), (found[0xB6A2F3FB].Kind, found[0xB6A2F3FB].Display, found[0xB6A2F3FB].Model));
+    }
+
+    private static string? Ftb1Disc => Environment.GetEnvironmentVariable("MAPBUILDER_FTB1_DISC") is { Length: > 0 } d
+        && Directory.Exists(Path.Combine(d, "PSP_GAME", "USRDIR", "RUN")) ? Path.Combine(d, "PSP_GAME", "USRDIR", "RUN") : null;
+
+    [Fact]
+    public void Retail_fireteam_bravo_zdbs_round_trip_and_its_maps_draw()
+    {
+        if (Ftb1Disc is not string run) return;
+        int count = 0;
+        foreach (var f in Directory.GetFiles(run, "*.ZDB", SearchOption.AllDirectories))
+        {
+            var bytes = File.ReadAllBytes(f);
+            using var zdb = ZdbArchive.FromBytes(bytes);
+            Assert.True(zdb.ToBytes().AsSpan().SequenceEqual(bytes), f);
+            count++;
+        }
+        Assert.Equal(407, count);
+
+        var pkg = CaPackage.Open(Path.Combine(run, "BANG_BUNKER"));
+        Assert.True(pkg.IsPsp && pkg.IsFtb1);
+        int tris = 0;
+        foreach (var p in pkg.MapScene())
+            tris += pkg.ObjectMesh(p.LibraryIndex, p.Object).Chunks.Sum(c => c.Triangles.Length / 3);
+        Assert.InRange(tris, 37000, 39000);
+        // A campaign mission: Sandman starts at s_able1 carrying the M8.
+        var p323 = Assert.Single(pkg.Missions(), m => m.Id == "P323");
+        Assert.Equal("SP", p323.Kind);
+        Assert.Contains(pkg.Missions(), m => m.Id == "P323_HE" && m.Mode == "HE");
+        var sandman = CaMissionTables.ParseActors(pkg.MissionResource("P323", "MSNv")!.Data, psp: true, ftb1: true).First(a => a.Name == "player");
+        Assert.Equal(("SANDMAN", "s_able1"), (sandman.Display, sandman.Starts[0].Point));
+        var type = CaMissionTables.ParsePspCharacterTypes(pkg.CharacterTable("P323")!.Data, ftb1: true).Single(t => t.Hash == sandman.Type);
+        Assert.NotNull(pkg.BuildMesh(pkg.ModelByHash(type.Model, "character")!).Skeleton);
+        var guns = CaMissionTables.FindFtb1Weapons(pkg.GlobalResource("WEAP")!.Data, type.Weapons, pkg.WeaponModelHashes());
+        Assert.Equal("ASSAULT RIFLE: M8", guns[type.Weapons[0]].Display);
+        Assert.NotNull(guns[type.Weapons[0]].Model);
+        Assert.Contains(pkg.MissionPoints("P323"), p => p.Name == "s_able1");
+        Assert.Equal("MP", CaPackage.Open(Path.Combine(run, "MP_BANG_BUNKER")).Missions()[0].Kind);
+    }
+
     // ------------------------------------------------------------------ retail
 
     private static string? Disc => Environment.GetEnvironmentVariable("MAPBUILDER_FTB2_DISC") is { Length: > 0 } d

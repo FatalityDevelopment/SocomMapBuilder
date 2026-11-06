@@ -7,12 +7,12 @@ import { TextureCache } from './webview/model-editor/model-loader';
 import { loadMapModels } from './webview/zipper-core/map-models';
 import type { ModelTexturePixels } from './webview/zipper-core/texture-pixels';
 import type { MapModel, MapViewport } from './viewport/mapViewport';
-import { errText, isCaFamily } from './mapModel';
+import { errText, isCaFamily, isFtb3 } from './mapModel';
 import { host, openRequest, useSignals } from './shared';
 import { aiChange, samePath, type AiFocus } from './shared/aiBridge';
 
 // CA and Battlefront edits change placements and points only, so an undo keeps the decoded meshes.
-const placementsOnly = (game?: string) => isCaFamily(game) || game === 'Star Wars: Battlefront' || game === 'GTA: San Andreas';
+const placementsOnly = (game?: string) => isCaFamily(game) || isFtb3(game) || game === 'Star Wars: Battlefront' || game === 'GTA: San Andreas';
 // A session the Map Builder cannot edit.
 export const mapViewOnly = (s: SessionStatus | null | undefined) => !!s?.readOnly;
 

@@ -54,6 +54,16 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         public bool IsPsp { get; private set; }
 
         /// <summary>
+        /// True for SOCOM: Fireteam Bravo (the first PSP game, UCUS-98615): version-7 ZDBs like Fireteam Bravo 2's, but
+        /// older resources (ISLE 53, ASST 42; Fireteam Bravo 2: 70, 59), its own mesh object layout
+        /// (<see cref="PspGe.Ftb1ObjectType"/>) and actor records, and one character.rdr in GLOBAL.ZDB.
+        /// </summary>
+        public bool IsFtb1 { get; private set; }
+
+        /// <summary>A mission's character.rdr: its own (Fireteam Bravo 2, CA), or GLOBAL.ZDB's (Fireteam Bravo).</summary>
+        public Resource? CharacterTable(string missionId) => IsFtb1 ? GlobalResource("CHAR") : MissionResource(missionId, "CHAR");
+
+        /// <summary>
         /// The ZDB files of a Fireteam Bravo 2 map folder (<c>RUN\FORT_MP</c>): every version-7 ZDB in it. A map is the
         /// island (<c>ISLAND_F.ZDB</c>: the <c>ISLE</c> library), the world (<c>FORT_MP.ZDB</c>), the characters
         /// (<c>VCOMMON_*.ZDB</c>, one per game mode) and the missions (<c>DEM.ZDB</c>, <c>SUP.ZDB</c> ...). Empty when
@@ -116,9 +126,13 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
             string global = run == null ? "" : Path.GetFullPath(Path.Combine(run, "GLOBAL.ZDB"));
             if (files.Count > 1 && !files.Contains(global, StringComparer.OrdinalIgnoreCase) && File.Exists(global)
                 && PspMapFiles(run!).Contains(global, StringComparer.OrdinalIgnoreCase)) Add(global);
+            pkg.IsFtb1 = pkg.Resources.Any(r => r.Tag == "ISLE" && r.Version < Ftb2IsleVersion || r.Tag == "ASST" && r.Version < Ftb2AsstVersion);
             pkg.IndexLibraries();
             return pkg;
         }
+
+        // Fireteam Bravo 2's ISLE and ASST resource versions; Fireteam Bravo's are older (53, 42).
+        private const uint Ftb2IsleVersion = 70, Ftb2AsstVersion = 59;
 
         public static CaPackage Open(string path)
         {
@@ -159,9 +173,9 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
             {
                 if (r.Data.Length < 0x60) continue;
                 var lib = new CaLibrary(r.Data, psp: IsPsp);
-                if (lib.Version is < 1 or > 3 || lib.Models.Count == 0 && lib.Textures.Count == 0) continue;
+                if (lib.Version is < 1 or > 4 || lib.Models.Count == 0 && lib.Textures.Count == 0) continue;
                 _libraries.Add((r, lib));
-                // A version-3 header's second library (global_assets.rdr: every weapon, 88 models).
+                // A version-3 (or 4) header's second library (global_assets.rdr: every weapon, 88 models).
                 if (lib.Nested() is { } nested && nested.Models.Count > 0)
                     _libraries.Add((r with { Name = r.Name + NestedSuffix }, nested));
             }
@@ -429,9 +443,44 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
                                 piece++ == 0 ? key : $"{key}~{piece - 1}", -1, inst.Matrix));
                     }
                 }
-                if (lib.Psp) list.AddRange(PspWorldObjects(w, lib, list));
+                if (lib.Psp)
+                {
+                    list.AddRange(PspWorldObjects(w, lib, list));
+                    MarkPspSky(list, w.Name);
+                }
             }
             return list;
+        }
+
+        /// <summary>
+        /// Moves a world's node-placed sky domes to <see cref="SkyWorld"/> (Fireteam Bravo places its domes from the
+        /// world's node tree; Fireteam Bravo 2's are free objects, see <see cref="PspWorldObjects"/>): a placement
+        /// whose bounds enclose all but at most two of the world's others on x and z, or that stands above
+        /// <see cref="SkyHeight"/>.
+        /// </summary>
+        private void MarkPspSky(List<Placement> list, string world)
+        {
+            var mine = Enumerable.Range(0, list.Count).Where(i => list[i].World == world).ToList();
+            if (mine.Count < 3) return;
+            var boxes = mine.ToDictionary(i => i, i =>
+            {
+                var m = ObjectMesh(list[i].LibraryIndex, list[i].Object);
+                var min = new[] { float.PositiveInfinity, float.PositiveInfinity, float.PositiveInfinity };
+                var max = new[] { float.NegativeInfinity, float.NegativeInfinity, float.NegativeInfinity };
+                for (int c = 0; c < 8; c++)
+                {
+                    var (x, y, z) = Matrix4.Apply(list[i].Matrix, (c & 1) == 0 ? m.BoundsMin[0] : m.BoundsMax[0],
+                        (c & 2) == 0 ? m.BoundsMin[1] : m.BoundsMax[1], (c & 4) == 0 ? m.BoundsMin[2] : m.BoundsMax[2]);
+                    float[] v = { x, y, z };
+                    for (int k = 0; k < 3; k++) { min[k] = Math.Min(min[k], v[k]); max[k] = Math.Max(max[k], v[k]); }
+                }
+                return (Min: min, Max: max);
+            });
+            bool Encloses(int a, int b) =>
+                boxes[a].Min[0] < boxes[b].Min[0] && boxes[a].Min[2] < boxes[b].Min[2] && boxes[a].Max[0] > boxes[b].Max[0] && boxes[a].Max[2] > boxes[b].Max[2];
+            foreach (int i in mine.Where(i => list[i].NodeOffset >= 0).ToList())
+                if (mine.Count(j => j != i && Encloses(i, j)) >= mine.Count - 3 || boxes[i].Min[1] > SkyHeight)
+                    list[i] = list[i] with { World = SkyWorld };
         }
 
         /// <summary>
@@ -461,7 +510,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
             return list;
         }
 
-        /// <summary>The world name of a Fireteam Bravo 2 sky dome or cloud layer (the Map Builder's Sky layer).</summary>
+        /// <summary>The world name of a Fireteam Bravo sky dome or cloud layer (the Map Builder's Sky layer).</summary>
         public const string SkyWorld = "sky";
 
         /// <summary>Fireteam Bravo 2 maps keep their playable ground well below this height; clouds and sun cards are above it.</summary>
@@ -689,14 +738,19 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
             if (_missions != null) return _missions;
             // Fireteam Bravo 2: a map folder's game modes (DEM.ZDB, SUP.ZDB ...) or campaign missions (SP.ZDB,
             // DYNAMIC.ZDB) each hold a mission.rdr in CA's layout; the folder says which (FORT_SP, VILLAGE_SP2).
-            string pspKind = System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(Path.TrimEndingDirectorySeparator(
-                Directory.Exists(SourcePath) ? SourcePath : Path.GetDirectoryName(SourcePath) ?? "")), "_SP[0-9]*$", System.Text.RegularExpressions.RegexOptions.IgnoreCase) ? "SP" : "MP";
+            // Fireteam Bravo: online folders start MP_ (MP_BANG_BUNKER: PM23.ZDB, PM23FFA.ZDB ...); the others are
+            // campaign missions and their objective variants (BANG_BUNKER: P323.ZDB, P323_HE.ZDB ...).
+            string folder = Path.GetFileName(Path.TrimEndingDirectorySeparator(Directory.Exists(SourcePath) ? SourcePath : Path.GetDirectoryName(SourcePath) ?? ""));
+            string pspKind = IsFtb1
+                ? folder.StartsWith("MP_", StringComparison.OrdinalIgnoreCase) ? "MP" : "SP"
+                : System.Text.RegularExpressions.Regex.IsMatch(folder, "_SP[0-9]*$", System.Text.RegularExpressions.RegexOptions.IgnoreCase) ? "SP" : "MP";
             int Rank(string kind) => kind switch { "SP" => 0, "IA" => 1, "MP" => 2, "TR" => 3, _ => 4 };
             return _missions = Resources.Where(r => r.Tag == "AIMm")
                 .Select(r =>
                 {
                     string id = Path.GetFileNameWithoutExtension(r.File.Replace('\\', '/')).ToUpperInvariant();
-                    if (IsPsp) return new MissionInfo(id, r.File, pspKind, "");
+                    if (IsPsp) return new MissionInfo(id, r.File, pspKind,
+                        IsFtb1 && System.Text.RegularExpressions.Regex.Match(id, @"^PM?\d+_?([A-Z]+)$") is { Success: true } mode ? mode.Groups[1].Value : "");
                     var m = System.Text.RegularExpressions.Regex.Match(id, @"^(SP|MP|IA|TR)\d+([A-Z]*)$");
                     return new MissionInfo(id, r.File, m.Success ? m.Groups[1].Value : "other", m.Success ? m.Groups[2].Value : "");
                 })

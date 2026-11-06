@@ -20,7 +20,7 @@ internal sealed partial class ZipperAssetService
     private static string? SessionSourcePath(string id) =>
         Find(id) is { } z ? (z.OpenPath.Length > 0 ? z.OpenPath : z.Package.SourcePath)
         : CaSessions.TryGetValue(id, out var ca) ? ca.Package.SourcePath
-        : Assets.GtaAssetService.SourcePathOf(id) ?? Assets.SwbfAssetService.SourcePathOf(id);
+        : Assets.GtaAssetService.SourcePathOf(id) ?? Assets.SwbfAssetService.SourcePathOf(id) ?? Assets.Ftb3AssetService.SourcePathOf(id);
 
     /// <summary>Answers ASSET_SAVE when it asks for a disc image; null otherwise (the game's own save runs).</summary>
     private static string? DiscSave(CommandMessage c, Func<CommandMessage, string> save)

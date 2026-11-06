@@ -61,7 +61,7 @@ public static class CaMissionEdits
             WriteName(bytes, point.RecordOffset + 8, newName);
             if (package.MissionResource(missionId, "MSNv") is { } actors)
             {
-                var starts = CaMissionTables.ParseActors(actors.Data, package.IsPsp).SelectMany(a => a.Starts).Where(s => SameName(s.Point, point.Name)).ToList();
+                var starts = CaMissionTables.ParseActors(actors.Data, package.IsPsp, package.IsFtb1).SelectMany(a => a.Starts).Where(s => SameName(s.Point, point.Name)).ToList();
                 if (starts.Count > 0)
                 {
                     var actorBytes = (byte[])actors.Data.Clone();
@@ -127,7 +127,7 @@ public static class CaMissionEdits
             var mission = CaMissions.ParseMission(Require(package, missionId, "AIMm").Data);
             var (_, point) = FindPoint(mission, values[0].GetString()!);
             resource = Require(package, missionId, "MSNv");
-            var actors = CaMissionTables.ParseActors(resource.Data, package.IsPsp);
+            var actors = CaMissionTables.ParseActors(resource.Data, package.IsPsp, package.IsFtb1);
             var actor = actors[Index(path[0], actors.Count, "Actor row")];
             var start = actor.Starts[Index(path[2], actor.Starts.Count, "Start index")];
             bytes = (byte[])resource.Data.Clone();

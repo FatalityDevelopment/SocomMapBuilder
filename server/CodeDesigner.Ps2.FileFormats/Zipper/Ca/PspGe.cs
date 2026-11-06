@@ -3,10 +3,11 @@
 namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
 {
     /// <summary>
-    /// SOCOM: Fireteam Bravo 2 (PSP) libraries. They share CA's library header, model / node trees and texture and object
-    /// vectors (<see cref="CaLibrary"/>), but the records the PS2's VIF / GS read are replaced by the PSP's graphics
-    /// engine (GE): static objects hold GE display lists over vertex buffers, and texture records hold swizzled GE
-    /// texels with their CLUT. Layouts observed on the retail disc (UCUS-98645); see docs/formats/psp.md.
+    /// SOCOM: Fireteam Bravo and Fireteam Bravo 2 (PSP) libraries. They share CA's library header, model / node trees
+    /// and texture and object vectors (<see cref="CaLibrary"/>), but the records the PS2's VIF / GS read are replaced by
+    /// the PSP's graphics engine (GE): mesh objects hold batches over GE vertex buffers, and texture records hold
+    /// swizzled GE texels with their CLUT. Layouts observed on the retail discs (UCUS-98615, UCUS-98645); see
+    /// docs/formats/psp.md.
     /// </summary>
     public static class PspGe
     {
@@ -17,8 +18,11 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         /// vertex weights and each batch's bone palette. Read here in its bind pose.</summary>
         public const uint SkinnedObjectType = 0x0090C640;
 
-        /// <summary>A mesh object of either kind.</summary>
-        public static bool IsMeshObject(uint type) => type is StaticObjectType or SkinnedObjectType;
+        /// <summary>A Fireteam Bravo (1) mesh object, static or skinned (its batches' VTYPEs carry the weights).</summary>
+        public const uint Ftb1ObjectType = 0x008566A8;
+
+        /// <summary>A mesh object of any kind.</summary>
+        public static bool IsMeshObject(uint type) => type is StaticObjectType or SkinnedObjectType or Ftb1ObjectType;
 
         // ------------------------------------------------------------------ textures
 
@@ -168,19 +172,30 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         // ------------------------------------------------------------------ static meshes
 
         /// <summary>
-        /// A static object's batches. +0x04 its bounding box (8 corners), +0x70 the batch count; batch i is 0x140 bytes at +0x80 + 0x140·i: +0x00 the
-        /// material's GE commands (texture state, patched by the game), +0x74 the texture's name hash, +0x80 the
-        /// batch's bounding box (8 corners), +0xE0 its vertices and +0xE8 its display list (both from the batch start),
-        /// +0xEC the primitive count, +0xF4 vertex count (high half) and stride (bits 8-15), +0xF8 vertex bytes.
+        /// A mesh object's batches. Fireteam Bravo 2: +0x04 its bounding box (8 corners), +0x70 the batch count; batch i
+        /// is 0x140 bytes at +0x80 + 0x140·i: +0x00 the material's GE commands (texture state, patched by the game),
+        /// +0x74 the texture's name hash, +0x80 the batch's bounding box (8 corners), +0xE0 its vertices and +0xE8 its
+        /// display list (both from the batch start), +0xEC the primitive count, +0xF0 the bone list (from the batch),
+        /// +0xF4 vertex count (high half), stride (bits 8-15) and bone count (low byte), +0xF8 vertex bytes.
+        /// Fireteam Bravo (<see cref="Ftb1ObjectType"/>): see <see cref="Ftb1Batches"/>.
         /// </summary>
-        public sealed record Batch(int Offset, uint TextureHash, int Vertices, int DisplayList, int Count, int Stride);
+        /// <remarks>A Fireteam Bravo batch has no display list (<paramref name="DisplayList"/> -1): it draws one
+        /// primitive, <paramref name="Primitive"/> (a GE primitive type), over <paramref name="Count"/> vertices of
+        /// <paramref name="Vtype"/>.</remarks>
+        public sealed record Batch(int Offset, uint TextureHash, int Vertices, int DisplayList, int Count, int Stride,
+            uint Vtype = 0, int Primitive = 0, int Bones = 0, int BoneCount = 0, int MaterialLength = 0x74);
 
         public const int BatchSize = 0x140, FirstBatch = 0x80;
+
+        /// <summary>A Fireteam Bravo batch's size: 0x180 bytes, from +0x80.</summary>
+        public const int Ftb1BatchSize = 0x180;
 
         public static List<Batch> Batches(CaLibrary lib, int obj)
         {
             var list = new List<Batch>();
-            if (!IsMeshObject(lib.U32(obj))) return list;
+            uint type = lib.U32(obj);
+            if (!IsMeshObject(type)) return list;
+            if (type == Ftb1ObjectType) return Ftb1Batches(lib, obj);
             // Two counts: the low half, then the high half (batches drawn after the others, e.g. blended ones).
             uint counts = lib.U32(obj + 0x70);
             int count = (int)(counts & 0xFFFF) + (int)(counts >> 16);
@@ -191,7 +206,32 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
                 if (b + BatchSize > lib.Data.Length) break;
                 uint shape = lib.U32(b + 0xF4);
                 list.Add(new Batch(b, lib.U32(b + 0x74), b + (int)lib.U32(b + 0xE0), b + (int)lib.U32(b + 0xE8),
-                    (int)(shape >> 16), (int)((shape >> 8) & 0xFF)));
+                    (int)(shape >> 16), (int)((shape >> 8) & 0xFF), Bones: b + (int)lib.U32(b + 0xF0), BoneCount: (int)(shape & 0xFF)));
+            }
+            return list;
+        }
+
+        /// <summary>
+        /// Fireteam Bravo's batches. The object holds one vertex block: +0x6C its size, +0x70 where it starts (from the
+        /// object), +0x74 the first batch (0x80), +0x78 the batch count (low half). Batch i is 0x180 bytes at
+        /// +0x80 + 0x180·i: +0x00 the material's GE commands, +0x98 a display-list template the game fills in (VTYPE,
+        /// BASE, VADDR, PRIM, RET, all 0), +0xB0 the texture's name hash, +0xC0 the batch's bounding box (8 corners),
+        /// +0x120 its vertices (from the block), +0x128 stride (top byte), primitive (bits 16-23) and vertex count (low
+        /// half), +0x12C VTYPE, +0x130 the bone list (from the batch) and +0x134 low byte the bone count. Each batch's
+        /// vertices follow the last's, and their sizes add up to the block's.
+        /// </summary>
+        private static List<Batch> Ftb1Batches(CaLibrary lib, int obj)
+        {
+            var list = new List<Batch>();
+            int count = (int)(lib.U32(obj + 0x78) & 0xFFFF), first = (int)lib.U32(obj + 0x74), block = obj + (int)lib.U32(obj + 0x70);
+            if (count is <= 0 or > 4096 || first != FirstBatch) return list;
+            for (int i = 0; i < count; i++)
+            {
+                int b = obj + first + Ftb1BatchSize * i;
+                if (b + Ftb1BatchSize > lib.Data.Length) break;
+                uint shape = lib.U32(b + 0x128);
+                list.Add(new Batch(b, lib.U32(b + 0xB0), block + (int)lib.U32(b + 0x120), -1, (int)(shape & 0xFFFF), (int)(shape >> 24),
+                    lib.U32(b + 0x12C) & 0xFFFFFF, (int)((shape >> 16) & 0xFF), b + (int)lib.U32(b + 0x130), (int)(lib.U32(b + 0x134) & 0xFF), 0x98));
             }
             return list;
         }
@@ -221,14 +261,53 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         public static ModelMesh.MeshChunk? DecodeBatch(byte[] d, Batch batch, int index, string? visual, float[] world,
             List<(int Offset, VertexFormat Format)>? read = null)
         {
-            if (batch.Vertices <= 0 || batch.DisplayList <= 0 || batch.DisplayList + 4 > d.Length) return null;
+            bool direct = batch.DisplayList < 0 && batch.Vtype != 0;
+            if (batch.Vertices <= 0 || !direct && (batch.DisplayList <= 0 || batch.DisplayList + 4 > d.Length)) return null;
             uint vtype = 0;
             int vaddr = batch.Vertices, iaddr = -1;
             var pos = new List<float>(); var uv = new List<float>(); var nrm = new List<float>(); var col = new List<byte>();
             var tris = new List<int>();
             bool hasColour = false;
+            // One primitive over the next vertices (or indices); false when it reads outside the data.
+            bool Prim(int type, int n)
+            {
+                var fmt = new VertexFormat(vtype);
+                if (fmt.Stride == 0) return false;
+                // Vertex indices of this primitive (indexed or consecutive), then the vertices they read.
+                var ids = new int[n];
+                int idxSize = fmt.Index;
+                for (int i = 0; i < n; i++)
+                    ids[i] = idxSize == 0 || iaddr < 0 ? i
+                        : idxSize == 1 ? d[iaddr + i] : BitConverter.ToUInt16(d, iaddr + 2 * i);
+                var map = new Dictionary<int, int>();
+                int Vertex(int id)
+                {
+                    if (map.TryGetValue(id, out int v)) return v;
+                    int o = vaddr + id * fmt.Stride;
+                    if (o < 0 || o + fmt.Stride > d.Length) return -1;
+                    fmt.Read(d, o, world, pos, uv, nrm, col);
+                    read?.Add((o, fmt));
+                    return map[id] = pos.Count / 3 - 1;
+                }
+                var vs = ids.Select(Vertex).ToArray();
+                if (vs.Any(v => v < 0)) return false;
+                hasColour |= fmt.Colour != 0;
+                void Tri(int a, int b, int c) { if (a != b && b != c && a != c) { tris.Add(a); tris.Add(b); tris.Add(c); } }
+                if (type == 3) for (int i = 0; i + 2 < n; i += 3) Tri(vs[i], vs[i + 1], vs[i + 2]);
+                else if (type == 4) for (int i = 0; i + 2 < n; i++) { if ((i & 1) == 0) Tri(vs[i], vs[i + 1], vs[i + 2]); else Tri(vs[i + 1], vs[i], vs[i + 2]); }
+                else if (type == 5) for (int i = 1; i + 1 < n; i++) Tri(vs[0], vs[i], vs[i + 1]);
+                // VADDR / IADDR advance past what the primitive read.
+                if (idxSize == 0 || iaddr < 0) vaddr += n * fmt.Stride; else iaddr += n * idxSize;
+                return true;
+            }
+            // Fireteam Bravo: the batch is one primitive, stored as fields rather than a display list.
+            if (direct)
+            {
+                vtype = batch.Vtype;
+                if (!Prim(batch.Primitive, batch.Count)) return null;
+            }
             int words = 0;
-            for (int p = batch.DisplayList; p + 4 <= d.Length && words++ < 65536; p += 4)
+            for (int p = batch.DisplayList; !direct && p + 4 <= d.Length && words++ < 65536; p += 4)
             {
                 uint w = BitConverter.ToUInt32(d, p);
                 int cmd = (int)(w >> 24);
@@ -241,39 +320,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
                     case CmdIaddr: iaddr = batch.Vertices + (int)arg; break;
                     case CmdBase: break;
                     case CmdPrim:
-                    {
-                        var fmt = new VertexFormat(vtype);
-                        if (fmt.Stride == 0) return null;
-                        int type = (int)((arg >> 16) & 7), n = (int)(arg & 0xFFFF);
-                        // Vertex indices of this primitive (indexed or consecutive), then the vertices they read.
-                        var ids = new int[n];
-                        int idxSize = fmt.Index;
-                        for (int i = 0; i < n; i++)
-                            ids[i] = idxSize == 0 || iaddr < 0 ? i
-                                : idxSize == 1 ? d[iaddr + i] : BitConverter.ToUInt16(d, iaddr + 2 * i);
-                        int first = pos.Count / 3;
-                        var map = new Dictionary<int, int>();
-                        int Vertex(int id)
-                        {
-                            if (map.TryGetValue(id, out int v)) return v;
-                            int o = vaddr + id * fmt.Stride;
-                            if (o < 0 || o + fmt.Stride > d.Length) return -1;
-                            fmt.Read(d, o, world, pos, uv, nrm, col);
-                            read?.Add((o, fmt));
-                            return map[id] = pos.Count / 3 - 1;
-                        }
-                        var vs = ids.Select(Vertex).ToArray();
-                        if (vs.Any(v => v < 0)) return null;
-                        hasColour |= fmt.Colour != 0;
-                        void Tri(int a, int b, int c) { if (a != b && b != c && a != c) { tris.Add(a); tris.Add(b); tris.Add(c); } }
-                        if (type == 3) for (int i = 0; i + 2 < n; i += 3) Tri(vs[i], vs[i + 1], vs[i + 2]);
-                        else if (type == 4) for (int i = 0; i + 2 < n; i++) { if ((i & 1) == 0) Tri(vs[i], vs[i + 1], vs[i + 2]); else Tri(vs[i + 1], vs[i], vs[i + 2]); }
-                        else if (type == 5) for (int i = 1; i + 1 < n; i++) Tri(vs[0], vs[i], vs[i + 1]);
-                        // VADDR / IADDR advance past what the primitive read.
-                        if (idxSize == 0 || iaddr < 0) vaddr += n * fmt.Stride; else iaddr += n * idxSize;
-                        _ = first;
+                        if (!Prim((int)((arg >> 16) & 7), (int)(arg & 0xFFFF))) return null;
                         break;
-                    }
                 }
             }
             int count = pos.Count / 3;
@@ -302,8 +350,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
 
         /// <summary>
         /// A skinned object (characters) as skinned groups in bind pose. Each batch's vertices carry 1-8 u8 weights
-        /// (0x80 = 1.0; GE VTYPE bits 9-10 and 14-16) for the bones its list names: +0xF0 the list (bytes, from the
-        /// batch), +0xF4 low byte their count. Positions are in the model's bind pose, so each influence is that
+        /// (0x80 = 1.0; GE VTYPE bits 9-10 and 14-16) for the bones its list names (<see cref="Batch.Bones"/>, one byte
+        /// each; Fireteam Bravo 2: +0xF0 from the batch, +0xF4 low byte their count). Positions are in the model's bind pose, so each influence is that
         /// position in its bone's bind space.
         /// </summary>
         public static List<SkinnedMesh.Group> Skinned(CaLibrary lib, int obj, IReadOnlyList<float[]> boneWorlds)
@@ -317,7 +365,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
                 var read = new List<(int Offset, VertexFormat Format)>();
                 var chunk = DecodeBatch(d, batch, 0, null, Matrix4.Identity(), read);
                 if (chunk == null) continue;
-                int slots = (int)(lib.U32(batch.Offset + 0xF4) & 0xFF), list = batch.Offset + (int)lib.U32(batch.Offset + 0xF0);
+                int slots = batch.BoneCount, list = batch.Bones;
                 var vertices = new List<SkinnedMesh.Part>[chunk.VertexCount];
                 for (int v = 0; v < chunk.VertexCount; v++)
                 {
@@ -356,10 +404,11 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
             return groups;
         }
 
-        /// <summary>Whether a batch's material leaves back-face culling on (GE command 0x1D in its first 0x74 bytes).</summary>
+        /// <summary>Whether a batch's material leaves back-face culling on (GE command 0x1D in its material commands: the
+        /// first 0x74 bytes, Fireteam Bravo's first 0x98).</summary>
         public static bool Culled(byte[] d, Batch batch)
         {
-            for (int p = batch.Offset; p + 4 <= batch.Offset + 0x74 && p + 4 <= d.Length; p += 4)
+            for (int p = batch.Offset; p + 4 <= batch.Offset + batch.MaterialLength && p + 4 <= d.Length; p += 4)
                 if (d[p + 3] == 0x1D) return (d[p] & 1) != 0;
             return true;
         }
