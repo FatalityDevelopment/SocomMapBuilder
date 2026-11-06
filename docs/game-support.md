@@ -12,7 +12,7 @@ SOCOM U.S. Navy SEALs II is the primary target. Combined Assault also supports s
 | **Star Wars: Battlefront** | `.ISO` or a `.LVL`: models, textures and maps | Move and turn props, command posts and vehicle spawns. Save `.LVL` copies or a patched `.ISO`. | Soldiers, weapons, vehicles and props to SOCOM II |
 | **SOCOM: Fireteam Bravo 2 (PSP)** | A map folder or any ZDB in it: the world, props, characters (bind pose), weapons, textures, missions and points | Move placed props, vehicles and trees; move and rename points; actor starts. Save ZDB copies or a patched disc image | Characters (skinned), weapons and placed props to SOCOM II |
 | **SOCOM: Fireteam Bravo (PSP)** | A map folder or any ZDB in it, as Fireteam Bravo 2: the world, props, characters, weapons, missions and points | As Fireteam Bravo 2 (node and point moves); not tried in game | As Fireteam Bravo 2; not tried |
-| **SOCOM: Fireteam Bravo 3 (PSP)** | The disc, its `levels` folder, a level folder or a `.ssg`: every level's terrain, buildings and placed props, textured | — (view only) | — |
+| **SOCOM: Fireteam Bravo 3 (PSP)** | The disc, its `levels` folder, a level folder or a `.ssg`: every level's terrain, buildings, placed props and game-mode points, textured; the disc's characters (skinned) | Move, turn and scale placed props; move points. Save level-file copies or a patched disc image | — |
 
 ## SOCOM II
 
@@ -91,7 +91,7 @@ The first game opens like Fireteam Bravo 2: open a map folder such as `I:\PSP_GA
 
 ## SOCOM: Fireteam Bravo 3 (PSP)
 
-Open the disc (`K:\`), its `PSP_GAME\USRDIR\levels` folder, a level folder or any `.ssg` in one. Pick a level from **Map**: the Map Builder draws its terrain, buildings and placed props, textured, with the sky dome and distant scenery in the **Sky** layer. The Model Editor lists the level's models. Levels are view only: points, characters, animations, editing and conversion are not done yet. [File layouts](formats/ftb3.md)
+Open the disc (`K:\`), its `PSP_GAME\USRDIR\levels` folder, a level folder or any `.ssg` in one. Pick a level from **Map**: the Map Builder draws its terrain, buildings and placed props, textured, with the sky dome and distant scenery in the **Sky** layer, and its game-mode points: team spawns, checkpoints, extraction zones and demolition targets. Move, turn and scale props with the gizmo or the Item fields, and move points; **File › Save copy** writes the edited level files into a folder at their places under `levels` (`Valley_multi\Valley_multi_inst.ssg`). The Model Editor lists the level's models and the disc's 50 characters (under `characters`), skinned to their shared skeleton in their bind pose. Animations and conversion are not done yet, and no edit has been tried in game. [File layouts](formats/ftb3.md)
 
 ## SOCOM: Fireteam Bravo 2 (PSP)
 

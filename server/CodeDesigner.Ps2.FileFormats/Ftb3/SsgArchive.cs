@@ -24,8 +24,14 @@ namespace CodeDesigner.Ps2.FileFormats.Ftb3
         public string SourcePath { get; private init; } = "";
         public List<Entry> Entries { get; } = new();
 
-        /// <summary>The data block, unpacked; entries index it.</summary>
+        /// <summary>The data block, unpacked; entries index it. Edits write into it (<see cref="ToBytes"/>).</summary>
         public byte[] Data { get; private init; } = Array.Empty<byte>();
+
+        /// <summary>True when the file's data is zlib-compressed.</summary>
+        public bool Packed { get; private init; }
+
+        // The header, entry table and string table, as read.
+        private byte[] _head = Array.Empty<byte>();
 
         public const int HeaderSize = 0x20, Version = 6;
 
@@ -66,7 +72,7 @@ namespace CodeDesigner.Ps2.FileFormats.Ftb3
                 data = ms.ToArray();
             }
             else data = f[dataAt..];
-            var a = new SsgArchive { SourcePath = path, Data = data };
+            var a = new SsgArchive { SourcePath = path, Data = data, Packed = BitConverter.ToUInt32(f, 4) == 1, _head = f[..dataAt] };
             for (int i = 0; i < entries / 16; i++)
             {
                 int e = HeaderSize + 16 * i;
@@ -82,6 +88,27 @@ namespace CodeDesigner.Ps2.FileFormats.Ftb3
                 a.Entries.Add(new Entry(i, n, length, offset, f[e + 12], f[e + 13], BitConverter.ToUInt16(f, e + 14)));
             }
             return a;
+        }
+
+        /// <summary>
+        /// The file with the data as it is now: an unpacked file byte for byte as read (apart from edits), a packed one
+        /// with its data compressed again (zlib, so the bytes differ from the disc's) and its packed size (+0x18) set.
+        /// </summary>
+        public byte[] ToBytes()
+        {
+            byte[] body = Data;
+            if (Packed)
+            {
+                using var ms = new MemoryStream();
+                using (var z = new ZLibStream(ms, CompressionLevel.SmallestSize, leaveOpen: true)) z.Write(Data);
+                body = ms.ToArray();
+            }
+            var file = new byte[_head.Length + body.Length];
+            _head.CopyTo(file, 0);
+            BitConverter.GetBytes((uint)Data.Length).CopyTo(file, 0x10);
+            if (Packed) BitConverter.GetBytes((uint)body.Length).CopyTo(file, 0x18);
+            body.CopyTo(file, _head.Length);
+            return file;
         }
 
         public uint U32(int o) => o >= 0 && o + 4 <= Data.Length ? BitConverter.ToUInt32(Data, o) : 0;

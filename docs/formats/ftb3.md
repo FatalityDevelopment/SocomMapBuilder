@@ -1,6 +1,6 @@
 # SOCOM: Fireteam Bravo 3 (PSP)
 
-*SOCOM: U.S. Navy SEALs Fireteam Bravo 3* (UCUS-98716) does not share the Zipper formats of the other SOCOM games. Its files are `.ssg` containers, and its vertices and textures are laid out for the PSP's graphics engine (GE). Map Builder opens its levels read-only. Code: `Ftb3/SsgArchive.cs`, `Ftb3/Ftb3Package.cs`, `Services/Assets/Ftb3AssetService.cs`. Tests: `Ftb3Tests` (the retail check needs `MAPBUILDER_FTB3_DISC`, the UMD root, e.g. `K:\`).
+*SOCOM: U.S. Navy SEALs Fireteam Bravo 3* (UCUS-98716) does not share the Zipper formats of the other SOCOM games. Its files are `.ssg` containers, and its vertices and textures are laid out for the PSP's graphics engine (GE). Map Builder draws its levels and characters and moves a level's props and game-mode points. Code: `Ftb3/SsgArchive.cs`, `Ftb3/Ftb3Package.cs`, `Ftb3/Ftb3Characters.cs`, `Services/Assets/Ftb3AssetService.cs` (and `.Edits.cs`). Tests: `Ftb3Tests` (the retail check needs `MAPBUILDER_FTB3_DISC`, the UMD root, e.g. `K:\`).
 
 ## Disc layout
 
@@ -30,6 +30,8 @@ All values are little-endian.
 | +0x18 | Its size, packed |
 
 The entry table follows at 0x20, then the string table, then the data. An entry is 16 bytes: `+0x00` its name (an offset into the string table), `+0x04` size, `+0x08` offset (in the unpacked data), `+0x0C` type, `+0x0D` flags, `+0x0E` a 16-bit hash. An object's resources share one name, which is often two names run together: the object's, then its shape's (`Grass_TallGrass_Tall`). 1,351 of the disc's 1,353 `.ssg` files open; one cut-scene file does not.
+
+Written back, an unedited file is byte for byte the disc's, packed ones too: .NET's smallest zlib level gives the game's stream. An edited packed file is compressed again, so its size changes by a few bytes.
 
 ## Models
 
@@ -76,9 +78,39 @@ A level draws:
 
 Coverage (2026-11-06): all 26 levels draw, with 30,000–134,000 triangles each (Valley: 107 models, 493 instances, 55,800 triangles).
 
+## Points
+
+`_coll.ssg` holds the level's dynamic objects as type-`0x14` entries: `+0x00` the name (`char[16]`), `+0x40` a 4×4 matrix (row vectors, translation in row 3), then bounds and the collision shape. `_full.ssg` holds a copy of each. All 800 on the disc keep their matrix there. Most are doors, turrets and other breakable or moving objects; the game-mode places are listed as points:
+
+| Name | Kind | Team |
+|---|---|---|
+| `AlphaSealControl` … `EchoMercControl`, `AlphaNeutral` … | spawn | Seal 1, Merc 2, Neutral 0 |
+| `SealCheckPoint_1`, `MercCheckPoint_2` | checkpoint | by name |
+| `SealExtractZone_1`, `MercExtractionZone_…` | extraction | by name |
+| `DemoSealTarget`, `DemoMercTarget` (not their `_Destroyed` copies) | target | by name |
+
+Valley has 25.
+
+## Editing and saving
+
+Edits rewrite 64 bytes in place:
+
+- **Props** (instances): the instance's matrix in `_inst.ssg` (unpacked on every level). They move, turn and scale; the terrain and buildings built in place cannot move.
+- **Points**: the object's matrix in `_coll.ssg` and its copy in `_full.ssg`.
+
+**Save copy** writes each edited file into the chosen folder at its place under `levels` (`<folder>\Valley_multi\Valley_multi_inst.ssg`); a `.ISO` gets them patched in by those paths. An instance move changes 3–4 bytes of `_inst.ssg`. Nothing has been tried in game.
+
+## Characters
+
+`common\characters` holds one `.ssg` per part: `<name>.ssg` the body, `_H` the head, `_G` gloves, `_P` pouches, `_T` torso gear (`_U` is another uniform and is not drawn). The 50 characters with a body and a head are listed (`Sandman_woodland`, `KRA_Regulars1` …), under the archive `characters`; their textures are in their own part files.
+
+All share one skeleton, `skeleton\skelly.skel`, which is text: `(skeleton skelly 20)`, each bone's parent (`-1 ; parent of 0 (hips) is -1`), then each bone's local rotation (a quaternion) and translation and its inverse bind matrix (4×4, row vectors), named in a comment (`; 0 (hips)`). The 20 names are CA's (hips, spinelo, spinehi, neck, head, the arms, legs and `weapon`).
+
+Character meshes are skinned (VTYPE `0xC532`): each vertex starts with four u16 weights (`0x8000` = 1.0), and a strip header's `+0x10` holds the four bones they mean, one byte each (`0xFF` none). Positions are in the bind pose, in model space, at **8 times the model's scale** (`+0x4C` is 8; the vertices need 64). This holds on all 847 character models (their stored bounds need exactly that), and level models, which are not weighted, use their scale as it is. Characters stand in a T-pose (arms along Z), 1.95 m tall with their headgear; 96.9% of the vertices weighted fully to one bone lie at that bone or a neighbour.
+
 ## Not done yet
 
-- Points (spawns, objectives, control points), the mission text and the tactical map.
-- Characters (`common\characters`), skinning and animations.
+- The mission text and the tactical map; renaming points, changing their team.
+- Animations (`_full.ssg` type `0x1D`, `common\characters\motions`) and the other uniform (`_U`).
 - Lighting (`vltl`), types `0x04`, `0x05` and `0x0D`.
-- Editing, saving and conversion to SOCOM II.
+- Conversion to SOCOM II.

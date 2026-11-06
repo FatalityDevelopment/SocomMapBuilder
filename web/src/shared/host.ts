@@ -170,6 +170,10 @@ export const host = {
     if (/^SOCOM: Fireteam Bravo( 2)?$/.test(s.game ?? '')) {
       return host.browse({ mode: 'folder', title: 'Choose a folder for the edited ZDBs', key: 'ftb-save', submitLabel: 'Save here' });
     }
+    // Fireteam Bravo 3: the edited .ssg files, each at its place under levels (Valley_multi/Valley_multi_inst.ssg).
+    if (s.game === 'SOCOM: Fireteam Bravo 3') {
+      return host.browse({ mode: 'folder', title: 'Choose a folder for the edited level files', key: 'ftb3-save', submitLabel: 'Save here' });
+    }
     if (s.game === 'SOCOM 3 / Combined Assault') {
       return host.browse({ mode: 'folder', title: 'Choose a folder for the edited archive', key: 'ca-save', submitLabel: 'Save here' });
     }

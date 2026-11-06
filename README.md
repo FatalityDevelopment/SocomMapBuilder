@@ -54,7 +54,7 @@ Open a SOCOM II package and work across the whole map: its world, props, clutter
 | **Textures and palettes** | Replace or create textures and palettes from images, import them from other packages, export PNG |
 | **Animation Editor** | Play and edit character clips, key bones, and fire mounted weapons with their muzzle effects |
 | **Asset Viewer** | Browse a whole disc down to archive records; preview every retail file type, from models and textures to sounds, movies and memory-card icons; edit records in place |
-| **Other games** | SOCOM 1, Combined Assault, Fireteam Bravo 1 and 2 (PSP), GTA: San Andreas and Star Wars: Battlefront maps drawn and edited in the Map Builder; Fireteam Bravo 3 levels drawn |
+| **Other games** | SOCOM 1, Combined Assault, Fireteam Bravo 1 and 2 (PSP), GTA: San Andreas, Star Wars: Battlefront and Fireteam Bravo 3 maps drawn and edited in the Map Builder |
 | **Conversion** | SOCOM II models to SOCOM 3 / Combined Assault; Combined Assault, GTA: San Andreas, Battlefront and Fireteam Bravo 2 models to SOCOM II |
 | **Disc images** | Save any game's edits straight into a copy of its `.ISO` |
 | **AI (MCP)** | An MCP server with tools to read, edit, validate and save packages, build weapons and characters, and drive the app's camera |
@@ -152,7 +152,7 @@ The same Map Builder, Model Editor and Asset Viewer open five more games. Each o
 | **SOCOM: Combined Assault** | Locations and missions by name; move points, world objects, actor starts and headings; edit valves and allowed weapons | Models and textures | Models |
 | **SOCOM: Fireteam Bravo** (PSP) | Every map, its props, characters, missions and points; move props and points | Characters, weapons, props | Characters, weapons, props |
 | **SOCOM: Fireteam Bravo 2** (PSP) | The island, props, characters, missions and points; move props, vehicles, trees and points | Characters, weapons, props | Characters, weapons, props |
-| **SOCOM: Fireteam Bravo 3** (PSP) | All 26 levels: terrain, buildings and placed props (view only) | Level models | — |
+| **SOCOM: Fireteam Bravo 3** (PSP) | All 26 levels with their game-mode points; move props and points | Level models, characters | — |
 | **GTA: San Andreas** (PS2) | The map by area with timed objects and water; place, move, turn and delete placements | DFF models, frames, materials, UVs; save DFF or IMG | Models and character clips |
 | **Star Wars: Battlefront** | All 22 maps with command posts, paths and regions; move props, command posts and vehicle spawns | Soldiers, vehicles, weapons, props | Soldiers, weapons, vehicles, props |
 
@@ -235,7 +235,7 @@ Map Builder is actively developed, and support differs by game and asset type.
 - Map, model and animation edits round-trip through save and reopen. Imported models, imported textures and textures made from images render in the editors, but not every combination has been tested in game.
 - **Runtime VRAM is limited.** Large textures or many new textures may exceed what a map can use in game.
 - An imported character can appear correctly in the editors, but spawning it in a mission also needs the relevant character records.
-- **Other games:** SOCOM 3 and Combined Assault workflows vary by format and feature; Combined Assault edits are not yet verified in game. GTA: San Andreas edits have booted on a patched disc. Battlefront and Fireteam Bravo 2 map edits keep file sizes (props cannot be added or deleted yet) and have not been tried in game, and their animations are not converted yet. SOCOM 1 saves are untested. Fireteam Bravo's edits and conversions use Fireteam Bravo 2's code and have not been tried in game, and Fireteam Bravo 3 levels are view only.
+- **Other games:** SOCOM 3 and Combined Assault workflows vary by format and feature; Combined Assault edits are not yet verified in game. GTA: San Andreas edits have booted on a patched disc. Battlefront and Fireteam Bravo 2 map edits keep file sizes (props cannot be added or deleted yet) and have not been tried in game, and their animations are not converted yet. SOCOM 1 saves are untested. Fireteam Bravo's edits and conversions use Fireteam Bravo 2's code and have not been tried in game, and Fireteam Bravo 3 edits have not been tried in game either.
 - This repository does not include game assets, or the CodeDesigner runtime source used to inject map items and launch new maps.
 
 ## Related projects
