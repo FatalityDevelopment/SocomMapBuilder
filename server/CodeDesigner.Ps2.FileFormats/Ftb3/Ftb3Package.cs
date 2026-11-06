@@ -9,7 +9,7 @@ namespace CodeDesigner.Ps2.FileFormats.Ftb3
     /// its models (type 0x0B, each with the mesh pieces before it, type 0x00) and some textures (0x01), <c>_vram.ssg</c>
     /// the rest of its textures and <c>_inst.ssg</c> its placed instances (0x07). See docs/formats/ftb3.md.
     /// </summary>
-    public sealed class Ftb3Package
+    public sealed partial class Ftb3Package
     {
         public const string Game = "SOCOM: Fireteam Bravo 3";
 
@@ -17,9 +17,17 @@ namespace CodeDesigner.Ps2.FileFormats.Ftb3
         /// vertices are; <c>prop</c>: placed by instances; <c>lod</c>, <c>sky</c>), the level and its model entry (an index into the level archive's entries).</summary>
         public sealed record Model(string Name, string Kind, string Level, int Entry, int Pieces, int Vertices);
 
-        /// <summary>A placed instance: its entry name, the model it draws (null for a marker without one) and its matrix
-        /// (row vectors, translation in [12..14]).</summary>
-        public sealed record Instance(string Id, string Name, string? Model, float[] Matrix);
+        /// <summary>A placed instance: its entry name, the model it draws (null for a marker without one), its matrix
+        /// (row vectors, translation in [12..14]) and where the matrix is in <c>_inst.ssg</c>'s data.</summary>
+        public sealed record Instance(string Id, string Name, string? Model, float[] Matrix, int At = -1);
+
+        /// <summary>
+        /// A game-mode place (a <c>_coll.ssg</c> object, type 0x14): spawn controls (<c>AlphaSealControl</c>,
+        /// <c>DeltaMercControl</c>, <c>BravoNeutral</c>), checkpoints, extraction zones and demolition targets. Kind:
+        /// spawn, checkpoint, extraction or target; team 1 SEALs, 2 mercenaries, 0 neither. <paramref name="Places"/> are
+        /// where its matrix is: the object in <c>_coll.ssg</c> and its copy in <c>_full.ssg</c>.
+        /// </summary>
+        public sealed record Point(string Name, string Kind, int Team, float[] Matrix, List<(SsgArchive Archive, int At)> Places);
 
         public sealed record Texture(string Name, uint Hash, int Width, int Height, int Depth, byte[] Rgba, bool HasAlpha);
 
@@ -94,6 +102,18 @@ namespace CodeDesigner.Ps2.FileFormats.Ftb3
             public Dictionary<string, (SsgArchive Archive, SsgArchive.Entry Entry)> TexturesByName { get; } = new(StringComparer.OrdinalIgnoreCase);
             public Dictionary<string, ModelMesh> Meshes2 { get; } = new(StringComparer.OrdinalIgnoreCase);
             public List<Instance>? Instances { get; set; }
+            public List<Point>? Points { get; set; }
+            public required string Dir { get; init; }
+            public required string Name { get; init; }
+            private readonly Dictionary<string, SsgArchive?> _extra = new(StringComparer.OrdinalIgnoreCase);
+
+            /// <summary>Another of the level's files (<c>_coll.ssg</c>, <c>_full.ssg</c>), read once; null when missing.</summary>
+            public SsgArchive? File(string suffix)
+            {
+                if (_extra.TryGetValue(suffix, out var hit)) return hit;
+                string path = Path.Combine(Dir, Name + suffix);
+                return _extra[suffix] = System.IO.File.Exists(path) ? SsgArchive.Open(path) : null;
+            }
         }
 
         private LevelData Load(string level)
@@ -102,7 +122,7 @@ namespace CodeDesigner.Ps2.FileFormats.Ftb3
             if (!Levels.TryGetValue(level, out var dir)) throw new KeyNotFoundException($"No level {level}");
             string name = Path.GetFileName(dir);
             SsgArchive? Optional(string suffix) => File.Exists(Path.Combine(dir, name + suffix)) ? SsgArchive.Open(Path.Combine(dir, name + suffix)) : null;
-            var data = new LevelData { Meshes = SsgArchive.Open(Path.Combine(dir, name + ".ssg")), Vram = Optional("_vram.ssg"), Placements = Optional("_inst.ssg") };
+            var data = new LevelData { Meshes = SsgArchive.Open(Path.Combine(dir, name + ".ssg")), Vram = Optional("_vram.ssg"), Placements = Optional("_inst.ssg"), Dir = dir, Name = name };
             // Textures: the level's own (most of a campaign level's), then _vram.ssg's.
             foreach (var a in new[] { data.Meshes, data.Vram })
                 if (a != null)
@@ -172,11 +192,95 @@ namespace CodeDesigner.Ps2.FileFormats.Ftb3
                     string model = a.Str(e.Offset + 0x50, e.Size - 0x50);
                     int n = seen.GetValueOrDefault(e.Name);
                     seen[e.Name] = n + 1;
-                    list.Add(new Instance(n == 0 ? e.Name : $"{e.Name}~{n}", e.Name, models.Contains(model) ? model : null, m));
+                    list.Add(new Instance(n == 0 ? e.Name : $"{e.Name}~{n}", e.Name, models.Contains(model) ? model : null, m, e.Offset));
                 }
             }
             return data.Instances = list;
         }
+
+        /// <summary>
+        /// The level's game-mode places (<see cref="Point"/>) from <c>_coll.ssg</c>: a type-0x14 object is +0x00 its name
+        /// (char[16]), +0x40 a 4×4 matrix (row vectors, translation in row 3), then its bounds and collision shape. Doors,
+        /// turrets and the other objects that are also type 0x14 are left out, and so is a target's <c>_Destroyed</c> copy.
+        /// </summary>
+        public List<Point> Points(string level)
+        {
+            var data = Load(level);
+            if (data.Points != null) return data.Points;
+            var list = new List<Point>();
+            var coll = data.File("_coll.ssg");
+            var full = data.File("_full.ssg");
+            if (coll != null)
+                foreach (var e in coll.Entries.Where(e => e.Type == PlaceObject && e.Size >= 0x80))
+                {
+                    if (PointKind(e.Name) is not { } kind) continue;
+                    var m = new float[16];
+                    for (int i = 0; i < 16; i++) m[i] = coll.F32(e.Offset + 0x40 + 4 * i);
+                    if (!m.All(float.IsFinite) || m[15] != 1) continue;
+                    var places = new List<(SsgArchive, int)> { (coll, e.Offset + 0x40) };
+                    if (full?.Entries.FirstOrDefault(x => x.Type == PlaceObject && x.Name == e.Name) is { } copy) places.Add((full, copy.Offset + 0x40));
+                    int team = e.Name.Contains("Seal", StringComparison.OrdinalIgnoreCase) ? 1 : e.Name.Contains("Merc", StringComparison.OrdinalIgnoreCase) ? 2 : 0;
+                    list.Add(new Point(e.Name, kind, team, m, places));
+                }
+            return data.Points = list;
+        }
+
+        /// <summary>The type of a <c>_coll.ssg</c> object.</summary>
+        public const byte PlaceObject = 0x14;
+
+        private static string? PointKind(string name)
+        {
+            if (name.Contains("Destroyed", StringComparison.OrdinalIgnoreCase)) return null;
+            if (System.Text.RegularExpressions.Regex.IsMatch(name, "^(Alpha|Bravo|Charlie|Delta|Echo)_?(Seal|Merc|Neutral)", System.Text.RegularExpressions.RegexOptions.IgnoreCase)) return "spawn";
+            if (name.Contains("CheckPoint", StringComparison.OrdinalIgnoreCase)) return "checkpoint";
+            if (name.Contains("ExtractZone", StringComparison.OrdinalIgnoreCase) || name.Contains("ExtractionZone", StringComparison.OrdinalIgnoreCase)) return "extraction";
+            if (name.StartsWith("Demo", StringComparison.OrdinalIgnoreCase) && name.Contains("Target", StringComparison.OrdinalIgnoreCase)) return "target";
+            return null;
+        }
+
+        // ------------------------------------------------------------------ edits
+
+        private readonly HashSet<SsgArchive> _dirty = new();
+
+        /// <summary>The bytes at <paramref name="at"/> in an archive's data.</summary>
+        public static byte[] ReadAt(SsgArchive a, int at, int length) => a.Data[at..(at + length)];
+
+        /// <summary>Writes <paramref name="bytes"/> into a level file's data (same size), and forgets the instances and
+        /// points read from the level so they are read again.</summary>
+        public void Patch(string level, SsgArchive a, int at, byte[] bytes)
+        {
+            if (at < 0 || at + bytes.Length > a.Data.Length) throw new ArgumentOutOfRangeException(nameof(at));
+            bytes.CopyTo(a.Data, at);
+            _dirty.Add(a);
+            var data = Load(level);
+            data.Instances = null;
+            data.Points = null;
+        }
+
+        /// <summary>A level's instance file (where <see cref="Instance.At"/> points).</summary>
+        public SsgArchive? InstanceArchive(string level) => Load(level).Placements;
+
+        /// <summary>A 4×4 matrix as the files store it (16 floats).</summary>
+        public static byte[] MatrixBytes(float[] m)
+        {
+            var b = new byte[64];
+            for (int i = 0; i < 16; i++) BitConverter.GetBytes(m[i]).CopyTo(b, 4 * i);
+            return b;
+        }
+
+        private static string LevelPath(SsgArchive a) =>
+            Path.Combine(Path.GetFileName(Path.GetDirectoryName(a.SourcePath)!), Path.GetFileName(a.SourcePath));
+
+        /// <summary>The edited files: each one's path under the levels folder (<c>Valley_multi\Valley_multi_inst.ssg</c>)
+        /// and its bytes now.</summary>
+        public List<(string Path, byte[] Bytes)> DirtyFiles() =>
+            _dirty.Select(a => (LevelPath(a), a.ToBytes())).OrderBy(f => f.Item1, StringComparer.OrdinalIgnoreCase).ToList();
+
+        /// <summary>True when a file has been edited (an undo back to the bytes read still counts).</summary>
+        public bool IsDirty => _dirty.Count > 0;
+
+        /// <summary>The edited files' paths under the levels folder.</summary>
+        public List<string> DirtyNames() => _dirty.Select(LevelPath).OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
 
         // ------------------------------------------------------------------ meshes
 

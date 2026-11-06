@@ -171,4 +171,88 @@ public sealed class Ftb3Tests
             .Count(t => t != "ftb3_00000000" && pkg.FindTexture("SovietBase_mis", t) == null);
         Assert.InRange(missing, 0, 1);
     }
+
+    [Fact]
+    public void Retail_props_and_points_move_and_save_in_place()
+    {
+        if (Disc is not string disc) return;
+        var pkg = Ftb3Package.Open(disc);
+        const string level = "Valley_multi";
+        string dir = pkg.Levels[level];
+        // Unedited files write back as read, packed ones too (the game's zlib level).
+        foreach (var suffix in new[] { "_inst.ssg", "_coll.ssg" })
+        {
+            var bytes = File.ReadAllBytes(Path.Combine(dir, level + suffix));
+            Assert.True(SsgArchive.FromBytes(bytes).ToBytes().AsSpan().SequenceEqual(bytes), suffix);
+        }
+        var points = pkg.Points(level);
+        Assert.Equal(25, points.Count);
+        Assert.Contains(points, p => p.Name == "AlphaSealControl" && p.Kind == "spawn" && p.Team == 1);
+        Assert.Contains(points, p => p.Name == "MercExtractZone_1" && p.Kind == "extraction" && p.Team == 2);
+        Assert.All(points, p => Assert.Equal(2, p.Places.Count));
+
+        var tree = pkg.Instances(level).First(i => i.Model != null);
+        var m = (float[])tree.Matrix.Clone(); m[12] += 5;
+        pkg.Patch(level, pkg.InstanceArchive(level)!, tree.At, Ftb3Package.MatrixBytes(m));
+        Assert.Equal(tree.Matrix[12] + 5, pkg.Instances(level).First(i => i.Id == tree.Id).Matrix[12]);
+        var point = points[0]; var pm = (float[])point.Matrix.Clone(); pm[14] += 3;
+        foreach (var (a, at) in point.Places) pkg.Patch(level, a, at, Ftb3Package.MatrixBytes(pm));
+
+        var files = pkg.DirtyFiles();
+        Assert.Equal(new[] { "_coll.ssg", "_full.ssg", "_inst.ssg" }.Select(s => Path.Combine(level, level + s)), files.Select(f => f.Path));
+        var inst = files.Single(f => f.Path.EndsWith("_inst.ssg")).Bytes;
+        var original = File.ReadAllBytes(Path.Combine(dir, level + "_inst.ssg"));
+        Assert.Equal(original.Length, inst.Length);
+        Assert.InRange(Enumerable.Range(0, inst.Length).Count(i => inst[i] != original[i]), 1, 4);
+        var coll = SsgArchive.FromBytes(files.Single(f => f.Path.EndsWith("_coll.ssg")).Bytes);
+        var moved = coll.Entries.Single(e => e.Name == point.Name);
+        Assert.Equal(point.Matrix[14] + 3, coll.F32(moved.Offset + 0x40 + 4 * 14));
+    }
+
+    [Fact]
+    public void The_skeleton_text_gives_names_parents_and_inverse_bind_matrices()
+    {
+        const string text = "(skeleton skelly 2)\n(\n\t-1\t\t; parent of 0 (hips) is -1 (<none>)\n\t0\t\t; parent of 1 (spinelo) is 0 (hips)\n)\n(\n"
+            + "\t(0 0 0 1) (0 1.2 0)\n\t\t(1 0 0 0\n\t\t 0 1 0 0\n\t\t 0 0 1 0\n\t\t 0 -1.2 0 1)\t; 0 (hips)\n"
+            + "\t(0 0 0 1) (0 0.2 0)\n\t\t(1 0 0 0\n\t\t 0 1 0 0\n\t\t 0 0 1 0\n\t\t 0 -1.4 0 1.000000)\t; 1 (spinelo)\n)\n";
+        var (names, parents, inverse) = Ftb3Package.ParseSkeleton(text);
+        Assert.Equal(new[] { "hips", "spinelo" }, names);
+        Assert.Equal(new[] { -1, 0 }, parents);
+        Assert.Equal(-1.4f, inverse[1][13]);
+    }
+
+    [Fact]
+    public void Retail_characters_stand_in_their_bind_pose_skinned_to_the_skeleton()
+    {
+        if (Disc is not string disc) return;
+        var pkg = Ftb3Package.Open(disc);
+        Assert.Equal(50, pkg.Characters().Count);
+        var skeleton = pkg.Skeleton()!;
+        Assert.Equal(20, skeleton.Bones.Count);
+        Assert.Equal(("hips", -1), (skeleton.Bones[0].Name, skeleton.Bones[0].Parent));
+        Assert.InRange(skeleton.Bones[0].World[13], 1.1f, 1.2f);
+        var sandman = pkg.FindCharacter("Sandman_woodland")!;
+        var mesh = pkg.BuildCharacter(sandman);
+        Assert.True(mesh.Skinned);
+        Assert.InRange(mesh.BoundsMin[1], -0.02f, 0.02f);      // soles on the ground
+        Assert.InRange(mesh.BoundsMax[1], 1.85f, 2.0f);         // hat top
+        Assert.All(mesh.Chunks, c => Assert.NotNull(pkg.FindCharacterTexture(sandman, c.Texture!)));
+        // A vertex weighted fully to a bone lies near that bone's joint (or a neighbour's).
+        int rigid = 0, near = 0;
+        foreach (var c in mesh.Chunks)
+            for (int v = 0; v < c.VertexCount; v++)
+            {
+                if (c.SkinWeights![4 * v] < 0.99f) continue;
+                rigid++;
+                int bone = c.SkinBones![4 * v];
+                int best = Enumerable.Range(0, skeleton.Bones.Count - 1).OrderBy(i =>
+                {
+                    var w = skeleton.Bones[i].World;
+                    float dx = w[12] - c.Positions[3 * v], dy = w[13] - c.Positions[3 * v + 1], dz = w[14] - c.Positions[3 * v + 2];
+                    return dx * dx + dy * dy + dz * dz;
+                }).First();
+                if (best == bone || skeleton.Bones[best].Parent == bone || skeleton.Bones[bone].Parent == best) near++;
+            }
+        Assert.True(near > 0.9 * rigid, $"{near} of {rigid}");
+    }
 }
