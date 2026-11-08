@@ -829,6 +829,9 @@ namespace MapBuilder.Server.Services
                 "shapes [{kind: lathe {profile:[[along,radius]]} | cylinder {start,end,radius,radiusEnd?} | ring {at,inner,outer,thickness?} | sphere {radius,scale?} | " +
                 "box {min,max,lean?,radius? (rounded),bevelSegments?,puff? (stuffed),divisions?,faceUv?} | strap {path:[[x,y,z]],width,thickness?,around?|outward?,steps?}, " +
                 "material 0-7, uvRect? [u0,v0,u1,v1] (a painted atlas instead of the material strip), subdivide? 0-2 (smoothed, creases kept), noise? amount|{amount,scale,seed}, axis? x|y|z (default x), center?, segments?, squash?, caps?}] build a mesh shaded from a materials skin (addTexture materials)\n" +
+                "- addMesh also takes uvTile (repeat the texture every N units: UVs projected per triangle, big faces split to stay in the " +
+                "-8..8 repeats a vertex holds), uvOffset [u,v], or uvScale (a number or [u,v] times the mesh's own UVs)\n" +
+                "- placeInstance / moveInstance scale is a number or [x, y, z] along the prop's axes (clutter: one number)\n" +
                 "- hideVisual {archive, model, visual} (it draws nothing; addMesh can fill it again)\n" +
                 "- newWeapon {template, name, archive?} (copies the weapon's visuals and GEO definition - LODs, firepoint, aimpoint - to reshape with addMesh / hideVisual)\n" +
                 "- importModel {source (package path) | sourceSession, archive, name, targetArchive?, newName?}\n" +

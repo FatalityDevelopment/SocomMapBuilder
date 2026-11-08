@@ -44,7 +44,7 @@ namespace MapBuilder.Server.Services
         {
             Vec("position", 3, "World [x, y, z] (y is height)."),
             F("yaw", "number", "Degrees about Y."),
-            new("scale", new Dictionary<string, object> { ["type"] = "number", ["description"] = "Uniform scale, > 0.", ["exclusiveMinimum"] = 0 }),
+            Scale3("A number (uniform) or [x, y, z] along the prop's own axes (stretch a wall to length), each > 0. Collision faces stretch with it."),
             Vec("matrix", 16, "A full column-major transform instead of position / yaw / scale."),
         };
 
@@ -76,6 +76,9 @@ namespace MapBuilder.Server.Services
             Vec("light", 3, "shapes: the light the shades are baked from (default [0.35, 0.85, 0.45])."),
             F("obj", "string", "OBJ text."), F("objPath", "string", "An OBJ file (instead of obj)."), F("yUp", "boolean", "OBJ is Y up (default true)."),
             F("scale", "number", "OBJ scale."), Vec("offset", 3, "OBJ offset."), F("primitive", "object", "{kind: cube | plane, size?, center?}."),
+            F("uvTile", "number", "Repeat the texture every this many units: UVs projected from each triangle's facing (x/z on floors). Big faces are split so each triangle stays in the -8..8 repeats a vertex holds."),
+            Vec("uvOffset", 2, "With uvTile: shift the repeats [u, v]."),
+            ("uvScale", new Dictionary<string, object> { ["description"] = "A number or [u, v]: multiply the mesh's own UVs (kept in range the same way)." }),
             F("mesh", "object", "{positions, triangles, normals?, uvs?, colors?}."), F("meshPath", "string", "A JSON file holding mesh (instead of mesh).")
         };
 

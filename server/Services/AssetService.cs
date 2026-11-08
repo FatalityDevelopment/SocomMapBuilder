@@ -133,6 +133,7 @@ namespace MapBuilder.Server.Services
                     int index = Int(a, "clutterIndex");
                     var current = ClutterFile.Parse(pkg.Container(pkg.Entry(PackageEdits.ClutterLeaf)?.Leaf ?? throw new InvalidOperationException("No CLUTTER.ZAR")));
                     if (index < 0 || index >= current.Count) throw new ArgumentOutOfRangeException(nameof(index), $"clutterIndex {index} out of range");
+                    UniformOnly(a);
                     float[] m = Placement(a, current[index].Matrix);
                     return ApplyEdit(s, Str(a, "label") ?? $"move {current[index].ModelName} clutter #{index}", p => PackageEdits.MoveClutter(p, index, m));
                 }
@@ -140,6 +141,7 @@ namespace MapBuilder.Server.Services
                 {
                     string model = Str(a, "model") ?? throw new ArgumentException("\"model\" is required");
                     if (Floats(a, "position") == null && Floats(a, "matrix") == null) throw new ArgumentException("\"position\" [x, y, z] (or \"matrix\") is required");
+                    UniformOnly(a);
                     float[] m = Placement(a, Matrix4.Identity());
                     int newIndex = -1;
                     var result = ApplyEdit(s, Str(a, "label") ?? $"add {model} clutter", p => PackageEdits.AddClutter(p, model, m, out newIndex));
@@ -836,6 +838,19 @@ namespace MapBuilder.Server.Services
                 what = "mesh";
             }
             else throw new ArgumentException("The op needs \"shapes\" [{kind, material, ...}], \"obj\" / \"objPath\" (OBJ), \"mesh\" / \"meshPath\" {positions, triangles, normals?, uvs?, colors?} or \"primitive\" {kind, size, center}");
+            // Repeating textures: UVs projected one repeat every uvTile units, or the mesh's own scaled by uvScale.
+            if (a.TryGetProperty("uvTile", out var tile) && tile.ValueKind == JsonValueKind.Number)
+            {
+                input = UvTiling.Project(input, tile.GetSingle(), Floats(a, "uvOffset"));
+                what += $", a repeat every {tile.GetSingle():0.##} units";
+            }
+            else if (a.TryGetProperty("uvScale", out var us) && us.ValueKind is JsonValueKind.Number or JsonValueKind.Array)
+            {
+                float[] k = us.ValueKind == JsonValueKind.Number ? new[] { us.GetSingle(), us.GetSingle() } : us.EnumerateArray().Select(x => x.GetSingle()).ToArray();
+                if (k.Length != 2) throw new ArgumentException("uvScale is a number or [u, v]");
+                input = UvTiling.Scale(input, k[0], k[1]);
+                what += $", UVs ×{k[0]:0.##}/{k[1]:0.##}";
+            }
             return input;
         }
 
@@ -1339,10 +1354,25 @@ namespace MapBuilder.Server.Services
                 return moved;
             }
             float yaw = a.TryGetProperty("yaw", out var y) ? Number(y, "yaw") : Matrix4.YawOf(current);
-            float scale = a.TryGetProperty("scale", out var sc) ? Number(sc, "scale") : Matrix4.ScaleOf(current);
-            if (scale <= 0) throw new ArgumentException("\"scale\" must be greater than 0");
-            return Matrix4.Compose(pos[0], pos[1], pos[2], yaw, scale);
+            // scale: a number, or [x, y, z] along the prop's own axes (a wall stretched to length); kept per axis.
+            float[] scale = !a.TryGetProperty("scale", out var sc)
+                ? new[] { Axis(current, 0), Axis(current, 1), Axis(current, 2) }
+                : sc.ValueKind == JsonValueKind.Array ? sc.EnumerateArray().Select(v => Number(v, "scale")).ToArray()
+                : Enumerable.Repeat(Number(sc, "scale"), 3).ToArray();
+            if (scale.Length != 3 || scale.Any(v => !(v > 0))) throw new ArgumentException("\"scale\" is a number or [x, y, z], each greater than 0");
+            float rad = yaw * MathF.PI / 180f, c = MathF.Cos(rad), s = MathF.Sin(rad);
+            return new[] { c * scale[0], 0, -s * scale[0], 0, 0, scale[1], 0, 0, s * scale[2], 0, c * scale[2], 0, pos[0], pos[1], pos[2], 1 };
         }
+
+        // Clutter keeps one scale (its scale_inverse), so it scales the same along every axis.
+        private static void UniformOnly(JsonElement a)
+        {
+            if (a.TryGetProperty("scale", out var sc) && sc.ValueKind == JsonValueKind.Array && sc.EnumerateArray().Select(v => v.GetSingle()).Distinct().Count() > 1)
+                throw new ArgumentException("Clutter scales the same on every axis: give scale as one number");
+        }
+
+        // The length of a transform's axis column (its scale along that axis).
+        private static float Axis(float[] m, int k) => MathF.Sqrt(m[k * 4] * m[k * 4] + m[k * 4 + 1] * m[k * 4 + 1] + m[k * 4 + 2] * m[k * 4 + 2]);
 
         private static string? Str(JsonElement a, string name) =>
             a.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;

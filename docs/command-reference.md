@@ -27,7 +27,8 @@ Every page and every MCP tool talks to the server through one endpoint. Each com
 
 | Op | Fields | Does |
 |---|---|---|
-| `placeInstance` | `{model, position, yaw?, scale?, matrix?, name?, templateGeoIndex?}` | A new placed reference of a package model, copied from the placed reference nearest the position (or `templateGeoIndex`) and added beside it; returns `newGeoIndex` |
+| `placeInstance` | `{model, position, yaw?, scale?, matrix?, name?, templateGeoIndex?}` | A new placed reference of a package model, copied from the placed reference nearest the position (or `templateGeoIndex`) and added beside it; returns `newGeoIndex`. `scale` (here and on `moveInstance`) is a number or `[x, y, z]` along the prop's own axes; clutter takes one number |
+| `addMesh` UV options | `uvTile?, uvOffset?, uvScale?` | `uvTile`: repeat the texture every that many units, with UVs projected from each triangle's facing (x/z on floors). `uvScale`: multiply the mesh's own UVs. A vertex holds −8 … 8 repeats (int16 / 4096), so triangles are split and moved by whole repeats to stay inside that range |
 | `setPoint` | `{name, newName?, team?, kind?: start \| waypoint \| other, position?}` | Changes an AIMAPS point in place |
 | `addPoint` / `removePoint` | `{name, kind, team?, position}` / `{name}` | Adds an AIMAPS point at the cell holding the position, or removes one (never the last start or waypoint). See [AI maps](formats/aimaps.md) |
 | `setCollision` | `{model, shape?: box \| mesh \| definition \| none, boxes?, bottom?, material?, like?}` | A model's collision faces, on its definition and every placed reference. See [Collision](formats/collision.md) |
