@@ -232,8 +232,10 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
     if (!change || change.seq === handledChangeRef.current || busyRef.current || reloadingRef.current > 0) { return; }
     handledChangeRef.current = change.seq;
     const here = samePath(statusRef.current?.path, change.path);
+    // The same package under another session (it was closed and opened again): this page's session is gone.
+    const stale = here && !!change.session && change.session !== clientRef.current.session;
     const run = async () => {
-      if (change.page === 'map' && change.path && !here) {
+      if (change.path && (change.page === 'map' && !here || stale)) {
         await openPackage(change.path);
       } else if (here && change.edited) {
         setBusyFlag(true);
@@ -275,6 +277,15 @@ export function useMapSession(viewportRef: MutableRefObject<MapViewport | null>,
           await reload(true, false);
         }
       } catch (error) {
+        // The session was closed (assets_close, or another page closed it): open the package again rather than
+        // retrying a session that no longer exists. Its unsaved edits went with it.
+        const path = statusRef.current?.path;
+        if (!receivedStatus && path && /No asset session/i.test(errText(error)) && clientRef.current.session === session) {
+          say(`The session for ${path} was closed; opening it again.`);
+          pollingRef.current = false;
+          void openPackage(path);
+          return;
+        }
         if (!receivedStatus && clientRef.current.session === session && operationRevisionRef.current === operationRevision) {
           setConnectionIssue(`Session refresh failed: ${errText(error)}. Retrying automatically.`);
         }

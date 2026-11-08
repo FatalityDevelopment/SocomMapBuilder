@@ -21,7 +21,8 @@ Claude Code discovers tools when a session starts, so start Map Builder (`dotnet
 The assistant works on the same asset sessions as the pages:
 
 - The **AI activity** panel (activity bar, robot icon) lists every call with its reason, duration and result.
-- With **Follow AI** on, edits bring their page forward: the Map Builder reloads and frames the moved prop or point, the Model Editor opens the edited model, and the Asset Viewer opens the edited record (an RDR value, a GEO node, a ZANIM instruction, a palette) and marks it.
+- With **Follow AI** on, edits bring their page forward: the Map Builder reloads and frames the moved prop or point, the Model Editor opens the edited model, and the Asset Viewer opens the edited record (an RDR value, a GEO node, a ZANIM instruction, a palette) and marks it. While the Map Builder shows a package, an edit to one of its models (a prop built for the map) reloads the map instead of switching to the Model Editor; `ui_show page=models` still goes there.
+- When the Map Builder's session is closed (`assets_close`, or another page closed it), the page opens the package again rather than retrying a session that is gone. `assets_open` on the path it shows switches it to the new session.
 - Browsing with `viewer_list` / `viewer_preview` moves the Asset Viewer along, and any edit to the package it shows reloads it.
 - Edits stay undoable (`Ctrl+Z` undoes the assistant's too) and nothing is written until a save.
 
