@@ -183,6 +183,54 @@ internal sealed partial class ZipperAssetService
         return ApplyEdit(s, Str(a, "label") ?? "Edit map action", _ => changes);
     }
 
+    /// <summary>The ordinals and node names of action rows whose node is not a scene node of the map (it was deleted).</summary>
+    private static List<(int Ordinal, string Node)> DanglingActions(AssetSession s)
+    {
+        var result = new List<(int, string)>();
+        if (s.Package.Entry(MissionReader) is null || s.Package.MapScene() is not { } map) return result;
+        var record = s.Package.Container(MissionReader).Nodes.FirstOrDefault(n => n.Name.Equals(ActionRecord, StringComparison.OrdinalIgnoreCase));
+        if (record == null) return result;
+        var names = new HashSet<string>(ActionTargets(map.Scene.MapRoot).Select(t => t.Node.Name), StringComparer.OrdinalIgnoreCase);
+        var doc = RdrDocument.Parse(record.Data);
+        int ordinal = 0;
+        foreach (int row in doc.Children(ActionList(doc)))
+        {
+            string? node = doc.Children(row).Chunk(2).Where(p => p.Length == 2 && Equals(doc.ValueOf(p[0]), "node"))
+                .Select(p => doc.ValueOf(doc.FirstChild(p[1])) as string).FirstOrDefault();
+            if (node != null && !names.Contains(node)) result.Add((ordinal, node));
+            ordinal++;
+        }
+        return result;
+    }
+
+    /// <summary>
+    /// clearActions {dangling?}: removes the map's object actions (actions.rdr rows: doors, switches, bomb sites), all
+    /// of them or, with dangling, only those whose node is no longer in the scene. One undo step.
+    /// </summary>
+    private static object ClearActions(AssetSession s, JsonElement a)
+    {
+        bool danglingOnly = a.TryGetProperty("dangling", out var d) && d.ValueKind == JsonValueKind.True;
+        var entry = s.Package.Entry(MissionReader);
+        var record = entry == null ? null : ZedContainer.FromBytes(entry.Data).FindEntry(ActionRecord);
+        if (entry == null || record == null) return new { revision = s.Revision, removed = 0, nodes = Array.Empty<string>() };
+        var reader = ZedContainer.FromBytes(entry.Data);
+        var doc = RdrDocument.Parse(record.Data);
+        int list = ActionList(doc);
+        var dangling = DanglingActions(s);
+        var remove = danglingOnly ? dangling.Select(x => x.Ordinal).ToList() : Enumerable.Range(0, doc.Children(list).Count()).ToList();
+        var nodes = new List<string>();
+        int[] rows = doc.Children(list).ToArray();
+        foreach (int ordinal in remove)
+            nodes.AddRange(doc.Children(rows[ordinal]).Chunk(2).Where(p => p.Length == 2 && Equals(doc.ValueOf(p[0]), "node"))
+                .Select(p => doc.ValueOf(doc.FirstChild(p[1])) as string).OfType<string>());
+        if (remove.Count == 0) return new { revision = s.Revision, removed = 0, nodes };
+        foreach (int ordinal in remove.OrderByDescending(o => o)) doc.RemoveChild(list, ordinal);
+        byte[] bytes = ZedSplice.Replace(entry.Data, reader.Nodes.ToList().FindIndex(n => n.Name.Equals(ActionRecord, StringComparison.OrdinalIgnoreCase)), doc.ToBytes());
+        var result = ApplyEdit(s, Str(a, "label") ?? $"remove {remove.Count} map action(s)",
+            _ => new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase) { [entry.Leaf] = bytes });
+        return new { result, removed = remove.Count, nodes };
+    }
+
     private static string ActionString(JsonElement value) =>
         value.GetString() is { Length: > 0 } text && text.All(c => c is >= ' ' and <= '~') ? text :
             throw new ArgumentException("Action names and references must be printable ASCII.");

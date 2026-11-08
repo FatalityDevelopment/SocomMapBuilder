@@ -196,6 +196,26 @@ public sealed class CollisionTests
         Assert.Equal(2, b.Points(session).GetProperty("points").GetArrayLength());
     }
 
+    [Fact]
+    public void AddLadder_builds_mp2s_ladder_faces()
+    {
+        using var pkg = new SyntheticPackage();
+        var b = new Backend();
+        string session = b.Open(pkg.Folder);
+        // MP2's ladderdown: foot at (-412.5, 100, 54.405), climbing to 160, its face toward +Z.
+        var r = b.Edit(session, new { op = "addLadder", position = new[] { -412.5f, 100, 54.405f }, top = 160, yaw = 0 });
+        Assert.Equal("ladderdown_1", r.GetProperty("name").GetString());
+        var c = b.Ok(new CommandMessage { Command = "ASSET_MAP_COLLISION", AssetSession = session, AssetJson = "{}" });
+        var faces = c.GetProperty("faces").EnumerateArray().Where(f => f.GetProperty("node").GetString() == "ladderdown_1").ToList();
+        Assert.Equal(2, faces.Count);
+        float[] P(JsonElement f) => f.GetProperty("points").EnumerateArray().Select(v => v.GetSingle()).ToArray();
+        Assert.Equal(new[] { -416.5f, 160, 54.405f, -416.5f, 100, 54.405f, -408.5f, 100, 54.405f, -408.5f, 160, 54.405f }, P(faces[0]));
+        Assert.Equal(new[] { -408.5f, 160, 54.405f, -416.5f, 160, 54.405f, -416.5f, 170, 54.405f, -408.5f, 170, 54.405f }, P(faces[1]));
+        Assert.All(faces, f => Assert.Equal(3u, f.GetProperty("material").GetUInt32()));
+        Assert.Equal("ladderdown_2", b.Edit(session, new { op = "addLadder", position = new[] { 0f, 0, 0 }, top = 30, yaw = 90 }).GetProperty("name").GetString());
+        Assert.Contains("above the foot", b.EditFails(session, new { op = "addLadder", position = new[] { 0f, 50, 0 }, top = 40 }));
+    }
+
     /// <summary>On a disc: MP2 cleared keeps its sky and sea, hides the rig, and nothing of the rig stays solid.</summary>
     [Fact]
     public void Disc_mp2_clears_to_sky_and_sea()

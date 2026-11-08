@@ -1,5 +1,6 @@
 using System.Text;
 using CodeDesigner.Ps2.FileFormats.Zipper.Geo;
+using CodeDesigner.Ps2.FileFormats.Zipper.RDR;
 using CodeDesigner.Ps2.FileFormats.Zipper.Texture;
 using CodeDesigner.Ps2.FileFormats.Zipper.ZED;
 
@@ -10,8 +11,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
     /// with. Conservative by design. Only props and textures in the map's own archives are candidates (never
     /// characters, weapons, vehicles, the world, the sky or the shared libraries), and a name that appears anywhere else in the package
     /// (a mission table, a map animation, a texture scroll) keeps its asset. The authoring tables (the map's
-    /// <c>_lib.rdr</c> asset library and <c>lod.rdr</c>) list every asset and are not counted; the plan reports the
-    /// removed names they still list. Docs: docs/working-with-packages.md.
+    /// <c>_lib.rdr</c> asset library and <c>lod.rdr</c>) list every asset and are not counted; removed names are taken
+    /// out of them (<see cref="Delist"/>). Docs: docs/working-with-packages.md.
     /// </summary>
     public static class PackagePrune
     {
@@ -21,7 +22,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             public List<(string Archive, string Name, int Bytes)> Textures { get; } = new();
             public List<(string Archive, int Id, int Bytes)> Palettes { get; } = new();
             public int Bytes => Models.Sum(m => m.Bytes) + Textures.Sum(t => t.Bytes) + Palettes.Sum(p => p.Bytes);
-            /// <summary>Removed names the authoring tables (<c>&lt;map&gt;_lib.rdr</c>, <c>lod.rdr</c>) still list.</summary>
+            /// <summary>Removed names the authoring tables (<c>&lt;map&gt;_lib.rdr</c>, <c>lod.rdr</c>) list; Apply takes them out.</summary>
             public List<string> StillListed { get; } = new();
         }
 
@@ -169,7 +170,81 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
                     if (top) c.RootValue--;
                 }
             }
-            return edits.ToDictionary(kv => kv.Key, kv => kv.Value.ToBytes(), StringComparer.OrdinalIgnoreCase);
+            var changed = edits.ToDictionary(kv => kv.Key, kv => kv.Value.ToBytes(), StringComparer.OrdinalIgnoreCase);
+            foreach (var (leaf, bytes) in Delist(pkg, plan.Models.Select(m => m.Name).Concat(plan.Textures.Select(t => t.Name)), out _)) changed[leaf] = bytes;
+            return changed;
+        }
+
+        /// <summary>
+        /// The authoring tables without the removed names: <c>&lt;map&gt;_lib.rdr</c> rows whose <c>name</c> is one (a
+        /// texture or model entry), and <c>lod.rdr</c> ObjectList items, with a LOD connection whose list empties.
+        /// </summary>
+        public static Dictionary<string, byte[]> Delist(ZipperPackage pkg, IEnumerable<string> names, out int removed)
+        {
+            removed = 0;
+            var gone = new HashSet<string>(names.SelectMany(n => new[] { n, System.IO.Path.GetFileNameWithoutExtension(n) }), StringComparer.OrdinalIgnoreCase);
+            var changed = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+            foreach (var e in pkg.Entries.Where(e => e.Kind == null && e.Leaf.EndsWith(".ZAR", StringComparison.OrdinalIgnoreCase)))
+            {
+                ZedContainer c;
+                try { c = ZedContainer.FromBytes(e.Data); } catch (Exception ex) when (ex is InvalidDataException or ArgumentException or IndexOutOfRangeException) { continue; }
+                byte[] bytes = e.Data;
+                for (int i = 0; i < c.Nodes.Count; i++)
+                {
+                    if (!Authoring(c.Nodes[i].Name)) continue;
+                    RdrDocument doc;
+                    try { doc = RdrDocument.Parse(c.Nodes[i].Data); } catch (Exception ex) when (ex is InvalidDataException or ArgumentException or IndexOutOfRangeException) { continue; }
+                    int n = DelistDoc(doc, gone);
+                    if (n == 0) continue;
+                    removed += n;
+                    bytes = ZedSplice.Replace(bytes, i, doc.ToBytes());
+                }
+                if (!ReferenceEquals(bytes, e.Data)) changed[e.Leaf] = bytes;
+            }
+            return changed;
+        }
+
+        private static int DelistDoc(RdrDocument doc, HashSet<string> gone)
+        {
+            bool Named(object? v) => v is string t && gone.Contains(t);
+            // A value: a string, or a list whose items are strings.
+            string? First(int atom) => doc.TypeOf(atom) == RdrDocument.String ? doc.ValueOf(atom) as string
+                : doc.TypeOf(atom) == RdrDocument.List && doc.Children(atom).FirstOrDefault(-1) is int f and >= 0 && doc.TypeOf(f) == RdrDocument.String ? doc.ValueOf(f) as string : null;
+            var cuts = new Dictionary<int, HashSet<int>>();
+            void Cut(int list, int ordinal) { if (!cuts.TryGetValue(list, out var set)) cuts[list] = set = new(); set.Add(ordinal); }
+            var seen = new HashSet<int>();
+            void Walk(int list)
+            {
+                if (!seen.Add(list)) return;
+                int[] items = doc.Children(list).ToArray();
+                for (int k = 0; k < items.Length; k++)
+                {
+                    int item = items[k];
+                    if (doc.TypeOf(item) != RdrDocument.List) continue;
+                    int[] fields = doc.Children(item).ToArray();
+                    // A row named after a removed asset: ["name", "a_floor.tif", "dim2", …].
+                    if (fields.Length >= 2 && Equals(doc.ValueOf(fields[0]), "name") && Named(First(fields[1]))) { Cut(list, k); continue; }
+                    // A LOD connection's ObjectList: drop removed names, and the connection when none is left.
+                    for (int f = 0; f + 1 < fields.Length; f++)
+                    {
+                        if (!Equals(doc.ValueOf(fields[f]), "ObjectList")) continue;
+                        int value = fields[f + 1];
+                        if (doc.TypeOf(value) == RdrDocument.String) { if (Named(doc.ValueOf(value))) Cut(list, k); continue; }
+                        if (doc.TypeOf(value) != RdrDocument.List) continue;
+                        var objects = doc.Children(value).ToArray();
+                        var drop = Enumerable.Range(0, objects.Length).Where(o => Named(doc.ValueOf(objects[o]))).ToList();
+                        if (drop.Count == 0) continue;
+                        if (drop.Count == objects.Length) Cut(list, k);
+                        else foreach (int o in drop) Cut(value, o);
+                    }
+                    Walk(item);
+                }
+            }
+            Walk(0);
+            int removed = 0;
+            foreach (var (list, ordinals) in cuts)
+                foreach (int o in ordinals.OrderByDescending(o => o)) { doc.RemoveChild(list, o); removed++; }
+            return removed;
         }
 
         // The models the map draws: placed references, clutter, props built from them (model_name inside definitions),

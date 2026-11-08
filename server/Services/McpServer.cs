@@ -485,6 +485,8 @@ namespace MapBuilder.Server.Services
                 case "addPoint": return ("map", null, new { point = Str(op, "name") });
                 case "removePoint":
                 case "clearMap":
+                case "clearActions":
+                case "addLadder":
                 case "pruneAssets":
                 case "setCollision":
                 case "clearCollision": return ("map", null, null);
@@ -818,8 +820,10 @@ namespace MapBuilder.Server.Services
                 "placed model's faces, so set them before placing or after: both work)\n" +
                 "- pruneAssets {models?, textures?, keep?} (removes unplaced props of the map's own archives and the textures / palettes " +
                 "nothing draws with; answers the lists and bytes freed; dryRun: true lists them without removing)\n" +
-                "- clearMap {props?, clutter?, world?, collision?, keepModels?, keepVisuals?} (a blank map to build on, one undo step: every " +
-                "prop and clutter placement deleted, every world visual but sky / clouds / sea hidden, the world's collision removed)\n" +
+                "- clearMap {props?, clutter?, world?, collision?, actions?, keepModels?, keepVisuals?} (a blank map to build on, one undo step: every " +
+                "prop and clutter placement deleted, every world visual but sky / clouds / sea hidden, the world's collision and object actions removed)\n" +
+                "- addLadder {position (foot), top, yaw? (the way the climbing face points), width?, name?} (a ladder node as MP2's: two faces, no visual; answers newGeoIndex)\n" +
+                "- clearActions {dangling?} (remove the map's object actions, or only those whose node was deleted)\n" +
                 "- clearCollision {geoIndices? | visuals? | area?:[minX,minZ,maxX,maxZ] | all?, references?} (the world's own floors and walls: " +
                 "clear them under world visuals you hid; assets_map_collision shows what is solid)\n" +
                 "- replaceTexture {texture, pngBase64 | imagePath, namespace?}\n" +

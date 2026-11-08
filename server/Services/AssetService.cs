@@ -116,6 +116,10 @@ namespace MapBuilder.Server.Services
                     return Batch(s, a);
                 case "clearMap":
                     return ClearMap(s, a);
+                case "clearActions":
+                    return ClearActions(s, a);
+                case "addLadder":
+                    return AddLadder(s, a);
                 case "pruneAssets":
                 {
                     // {models?, textures?, keep?}: props nothing places, then textures and palettes nothing draws with.
@@ -130,8 +134,8 @@ namespace MapBuilder.Server.Services
                         models = plan.Models.Select(m => new { archive = m.Archive, name = m.Name, bytes = m.Bytes }).ToList(),
                         textures = plan.Textures.Select(t => new { archive = t.Archive, name = t.Name, bytes = t.Bytes }).ToList(),
                         palettes = plan.Palettes.Select(p => new { archive = p.Archive, id = p.Id, bytes = p.Bytes }).ToList(),
-                        // Removed names the authoring tables (<map>_lib.rdr, lod.rdr) still list; the game draws from the archives.
-                        stillListed = plan.StillListed,
+                        // Removed names taken out of the authoring tables (<map>_lib.rdr, lod.rdr) too.
+                        delisted = plan.StillListed,
                     };
                 }
                 case "mapAction":
@@ -957,6 +961,8 @@ namespace MapBuilder.Server.Services
                     }
                 }
             if (On("collision")) ops.Add(new { op = "clearCollision", all = true });
+            // Doors, switches and bomb sites act on parts of the old map: a blank map has none.
+            if (On("actions") && pkg.Entry(MissionReader) != null) ops.Add(new { op = "clearActions" });
             if (ops.Count == 0) return new { revision = s.Revision, props, clutter, hiddenVisuals = hidden, keptVisuals = kept };
             var batch = JsonSerializer.SerializeToElement(new { ops, label = Str(a, "label") ?? "clear the map" });
             var result = Batch(s, batch);
@@ -1077,6 +1083,14 @@ namespace MapBuilder.Server.Services
                             Add("info", "outside-ai-map", $"{i.InstanceName} at ({i.Matrix[12]:0.#}, {i.Matrix[14]:0.#}) is outside the AI map",
                                 i.ClutterIndex >= 0 ? ("clutterIndex", i.ClutterIndex) : ("geoIndex", i.Node?.Index));
             }
+
+            // Object actions whose node is gone (deleted props): the game finds nothing to bind them to.
+            try
+            {
+                foreach (var (ordinal, node) in DanglingActions(s))
+                    Add("warning", "dangling-action", $"Action row {ordinal} acts on {node}, which is no longer in the scene (clearActions dangling: true removes it)", ("row", ordinal));
+            }
+            catch (InvalidDataException) { }
 
             // Placed props with no collision faces are walked and shot through (on purpose for water and decals).
             foreach (var i in instances.Where(i => i.Kind == "reference" && i.Node is { } n && n.Child("di") == null

@@ -69,5 +69,21 @@ public sealed class PruneTests
         Assert.True(world.GetProperty("chunks").GetArrayLength() > 0);
         // Nothing left to prune.
         Assert.Empty(b.Edit(session, new { op = "pruneAssets" }).GetProperty("models").EnumerateArray());
+
+        // The authoring tables no longer list what went: mp2_lib.rdr's texture rows and lod.rdr's ObjectLists.
+        Assert.Contains("grate_midlod", r.GetProperty("models").EnumerateArray().Select(m => m.GetProperty("name").GetString()));
+        Assert.True(r.GetProperty("delisted").GetArrayLength() > 10);
+        var reader = CodeDesigner.Ps2.FileFormats.Zipper.ZED.ZedContainer.FromBytes(Backend.Bytes(session, "READERM.ZAR"));
+        // The parsed table (removed rows leave their strings in the pool, unreferenced).
+        string Table(string name) => JsonSerializer.Serialize(CodeDesigner.Ps2.FileFormats.Zipper.RDR.RdrShape.Shape(CodeDesigner.Ps2.FileFormats.Zipper.RDR.RdrFile.Parse(reader.Nodes.First(n => n.Name == name).Data).BuildTree()));
+        string pruned = r.GetProperty("textures")[0].GetProperty("name").GetString()!;
+        Assert.DoesNotContain($"\"{pruned}\"", Table("mp2_lib.rdr"));
+        Assert.Contains("\"libname\"", Table("mp2_lib.rdr"));
+        Assert.DoesNotContain("\"grate_midlod\"", Table("lod.rdr"));
+        Assert.Contains("LOD_Definititions", Table("lod.rdr"));
+
+        // clearMap took the old rig's doors and switches with it.
+        var actions = b.Ok(new CommandMessage { Command = "ASSET_MAP_ACTIONS", AssetSession = session });
+        Assert.Empty(actions.GetProperty("rows").EnumerateArray());
     }
 }
