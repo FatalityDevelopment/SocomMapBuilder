@@ -105,18 +105,19 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         /// <summary>
         /// A static mesh object (type 0x00841398): +0x30 its DMA chains, +0x40 its texture records. A chain is a count
         /// tag then tags of kind 6 (material: a GS A+D packet that starts a section), 3 (vertex colours, RGBA bytes) and
-        /// 2 (a geometry chunk — SOCOM II's static chunk format). A material's texture is the one its packet binds
-        /// (<see cref="MaterialTextures"/>; terrain objects bind one texture from 5 materials), else the object's first
-        /// texture whose TEX0 the packet sets that no earlier material took, else the next texture in order (the
-        /// Humvee body: 10 materials, 10 textures, no TEX0 match).
+        /// 2 (a geometry chunk — SOCOM II's static chunk format). The texture records list one texture per distinct
+        /// material packet, in the order the packets first appear (true of all 43,726 sections on the disc whose TEX0
+        /// names a single texture), so a material's texture is its packet's place in that order; a packet used again
+        /// draws with the same texture (terrain objects bind one texture from 5 materials). TEX0 cannot be used: every
+        /// CA texture's TEX0 has base pointer 0, so two textures of one size and format look the same. Past the end of the
+        /// list, the first texture whose TEX0 the packet sets, else the last texture used.
         /// </summary>
         public List<Section> Sections(int obj)
         {
             var sections = new List<Section>();
             if (U32(obj) != StaticObjectType) return sections;
             var textures = Vector(obj + 0x40);
-            var known = MaterialTextures();
-            int next = 0;
+            var packets = new List<int>();
             foreach (int chain in Vector(obj + 0x30))
             {
                 int count = (int)(U32(chain) & 0xFFFF);
@@ -131,15 +132,12 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
                     if (addr < 0 || addr + length > Data.Length) continue;
                     if (kind == 6)
                     {
-                        int? texture = known.TryGetValue(addr, out int bound) && textures.Contains(bound) ? bound : null;
-                        if (texture == null)
-                        {
-                            var matches = Tex0Matches(addr, length, textures);
-                            texture = matches.Cast<int?>().FirstOrDefault(t => !sections.Any(x => x.TextureRecord == t)) ?? matches.Cast<int?>().FirstOrDefault();
-                        }
-                        texture ??= next < textures.Count ? textures[next] : sections.LastOrDefault(x => x.TextureRecord != null)?.TextureRecord;
+                        int place = packets.IndexOf(addr);
+                        if (place < 0) { place = packets.Count; packets.Add(addr); }
+                        int? texture = place < textures.Count ? textures[place]
+                            : Tex0Matches(addr, length, textures).Cast<int?>().FirstOrDefault()
+                              ?? sections.LastOrDefault(x => x.TextureRecord != null)?.TextureRecord;
                         sections.Add(new Section(texture, addr, length, new List<Part>()));
-                        next++;
                     }
                     else if (kind == 3) colour = (addr, length, U32(o + 8), U32(o + 12));
                     else if (kind == 2)
@@ -201,58 +199,6 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         /// <summary>The textures of <paramref name="textures"/> whose TEX0 the material packet at <paramref name="o"/> sets.</summary>
         private List<int> Tex0Matches(int o, int length, List<int> textures) =>
             MaterialTex0(o, length) is ulong m ? textures.Where(t => Tex0(t) is ulong tt && (tt & Tex0Identity) == (m & Tex0Identity)).ToList() : new List<int>();
-
-        private Dictionary<int, int>? _materialTextures;
-
-        /// <summary>
-        /// Material packet offset → the texture record it binds, across the library. CA textures share TEX0 base pointer
-        /// 0 (the game places them at run time), so a material's TEX0 cannot tell two textures of one size and format
-        /// apart (Farm's road and grass, both 256×256 8-bit). Objects share material packets, and on every retail
-        /// location a packet that matches a single texture of its object always matches the same one: those bind it.
-        /// The others are settled object by object, leaving out textures that other materials of the object bind,
-        /// until nothing changes. A material still undecided is left out (Sections picks it in order).
-        /// </summary>
-        public IReadOnlyDictionary<int, int> MaterialTextures()
-        {
-            if (_materialTextures != null) return _materialTextures;
-            var map = new Dictionary<int, int>();
-            var open = new List<(int Obj, int Material, List<int> Candidates)>();
-            var objectMaterials = new Dictionary<int, List<int>>();
-            foreach (int obj in Objects)
-            {
-                if (U32(obj) != StaticObjectType) continue;
-                var textures = Vector(obj + 0x40);
-                var mats = objectMaterials[obj] = new List<int>();
-                foreach (int chain in Vector(obj + 0x30))
-                {
-                    int count = (int)(U32(chain) & 0xFFFF);
-                    for (int i = 1; i <= count; i++)
-                    {
-                        int o = chain + 16 * i;
-                        if (o + 16 > Data.Length) break;
-                        uint lo = U32(o);
-                        int addr = (int)U32(o + 4), length = (int)(lo & 0xFFFF) * 16;
-                        if (((lo >> 16) & 0xFF) != 6 || addr < 0 || addr + length > Data.Length) continue;
-                        mats.Add(addr);
-                        var matches = Tex0Matches(addr, length, textures);
-                        if (matches.Count == 1) map.TryAdd(addr, matches[0]);
-                        else if (matches.Count > 1) open.Add((obj, addr, matches));
-                    }
-                }
-            }
-            for (bool changed = true; changed;)
-            {
-                changed = false;
-                foreach (var (obj, material, candidates) in open)
-                {
-                    if (map.ContainsKey(material)) continue;
-                    var taken = objectMaterials[obj].Where(m => m != material && map.ContainsKey(m)).Select(m => map[m]).ToHashSet();
-                    var left = candidates.Where(t => !taken.Contains(t)).ToList();
-                    if (left.Count == 1) { map[material] = left[0]; changed = true; }
-                }
-            }
-            return _materialTextures = map;
-        }
 
         // TEX0 fields that identify a texture: TBP0 (0-13), TBW (14-19), PSM (20-25), TW / TH (26-33), CBP (37-50), CPSM (51-54).
         private const ulong Tex0Identity = 0x3FFFUL | (0x3FUL << 14) | (0x3FUL << 20) | (0xFFUL << 26) | (0x3FFFUL << 37) | (0xFUL << 51);
