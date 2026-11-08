@@ -317,6 +317,23 @@ namespace MapBuilder.Server.Services
                     string label = Str(a, "label") ?? $"edit {count} vertex(es) of {model}";
                     return ApplyEdit(s, label, p => ZipperModelMesh.SetVertices(p, archive, model, byChunk));
                 }
+                case "bakeLighting":
+                {
+                    // {archive, model, scale?, chunks?}: the map's GlobalLighting (ambient + three directional lights)
+                    // baked into the vertex colours, as retail props are prelit. Replaces the colours: occlusion after.
+                    string archive = Str(a, "archive") ?? throw new ArgumentException("\"archive\" is required");
+                    string model = Str(a, "model") ?? throw new ArgumentException("\"model\" is required");
+                    var lighting = MeshLighting.OfMap(pkg) ?? throw new InvalidOperationException("The map's table (READERM.ZAR › <map>.rdr) has no GlobalLighting");
+                    var (_, mesh) = MeshOf(s, model, archive);
+                    var chunks = a.TryGetProperty("chunks", out var lc) && lc.ValueKind == JsonValueKind.Array ? lc.EnumerateArray().Select(x => x.GetInt32()).ToHashSet() : null;
+                    float scale = a.TryGetProperty("scale", out var ls) ? Number(ls, "scale") : 0.5f;
+                    float[]? tint = Vec(a, "tint", 3);
+                    if (tint != null && tint.Any(v => v is < 0 or > 4)) throw new ArgumentException("tint is [r, g, b], 0-1 each (above 1 brightens)");
+                    var edits = MeshLighting.Bake(mesh, lighting, scale, chunks, tint);
+                    if (edits.Count == 0) throw new InvalidOperationException($"{model} has no chunks with vertex colours to light");
+                    var result = ApplyEdit(s, Str(a, "label") ?? $"bake the map's lighting into {model}", p => ZipperModelMesh.SetVertices(p, archive, model, edits));
+                    return new { result, vertices = edits.Values.Sum(e => e.Count), ambient = lighting.Ambient, lights = lighting.Lights.Select(l => new { rgb = l.Rgb, dir = l.Dir }) };
+                }
                 case "bakeOcclusion":
                 {
                     // {archive, model, rays?, distance?, strength?, chunks?}: ambient occlusion multiplied into the baked
