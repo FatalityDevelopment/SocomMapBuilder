@@ -134,6 +134,7 @@ MCP (`server/Services/McpServer.cs`):
 - Sounds and lights: research items, each needs a format doc in `docs/formats`.
 - **Map foundations (started, branch `claude/map-foundations`).**
   - Done: collision ([formats/collision.md](formats/collision.md)): `setCollision`, `clearCollision`, `ASSET_MAP_COLLISION` / `assets_map_collision`, and the `no-collision` check. `placeInstance` now copies the placed model's faces instead of the template's. `addPoint` / `removePoint` for AIMAPS points. `clearMap` gives a blank map in one undo step. The Map Builder has a View › Collision layer (`viewport/collisionLayer.ts`). `addMesh uvTile / uvScale` give repeating textures on big faces (`Package/UvTiling.cs`), and `placeInstance` / `moveInstance` take a per-axis `scale`. The yard's sea used to clamp past 8 repeats and now repeats every 80 units. `assets_describe_model` now returns the drawn geometry's `boundsMin` / `boundsMax` / `size3` and `collisionFaces`. Tests: `CollisionTests`, including the disc test `Disc_faces_re_encode_to_their_retail_params`. Applied to the container yard in `Desktop\ContainerYard\MP2.ZDB`: the rig's 1,603 faces were cleared and 78 props now carry their own 452.
+  - `pruneAssets` (`Package/PackagePrune.cs`, tests `PruneTests`) and the `missing-texture` check. On the yard it removed 33 rig props, 43 textures and 31 palettes, and the file went from 7.50 MB to 6.92 MB.
   - Editor fixes:
     - Model edits on the package the Map Builder shows no longer pull the app into the Model Editor (`shared/aiBridge.ts`).
     - A closed session is reopened instead of leaving a "Session refresh failed" banner (`useMapSession.ts`).
@@ -141,6 +142,7 @@ MCP (`server/Services/McpServer.cs`):
     - "Floors stop drawing after many hideVisual" did not reproduce: a live batch of 98 hides on MP2 draws the same as a page reload, in studio and baked lighting. MP2's baked night lighting draws its deck nearly black.
   - *Left over:*
     - None of this has been tried in game.
+    - `pruneAssets` leaves removed names in `<map>_lib.rdr` and `lod.rdr`.
     - Multiplayer team spawns are not AIMAPS points (see [map tables](formats/map-tables.md)), so they still can't be placed.
     - The AI grid can't be resized or rebuilt from new floors.
     - There is no way to write new world geometry.

@@ -116,6 +116,24 @@ namespace MapBuilder.Server.Services
                     return Batch(s, a);
                 case "clearMap":
                     return ClearMap(s, a);
+                case "pruneAssets":
+                {
+                    // {models?, textures?, keep?}: props nothing places, then textures and palettes nothing draws with.
+                    bool On(string key) => !a.TryGetProperty(key, out var v) || v.ValueKind != JsonValueKind.False;
+                    var keep = a.TryGetProperty("keep", out var kp) && kp.ValueKind == JsonValueKind.Array ? kp.EnumerateArray().Select(x => x.GetString() ?? "").ToList() : null;
+                    var plan = PackagePrune.Find(pkg, On("models"), On("textures"), keep);
+                    var result = ApplyEdit(s, Str(a, "label") ?? $"prune {plan.Models.Count} model(s), {plan.Textures.Count} texture(s), {plan.Palettes.Count} palette(s)",
+                        p => PackagePrune.Apply(p, plan));
+                    return new
+                    {
+                        result, bytes = plan.Bytes,
+                        models = plan.Models.Select(m => new { archive = m.Archive, name = m.Name, bytes = m.Bytes }).ToList(),
+                        textures = plan.Textures.Select(t => new { archive = t.Archive, name = t.Name, bytes = t.Bytes }).ToList(),
+                        palettes = plan.Palettes.Select(p => new { archive = p.Archive, id = p.Id, bytes = p.Bytes }).ToList(),
+                        // Removed names the authoring tables (<map>_lib.rdr, lod.rdr) still list; the game draws from the archives.
+                        stillListed = plan.StillListed,
+                    };
+                }
                 case "mapAction":
                     return EditMapAction(s, a);
                 case "traversalFace":
@@ -1083,6 +1101,18 @@ namespace MapBuilder.Server.Services
             }
             if (args.VramBudget is long budget && textureBytes > budget)
                 Add("warning", "vram-budget", $"Textures take {textureBytes:N0} bytes, over the {budget:N0} budget");
+
+            // Models drawing with a texture the package does not have (after pruning or a bad import).
+            foreach (var m in s.Package.Models().Where(m => m.Kind is "prop" or "world" or "sky"))
+            {
+                ZedModelFile.Model decoded;
+                try { decoded = s.Package.DecodeModel(m); }
+                catch (Exception ex) when (ex is InvalidDataException or IndexOutOfRangeException or ArgumentException) { continue; }
+                string? ns = s.Package.TextureNamespace(m.Namespace);
+                foreach (string tif in decoded.Chunks.Select(c => c.TextureName).OfType<string>().Where(t => t.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase))
+                    if (s.Package.FindTexture(tif, ns) == null)
+                        Add("error", "missing-texture", $"{m.Name} draws with {tif}, which the package does not have", ("model", m.Name), ("texture", tif));
+            }
 
             return new
             {

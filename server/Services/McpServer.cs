@@ -485,6 +485,7 @@ namespace MapBuilder.Server.Services
                 case "addPoint": return ("map", null, new { point = Str(op, "name") });
                 case "removePoint":
                 case "clearMap":
+                case "pruneAssets":
                 case "setCollision":
                 case "clearCollision": return ("map", null, null);
                 case "placeInstance": return ("map", null, new { geoIndex = R("newGeoIndex"),
@@ -815,6 +816,8 @@ namespace MapBuilder.Server.Services
                 "- setCollision {model, shape?: box|mesh|definition|none, boxes?:[{min,max}], bottom?, material?, like?} (a model's GEO di faces, written " +
                 "to its definition and every placed reference; a prop without them is walked and shot through. placeInstance copies the " +
                 "placed model's faces, so set them before placing or after: both work)\n" +
+                "- pruneAssets {models?, textures?, keep?} (removes unplaced props of the map's own archives and the textures / palettes " +
+                "nothing draws with; answers the lists and bytes freed; dryRun: true lists them without removing)\n" +
                 "- clearMap {props?, clutter?, world?, collision?, keepModels?, keepVisuals?} (a blank map to build on, one undo step: every " +
                 "prop and clutter placement deleted, every world visual but sky / clouds / sea hidden, the world's collision removed)\n" +
                 "- clearCollision {geoIndices? | visuals? | area?:[minX,minZ,maxX,maxZ] | all?, references?} (the world's own floors and walls: " +

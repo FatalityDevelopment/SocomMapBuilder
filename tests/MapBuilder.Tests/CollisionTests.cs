@@ -204,8 +204,12 @@ public sealed class CollisionTests
         string? zdb = string.IsNullOrEmpty(disc) ? null
             : new[] { Path.Combine(disc, "RUN", "MP2.ZDB"), Path.Combine(disc, "MP2.ZDB") }.FirstOrDefault(File.Exists);
         if (zdb == null) return;
+        // A copy of its own: sessions are shared per path, and another disc test edits MP2 too.
+        string copy = Path.Combine(Path.GetTempPath(), $"mb-{Guid.NewGuid():N}", "MP2.ZDB");
+        Directory.CreateDirectory(Path.GetDirectoryName(copy)!);
+        File.Copy(zdb, copy);
         var b = new Backend();
-        string session = b.Open(zdb);
+        string session = b.Open(copy);
         var size = b.Ok(new CommandMessage { Command = "ASSET_DESCRIBE_MODEL", AssetSession = session, AssetName = "container06" });
         Assert.Equal(9, size.GetProperty("collisionFaces").GetInt32());
         Assert.True(size.GetProperty("size3")[0].GetSingle() > 10);
