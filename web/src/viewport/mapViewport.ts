@@ -17,6 +17,7 @@ import { markerAnchor, type ActionMarker } from './actionMarkers';
 import { heldWeaponMatrix, poseBones, skinChunk, type PoseClip } from '../webview/zipper-core/skinning';
 import { yawOf } from './actorFigures';
 import { buildPathObject, buildRegionObject } from './mapShapes';
+import { buildCollisionObject, disposeGroup, type CollisionFaceWire } from './collisionLayer';
 import type { MapPathWire, MapRegionWire } from '../webview/model-editor/asset-client';
 
 export type MapTool = 'select' | 'move' | 'rotate' | 'scale' | 'place' | 'paint' | 'measure';
@@ -158,6 +159,8 @@ export class MapViewport extends ViewportCore {
   // `figure`: the actor drawn at the point, kept in its own group so it shows with the Points layer hidden.
   private points: Array<MapPointInfo & { y: number; obj: THREE.Object3D; figure?: THREE.Object3D }> = [];
   private readonly figureGroup = new THREE.Group();
+  // The Collision view (View menu): the map's solid faces, never picked.
+  private readonly collisionGroup = new THREE.Group();
   // World models whose sky chunks moved to the Sky layer.
   private worldSky: Array<{ source: string; nodes: string[] }> = [];
   // The sky dome encloses the map; hidden until asked for.
@@ -209,7 +212,7 @@ export class MapViewport extends ViewportCore {
 
   constructor(canvas: HTMLCanvasElement, private readonly callbacks: MapCallbacks = {}) {
     super(canvas, () => callbacks.onCameraChange?.());
-    this.scene.add(this.content, this.overlay, this.pointGroup, this.pathGroup, this.regionGroup, this.figureGroup, this.placementGhost);
+    this.scene.add(this.content, this.overlay, this.pointGroup, this.pathGroup, this.regionGroup, this.figureGroup, this.placementGhost, this.collisionGroup);
     const ring = new THREE.BufferGeometry().setFromPoints(Array.from({ length: 48 }, (_, k) => new THREE.Vector3(Math.cos(k / 48 * Math.PI * 2), 0, Math.sin(k / 48 * Math.PI * 2))));
     this.brushRing = new THREE.LineLoop(ring, new THREE.LineBasicMaterial({ color: 0x66ddbb, depthTest: false, transparent: true }));
     this.brushRing.renderOrder = 30;
@@ -1151,6 +1154,14 @@ export class MapViewport extends ViewportCore {
   }
 
   frameAll(): void { this.frameBox(this.worldBox); }
+
+  // ------------------------------------------------------------------ collision
+
+  /** Draws the map's collision faces (world space); an empty list clears them. */
+  setCollision(faces: CollisionFaceWire[]): void {
+    disposeGroup(this.collisionGroup);
+    this.collisionGroup.add(buildCollisionObject(faces));
+  }
 
   // ------------------------------------------------------------------ paths and regions
 

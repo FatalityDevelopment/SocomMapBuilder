@@ -114,6 +114,8 @@ namespace MapBuilder.Server.Services
             {
                 case "batch":
                     return Batch(s, a);
+                case "clearMap":
+                    return ClearMap(s, a);
                 case "mapAction":
                     return EditMapAction(s, a);
                 case "traversalFace":
@@ -867,6 +869,67 @@ namespace MapBuilder.Server.Services
         /// {"op":"batch","label":..,"ops":[...]}: runs the ops in order as one undo step. A failing op undoes the
         /// ones before it. Answers {revision, description, results} with each op's own answer.
         /// </summary>
+        // World parts a blank map keeps: the sky, clouds and sea (MP2's N000-N003).
+        private static readonly System.Text.RegularExpressions.Regex KeptWorldPart =
+            new(@"sky(?!line|light|scraper)|cloud|whispy|water|ocean|\bsea", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        /// <summary>
+        /// clearMap {props?, clutter?, world?, collision?, keepModels?, keepVisuals?}: a blank map to build on, as one
+        /// undo step. It deletes every placed reference (except those of keepModels) and every clutter placement, hides
+        /// every world-model visual but the sky, clouds and sea (and keepVisuals), and removes the world's collision.
+        /// Each part can be turned off. The map keeps its settings, tables, AI grid and points.
+        /// </summary>
+        private static object ClearMap(AssetSession s, JsonElement a)
+        {
+            bool On(string key) => !a.TryGetProperty(key, out var v) || v.ValueKind != JsonValueKind.False;
+            var pkg = s.Package;
+            var map = pkg.MapScene() ?? throw new InvalidOperationException("The package has no map scene (no worldmodel)");
+            var keepModels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (a.TryGetProperty("keepModels", out var km) && km.ValueKind == JsonValueKind.Array) foreach (var m in km.EnumerateArray()) keepModels.Add(m.GetString() ?? "");
+            var keepVisuals = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (a.TryGetProperty("keepVisuals", out var kv) && kv.ValueKind == JsonValueKind.Array) foreach (var v in kv.EnumerateArray()) keepVisuals.Add(v.GetString() ?? "");
+
+            var ops = new List<object>();
+            int props = 0, clutter = 0;
+            var hidden = new List<string>();
+            var kept = new List<string>();
+            if (On("props"))
+                foreach (var i in SceneInstances.Collect(map.Scene.MapRoot, n => pkg.ResolveModel(n) != null)
+                    .Where(i => i.Kind == "reference" && i.Node != null && !keepModels.Contains(i.ModelName))
+                    .OrderByDescending(i => i.Node!.Index))
+                {
+                    ops.Add(new { op = "deleteInstance", geoIndex = i.Node!.Index });
+                    props++;
+                }
+            if (On("clutter") && pkg.Entry(PackageEdits.ClutterLeaf) is { } cz)
+            {
+                var placements = ClutterFile.Parse(pkg.Container(cz.Leaf));
+                for (int i = placements.Count - 1; i >= 0; i--)
+                    if (!keepModels.Contains(placements[i].ModelName)) { ops.Add(new { op = "deleteClutter", clutterIndex = i }); clutter++; }
+            }
+            if (On("world"))
+                foreach (var world in pkg.Models().Where(m => m.Archive.Equals("WORL_MDL.ZED", StringComparison.OrdinalIgnoreCase) || m.Archive.EndsWith("\\WORL_MDL.ZED", StringComparison.OrdinalIgnoreCase)))
+                {
+                    var mesh = ZipperModelMesh.TryBuild(pkg, world);
+                    if (mesh == null) continue;
+                    foreach (var g in mesh.Chunks.Where(c => c.Visual != null).GroupBy(c => c.Visual!))
+                    {
+                        bool keep = keepVisuals.Contains(g.Key) || g.Any(c => KeptWorldPart.IsMatch(c.Node ?? "") || KeptWorldPart.IsMatch(c.Texture ?? ""));
+                        // Already hidden: one zero-area speck.
+                        bool speck = g.All(c => c.Positions.Length <= 9 || c.Positions.Skip(3).Select((v, k) => v == c.Positions[k % 3]).All(x => x));
+                        if (keep) { kept.Add(g.Key); continue; }
+                        if (speck) continue;
+                        ops.Add(new { op = "hideVisual", archive = world.Archive, model = world.Name, visual = g.Key });
+                        hidden.Add(g.Key);
+                    }
+                }
+            if (On("collision")) ops.Add(new { op = "clearCollision", all = true });
+            if (ops.Count == 0) return new { revision = s.Revision, props, clutter, hiddenVisuals = hidden, keptVisuals = kept };
+            var batch = JsonSerializer.SerializeToElement(new { ops, label = Str(a, "label") ?? "clear the map" });
+            var result = Batch(s, batch);
+            return new { result = new { s.Revision }, props, clutter, hiddenVisuals = hidden, keptVisuals = kept };
+        }
+
         private static object Batch(AssetSession s, JsonElement a)
         {
             if (!a.TryGetProperty("ops", out var ops) || ops.ValueKind != JsonValueKind.Array) throw new ArgumentException("\"ops\" [..] is required");
@@ -1728,8 +1791,17 @@ namespace MapBuilder.Server.Services
             var textures = decoded.Chunks.Select(c => c.TextureName).Where(t => t != null).Distinct(StringComparer.OrdinalIgnoreCase)
                 .Select(t => TextureInfo(s.Package, t!, texNs)).ToList();
 
+            // What it draws, in model space (the GEO's nparams bounds can be a template's until fitBounds).
+            (float[] Min, float[] Max)? drawn = null;
+            try { drawn = PackageEdits.GeometryBounds(s.Package, model); }
+            catch (Exception ex) when (ex is InvalidOperationException or InvalidDataException or ArgumentException or IndexOutOfRangeException) { }
+
             return new
             {
+                boundsMin = drawn?.Min,
+                boundsMax = drawn?.Max,
+                size3 = drawn is { } dd ? new[] { dd.Max[0] - dd.Min[0], dd.Max[1] - dd.Min[1], dd.Max[2] - dd.Min[2] } : null,
+                collisionFaces = CollisionEdits.Faces(s.Package, model).Count,
                 model.Archive,
                 model.Name,
                 model.Kind,

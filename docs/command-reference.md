@@ -32,6 +32,7 @@ Every page and every MCP tool talks to the server through one endpoint. Each com
 | `addPoint` / `removePoint` | `{name, kind, team?, position}` / `{name}` | Adds an AIMAPS point at the cell holding the position, or removes one (never the last start or waypoint). See [AI maps](formats/aimaps.md) |
 | `setCollision` | `{model, shape?: box \| mesh \| definition \| none, boxes?, bottom?, material?, like?}` | A model's collision faces, on its definition and every placed reference. See [Collision](formats/collision.md) |
 | `clearCollision` | `{geoIndices? \| visuals? \| area? \| all, references?}` | Removes the world's own collision faces (after hiding world visuals) |
+| `clearMap` | `{props?, clutter?, world?, collision?, keepModels?, keepVisuals?}` | A blank map in one undo step: props and clutter deleted, world visuals hidden except the sky, clouds and sea, and world collision removed |
 | `importModel` | `{sourceSession \| source, archive, name, targetArchive?, newName?}` | Copies a model and everything it needs from another package |
 | `importTexture` | `{sourceSession \| source, name, sourceNamespace?, namespace?, newName?}` | Copies a texture with its palette |
 | `addTexture` | `{name, pngBase64 \| imagePath, namespace?, width?, height?, maxSize?, paletteId?}` | A new texture from an image |

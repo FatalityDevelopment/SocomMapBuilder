@@ -173,6 +173,53 @@ public sealed class CollisionTests
         Assert.Equal(2, b.Points(session).GetProperty("points").GetArrayLength());
     }
 
+    [Fact]
+    public void ClearMap_empties_the_map_in_one_undo_step()
+    {
+        using var pkg = new SyntheticPackage();
+        var b = new Backend();
+        string session = b.Open(pkg.Folder);
+        int References() => b.Scene(session).GetProperty("instances").EnumerateArray().Count(i => i.GetProperty("kind").GetString() == "reference");
+        int Clutter() => b.Scene(session).GetProperty("instances").EnumerateArray().Count(i => i.GetProperty("kind").GetString() == "clutter");
+        Assert.Equal((2, 2), (References(), Clutter()));
+
+        var kept = b.Edit(session, new { op = "clearMap", keepModels = new[] { "crate" } });
+        Assert.Equal((0, 2), (kept.GetProperty("props").GetInt32(), kept.GetProperty("clutter").GetInt32()));
+        Assert.Equal((2, 0), (References(), Clutter()));
+        b.Undo(session);
+
+        var cleared = b.Edit(session, new { op = "clearMap" });
+        Assert.Equal(2, cleared.GetProperty("props").GetInt32());
+        Assert.Equal((0, 0), (References(), Clutter()));
+        b.Undo(session);
+        Assert.Equal((2, 2), (References(), Clutter()));
+        Assert.Equal(2, b.Points(session).GetProperty("points").GetArrayLength());
+    }
+
+    /// <summary>On a disc: MP2 cleared keeps its sky and sea, hides the rig, and nothing of the rig stays solid.</summary>
+    [Fact]
+    public void Disc_mp2_clears_to_sky_and_sea()
+    {
+        string? disc = Environment.GetEnvironmentVariable("MAPBUILDER_DISC");
+        string? zdb = string.IsNullOrEmpty(disc) ? null
+            : new[] { Path.Combine(disc, "RUN", "MP2.ZDB"), Path.Combine(disc, "MP2.ZDB") }.FirstOrDefault(File.Exists);
+        if (zdb == null) return;
+        var b = new Backend();
+        string session = b.Open(zdb);
+        var size = b.Ok(new CommandMessage { Command = "ASSET_DESCRIBE_MODEL", AssetSession = session, AssetName = "container06" });
+        Assert.Equal(9, size.GetProperty("collisionFaces").GetInt32());
+        Assert.True(size.GetProperty("size3")[0].GetSingle() > 10);
+
+        var r = b.Edit(session, new { op = "clearMap" });
+        var keptVisuals = r.GetProperty("keptVisuals").EnumerateArray().Select(v => v.GetString()).ToList();
+        Assert.Contains(keptVisuals, v => v!.StartsWith("N000"));
+        Assert.True(r.GetProperty("hiddenVisuals").GetArrayLength() > 30);
+        var c = b.Ok(new CommandMessage { Command = "ASSET_MAP_COLLISION", AssetSession = session, AssetJson = "{\"faces\":false}" });
+        Assert.Equal(0, c.GetProperty("world").GetProperty("faces").GetInt32());
+        Assert.Equal(0, c.GetProperty("props").GetProperty("faces").GetInt32());
+        Assert.Equal(0, b.Scene(session).GetProperty("instances").EnumerateArray().Count(i => i.GetProperty("kind").GetString() == "reference"));
+    }
+
     /// <summary>
     /// On a disc (MAPBUILDER_DISC): every collision face of every map's own scene re-encodes to the params retail wrote
     /// (corner count, material, prefix and flags) apart from byte 8's low bit. That bit is authored: it is set on the

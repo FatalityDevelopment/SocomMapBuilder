@@ -46,7 +46,9 @@ Byte 8's low bit is authored, not computed. On MP2's scene it is set on exactly 
 | `placeInstance` | The new reference gets a copy of the placed model's definition region. It used to copy the template reference's, so a crate placed from a barrel was a solid barrel |
 | `newProp` | Copies the template's definition with its region. After reshaping, set the new prop's collision |
 
-`ASSET_MAP_COLLISION` / `assets_map_collision` lists world and prop face counts, the placed props without a region, and the faces in world space. `assets_validate` reports each bare prop as `no-collision` (info).
+`clearMap {props?, clutter?, world?, collision?, keepModels?, keepVisuals?}` starts a blank map in one undo step. It deletes every placed prop and clutter placement, hides every world-model visual except the sky, clouds and sea, and runs `clearCollision all`. The map keeps its settings, tables, AI grid and points.
+
+The Map Builder's View › **Collision** draws the faces over the map: floors green, walls orange. `ASSET_MAP_COLLISION` / `assets_map_collision` lists world and prop face counts, the placed props without a region, and the faces in world space. `assets_validate` reports each bare prop as `no-collision` (info).
 
 ## Not known yet
 

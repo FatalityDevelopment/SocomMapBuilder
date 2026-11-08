@@ -147,6 +147,7 @@ export function MapPage() {
   const [actionNode, setActionNode] = useState<number | null>(null);
   const [actionMarkersOn, setActionMarkersOn] = useState(initialPreferences.actionMarkers);
   const [objectiveMarkersOn, setObjectiveMarkersOn] = useState(initialPreferences.objectiveMarkers);
+  const [collisionOn, setCollisionOn] = useState(initialPreferences.collision);
   const [figuresOn, setFiguresOn] = useState(initialPreferences.actorFigures);
   // How each actor is drawn (by actor name), for the Mission tab.
   const [figurePlans, setFigurePlans] = useState<FigurePlan[]>([]);
@@ -405,6 +406,20 @@ export function MapPage() {
     if (viewportRef.current) { viewportRef.current.showObjectiveMarkers = next; }
   };
   const toggleMinimap = () => setMinimapOn(on => !on);
+  // The Collision view: SOCOM II maps only (their GEO di faces), refetched after each edit.
+  const collisionAvailable = !!status && !ca && !viewOnly && !gta;
+  useEffect(() => {
+    let live = true;
+    const vp = viewportRef.current;
+    if (!vp) { return; }
+    if (!collisionOn || !collisionAvailable || !sceneReady) { vp.setCollision([]); return; }
+    client.mapCollision().then(c => {
+      if (!live) { return; }
+      vp.setCollision(c.faces);
+      if (c.truncated) { say(`Collision: showing ${c.faces.length} of ${c.world.faces + c.props.faces} faces`, false); }
+    }).catch(e => { if (live) { vp.setCollision([]); say(`Could not read the collision: ${errText(e)}`, true); } });
+    return () => { live = false; };
+  }, [collisionOn, collisionAvailable, sceneReady, status?.session, status?.revision]);
   useEffect(() => {
     let live = true;
     setHud(null);
@@ -724,6 +739,7 @@ export function MapPage() {
         { label: 'Back faces', action: toggleBackfaces, checked: () => backfaces },
         { label: 'Action icons', action: toggleActionMarkers, checked: () => actionMarkersOn },
         { label: 'Objective flags', action: toggleObjectiveMarkers, checked: () => objectiveMarkersOn },
+        { label: 'Collision', action: () => setCollisionOn(on => !on), checked: () => collisionOn, disabled: () => !collisionAvailable },
         { label: 'Characters at start points', action: toggleFigures, checked: () => figuresOn },
         { label: 'Minimap', shortcut: SHORTCUTS.minimap.label, action: toggleMinimap, checked: () => minimapOn },
         { separator: true, label: '' },
@@ -879,11 +895,11 @@ export function MapPage() {
     writeEditorPreferences({ shading, lighting, grid, snap, snapMove, snapRotate, snapScale, gizmoLocal, ortho, backfaces,
       placeYaw, placeScale, randomYaw, randomScale, minPlaceScale, maxPlaceScale, alignSurface,
       snapTarget, pivotMode, placeAs, brushRadius, brushSpacing, brushDensity, brushSlope, brushErase,
-      actionMarkers: actionMarkersOn, objectiveMarkers: objectiveMarkersOn, actorFigures: figuresOn,
+      actionMarkers: actionMarkersOn, objectiveMarkers: objectiveMarkersOn, collision: collisionOn, actorFigures: figuresOn,
       minimap: minimapOn, minimapRange });
   }, [shading, lighting, grid, snap, snapMove, snapRotate, snapScale, gizmoLocal, ortho, backfaces,
     placeYaw, placeScale, randomYaw, randomScale, minPlaceScale, maxPlaceScale, alignSurface,
-    snapTarget, pivotMode, placeAs, brushRadius, brushSpacing, brushDensity, brushSlope, brushErase, actionMarkersOn, objectiveMarkersOn, figuresOn, minimapOn, minimapRange]);
+    snapTarget, pivotMode, placeAs, brushRadius, brushSpacing, brushDensity, brushSlope, brushErase, actionMarkersOn, objectiveMarkersOn, collisionOn, figuresOn, minimapOn, minimapRange]);
   // ------------------------------------------------------------------ AI (MCP)
 
   // ui_view on this page: shading, lighting, camera preset, framing.
