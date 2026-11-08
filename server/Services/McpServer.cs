@@ -306,6 +306,7 @@ namespace MapBuilder.Server.Services
                     break;
                 case "assets_map_scene":
                 case "assets_map_points":
+                case "assets_map_collision":
                 case "assets_validate":
                     Show("map", SessionPath());
                     break;
@@ -481,6 +482,10 @@ namespace MapBuilder.Server.Services
                 case "deleteInstance": return ("map", null, null);
                 case "movePoint": return ("map", null, new { point = Str(op, "name") });
                 case "setPoint": return ("map", null, new { point = Str(op, "newName") ?? Str(op, "name") });
+                case "addPoint": return ("map", null, new { point = Str(op, "name") });
+                case "removePoint":
+                case "setCollision":
+                case "clearCollision": return ("map", null, null);
                 case "placeInstance": return ("map", null, new { geoIndex = R("newGeoIndex"),
                     instance = result.ValueKind == JsonValueKind.Object ? Str(result, "newInstance") : null });
                 case "placePrefab":
@@ -560,14 +565,14 @@ namespace MapBuilder.Server.Services
             AddSync("mesh_refine_obj", "Round an OBJ mesh",
                 "Subdivide an exported model, sharing geometry across chunk and UV seams. Writes a new OBJ, retaining material references. Place it beside its MTL and textures. Returns before/after triangle counts.",
                 false, Schema(new[] { "inputPath", "outputPath" }, P("inputPath", "string", "Source OBJ path."),
-                    P("outputPath", "string", "New OBJ path (must not exist)."), N("levels", "integer", "4× triangles per level. Default 1.", 1, 2),
+                    P("outputPath", "string", "New OBJ path (must not exist)."), N("levels", "integer", "4Ã— triangles per level. Default 1.", 1, 2),
                     N("crease", "number", "Preserve edges sharper than this angle in degrees. Default 105.", 0, 180),
                     N("strength", "number", "Fraction of full smoothing per level. Default 0.75.", 0, 1),
                     A("brushes", "object", "Optional local shaping before subdivision, in order. Each {center:[x,y,z], radius:[rx,ry,rz], scale:[sx,sy,sz]} in OBJ space, with smooth falloff.", maxItems: 32)),
                 a => FromCommand(new CommandMessage { Command = "MESH_REFINE_OBJ", InputPath = Str(a, "inputPath"),
                     OutputPath = Str(a, "outputPath"), AssetJson = a.GetRawText() }));
 
-            // ── sessions
+            // â”€â”€ sessions
             AddSync("assets_open", "Open package",
                 "Open a SOCOM package (.ZDB / .CDB, loose archives or package folder), a Combined Assault location archive or mission path, " +
                 "or a GTA: San Andreas mounted disc folder, ISO, IMG or DFF. The pages share a session for each path. Returns the " +
@@ -584,7 +589,7 @@ namespace MapBuilder.Server.Services
                     string full = st.TryGetProperty("path", out var fp) ? fp.GetString() ?? path : path;
                     bool isMap = Command(new CommandMessage { Command = "ASSET_MAP_SCENE", AssetSession = id, AssetJson = "{\"limit\":1}" }).Ok;
                     _ui.Publish(new { type = "show", page = isMap ? "map" : "models", path = full, session = id });
-                    return ToolResult.Text(data, $"{Path.GetFileName(full)} → session {id}");
+                    return ToolResult.Text(data, $"{Path.GetFileName(full)} â†’ session {id}");
                 });
 
             AddSync("assets_sessions", "List sessions",
@@ -596,9 +601,9 @@ namespace MapBuilder.Server.Services
                 "A session's status: path, revision, changed (unsaved) archives, the undo / redo descriptions, model counts by kind. Risk: read-only.",
                 true, Schema(new[] { "session" }, session), a => FromCommand(new CommandMessage { Command = "ASSET_STATUS", AssetSession = Session(a) }));
 
-            // ── reading
+            // â”€â”€ reading
             AddSync("assets_list_models", "List models",
-                "The package's models: archive, name, kind (prop, library, character, weapon, vehicle, world …), namespace, size. Filter by kind, " +
+                "The package's models: archive, name, kind (prop, library, character, weapon, vehicle, world â€¦), namespace, size. Filter by kind, " +
                 "archive or a name substring. Risk: read-only.",
                 true, Schema(new[] { "session" }, session, P("kind", "string", "Optional kind filter."), P("query", "string", "Optional name substring."),
                     P("archive", "string", "Optional archive leaf, e.g. M51_MDL.ZED.")),
@@ -750,6 +755,19 @@ namespace MapBuilder.Server.Services
                     AssetJson = JsonSerializer.Serialize(new { mission = Str(a, "mission") }, Json) },
                     d => d.TryGetProperty("points", out var p) ? $"{p.GetArrayLength()} point(s)" : null!));
 
+            AddSync("assets_map_collision", "Read map collision",
+                "What is solid on a SOCOM II map (its GEO di faces): counts of world and prop faces, the placed props with no collision " +
+                "(walked and shot through in game), and the faces in world space (points [x,y,z,...], up = a floor or up-slope, material, " +
+                "the node holding it), in an area and up to maxFaces. With model: that model's own faces in model space. Fix with " +
+                "assets_edit setCollision / clearCollision. Risk: read-only.",
+                true, Schema(new[] { "session" }, session,
+                    P("area", "array", "[minX, minZ, maxX, maxZ]: faces centred inside and props placed inside."),
+                    P("model", "string", "A model: its own faces instead."),
+                    P("maxFaces", "integer", "Faces to return (default 6000)."),
+                    P("faces", "boolean", "false: counts and bare props only.")),
+                a => FromCommand(new CommandMessage { Command = "ASSET_MAP_COLLISION", AssetSession = Session(a), AssetJson = a.GetRawText() },
+                    d => d.TryGetProperty("faces", out var fc) ? $"{fc.GetArrayLength()} face(s)" : null!));
+
             AddSync("assets_map_tables", "Read mission tables",
                 "The map's mission tables decoded: HUD objectives (text, valves, map LOCATION [x, z]), actors (vehicles.rdr: display name, " +
                 "character, start points, teams, AI accuracy / courage), mission settings (AI parameters, satchel timer, valves such as " +
@@ -776,7 +794,7 @@ namespace MapBuilder.Server.Services
                 "The package's weapon definitions: internal name, model, fire animation, fire wait, tracer texture. Risk: read-only.",
                 true, Schema(new[] { "session" }, session), a => FromCommand(new CommandMessage { Command = "ASSET_WEAPONS", AssetSession = Session(a) }));
 
-            // ── editing
+            // â”€â”€ editing
             AddSync("assets_edit", "Edit",
                 "Apply one edit to a session (undoable; nothing is written to disk until assets_save). `op` is an object with \"op\":\n" +
                 "- moveClutter {clutterIndex, position?, yaw?, scale?, matrix?}\n" +
@@ -791,14 +809,19 @@ namespace MapBuilder.Server.Services
                 "moveInstance {instance, matrix | position, followLod?} moves its dedicated LOD by default.\n" +
                 "- deleteInstance {geoIndex}, or {instance} on a GTA map\n" +
                 "- movePoint {name, position:[x,y,z]} (an AIMAPS point; snaps to its grid cell)\n" +
-                "- setPoint {name, newName?, team?, kind?: start|waypoint|other, position?} (changes a point in place; points " +
-                "cannot be added or removed: their table sits mid-file)\n" +
+                "- setPoint {name, newName?, team?, kind?: start|waypoint|other, position?} (changes a point in place)\n" +
+                "- addPoint {name, kind: start|waypoint|other, team?, position} / removePoint {name} (SOCOM II AIMAPS points; not yet tried in game)\n" +
+                "- setCollision {model, shape?: box|mesh|definition|none, boxes?:[{min,max}], bottom?, material?, like?} (a model's GEO di faces, written " +
+                "to its definition and every placed reference; a prop without them is walked and shot through. placeInstance copies the " +
+                "placed model's faces, so set them before placing or after: both work)\n" +
+                "- clearCollision {geoIndices? | visuals? | area?:[minX,minZ,maxX,maxZ] | all?, references?} (the world's own floors and walls: " +
+                "clear them under world visuals you hid; assets_map_collision shows what is solid)\n" +
                 "- replaceTexture {texture, pngBase64 | imagePath, namespace?}\n" +
                 "- retexture {archive, model, from, to, visual?}\n" +
                 "- tintVertexColors {archive, model, multiply:[r,g,b], add?, visual?, texture?, alpha?}\n" +
                 "- transformVertices {archive, model, translate?, rotate? (degrees), scale?, pivot?, chunks?, vertices?, matrix?}\n" +
                 "- setVertices {archive, model, geometryOffset, vertices:[{i, position?, uv?, color?, normal?}]}\n" +
-                "- deleteFaces / duplicateFaces {archive, model, faces:{geometryOffset:[triangle…]}, …}\n" +
+                "- deleteFaces / duplicateFaces {archive, model, faces:{geometryOffset:[triangleâ€¦]}, â€¦}\n" +
                 "- addMesh {archive, model, visual:\"N000_000\", texture, replace?, shapes | obj | objPath | mesh | meshPath | primitive:{kind:cube|plane, size, center}}: " +
                 "shapes [{kind: lathe {profile:[[along,radius]]} | cylinder {start,end,radius,radiusEnd?} | ring {at,inner,outer,thickness?} | sphere {radius,scale?} | " +
                 "box {min,max,lean?,radius? (rounded),bevelSegments?,puff? (stuffed),divisions?,faceUv?} | strap {path:[[x,y,z]],width,thickness?,around?|outward?,steps?}, " +
@@ -812,7 +835,7 @@ namespace MapBuilder.Server.Services
                 "the Asset Viewer opens the palette)\n" +
                 "- addAnimation / deleteAnimation / renameAnimation / setAnimation / setAnimationKey (package clips)\n" +
                 "- placePrefab {prefab, position, yaw?} (every item of a saved prefab around position as one undo step; see assets_list_prefabs)\n" +
-                "- batch {label?, ops:[…]} (one undo step)\n" +
+                "- batch {label?, ops:[â€¦]} (one undo step)\n" +
                 "Positions are map units [x, y, z] (y is height; read nearby instances with assets_map_scene first); yaw is degrees about Y; " +
                 "omitted parts keep their values. Indices shift after add / delete, so re-read before chaining. The app follows the edit " +
                 "(the Map Builder frames the item, the Model Editor opens the model). dryRun: true checks the edit and answers what it " +
@@ -879,7 +902,7 @@ namespace MapBuilder.Server.Services
 
             AddSync("mapbuilder_command", "Run command",
                 "Run any backend command directly (the README's command reference: ZIPPER_INSPECT, ZIPPER_READ_NODE, PACKAGE_EDIT, FS_LIST, " +
-                "ASSET_EXPORT …). `fields` holds the command's fields (InputPath, OutputPath, AssetSession, AssetArchive, AssetName, AssetJson, …). " +
+                "ASSET_EXPORT â€¦). `fields` holds the command's fields (InputPath, OutputPath, AssetSession, AssetArchive, AssetName, AssetJson, â€¦). " +
                 "Use the assets_* tools when one fits. Risk: depends on the command (PACKAGE_EDIT and the extract commands write disk).",
                 false, Schema(new[] { "command" }, P("command", "string", "Command name, e.g. ZIPPER_INSPECT."), P("fields", "object", "The command's fields.")), a =>
                 {
@@ -900,7 +923,7 @@ namespace MapBuilder.Server.Services
                 false, Schema(new[] { "session" }, session), a => FromCommand(new CommandMessage { Command = "ASSET_CLOSE", AssetSession = Session(a) },
                     d => d.TryGetProperty("discardedEdits", out var n) ? $"closed, {n.GetInt32()} unsaved archive(s) discarded" : "closed"));
 
-            // ── effects and weapons in a session
+            // â”€â”€ effects and weapons in a session
             AddSync("assets_effects", "Read effects",
                 "The package's ZANIM effects (CZANIM.ZAR: muzzle flashes, shell ejection, explosions, smoke): without name, every effect " +
                 "with its tracks, the sub-effects it spawns and the package models it uses (filter by query); with name, that effect fully " +
@@ -951,7 +974,7 @@ namespace MapBuilder.Server.Services
                     return ToolResult.Text(JsonSerializer.Serialize(new { leaf, size = bytes.Length, data = Convert.ToBase64String(bytes) }, Json), $"{leaf}, {bytes.Length} bytes");
                 });
 
-            // ── files on disk
+            // â”€â”€ files on disk
             AddSync("fs_places", "List drives and folders",
                 "The local drives and the user's common folders (Desktop, Documents, Downloads, Home): where to start looking for packages. Risk: read-only.",
                 true, Schema(Array.Empty<string>()), _ => FromCommand(new CommandMessage { Command = "FS_PLACES" }));
@@ -985,7 +1008,7 @@ namespace MapBuilder.Server.Services
                             : d.TryGetProperty("wouldWrite", out var ww) ? "dry run: would write " + Path.GetFileName(ww.GetString()) : null!);
                 });
 
-            // ── weapon archives on disk (a loose *_MDL.ZED / weapon .ZED)
+            // â”€â”€ weapon archives on disk (a loose *_MDL.ZED / weapon .ZED)
             AddSync("weapons_list", "List weapon models",
                 "The models in a weapon archive file (.ZED): name, chunk / vertex / triangle counts and textures, to choose a template. Risk: read-only.",
                 true, Schema(new[] { "path" }, P("path", "string", "The weapon archive (.ZED).")),
@@ -1041,8 +1064,8 @@ namespace MapBuilder.Server.Services
                         OutputPath = Str(a, "outputPath"), WeaponNewName = Str(a, "newName"), WeaponMeshEditsJson = edits,
                         WeaponImagePath = Str(a, "imagePath"), WeaponImageData = Str(a, "imageBase64"),
                         WeaponTextureEntryName = Str(a, "textureEntryName"), WeaponPaletteEntryName = Str(a, "paletteEntryName"), DryRun = Bool(a, "dryRun"),
-                    }, d => d.TryGetProperty("outputPath", out var o) ? $"{Str(a, "newName")} → {Path.GetFileName(o.GetString())}"
-                        : d.TryGetProperty("wouldWrite", out var w) ? $"dry run: {Str(a, "newName")} → {Path.GetFileName(w.GetString())}" : null!);
+                    }, d => d.TryGetProperty("outputPath", out var o) ? $"{Str(a, "newName")} â†’ {Path.GetFileName(o.GetString())}"
+                        : d.TryGetProperty("wouldWrite", out var w) ? $"dry run: {Str(a, "newName")} â†’ {Path.GetFileName(w.GetString())}" : null!);
                     // The new weapon is on disk, outside any session: the Model Editor opens the written archive on it.
                     if (!result.IsError && !Bool(a, "dryRun"))
                     {
@@ -1135,7 +1158,7 @@ namespace MapBuilder.Server.Services
                         d => d.TryGetProperty("pack", out var p) ? $"{(Bool(a, "dryRun") ? "dry run: " : "")}{p.GetString()}.CDB" : null!);
                 });
 
-            // ── the app
+            // â”€â”€ the app
             Add("ui_screenshot", "Screenshot",
                 "A screenshot of the 3D view on the page the user has in front (Map Builder, Model Editor, Animation Editor or Asset Viewer), to " +
                 "check your work as the user sees it. Needs the app open in a browser. Risk: read-only.",
@@ -1148,7 +1171,7 @@ namespace MapBuilder.Server.Services
                     r.Content.Add(new { type = "image", data = png, mimeType = "image/png" });
                     data.TryGetProperty("width", out var w);
                     data.TryGetProperty("height", out var h);
-                    r.Content.Add(new { type = "text", text = $"page {r.Summary}, {w}×{h}" });
+                    r.Content.Add(new { type = "text", text = $"page {r.Summary}, {w}Ã—{h}" });
                     return r;
                 });
 
@@ -1210,8 +1233,8 @@ namespace MapBuilder.Server.Services
                     if (zoom is <= 0) throw new ArgumentException("\"zoom\" is a positive factor");
                     _ui.Publish(new { type = "view", shading = Str(a, "shading"), lighting = Str(a, "lighting"), backdrop = Str(a, "backdrop"), view = Str(a, "view"), frame = Str(a, "frame"), orbit, zoom });
                     var parts = new[] { "shading", "lighting", "backdrop", "view", "frame" }.Select(k => Str(a, k)).Where(v => v != null).ToList();
-                    if (orbit != null) parts.Add($"orbit {orbit[0]}°, {orbit[1]}°");
-                    if (zoom != null) parts.Add($"zoom ×{zoom}");
+                    if (orbit != null) parts.Add($"orbit {orbit[0]}Â°, {orbit[1]}Â°");
+                    if (zoom != null) parts.Add($"zoom Ã—{zoom}");
                     return ToolResult.Text("View changed.", string.Join(", ", parts));
                 });
 

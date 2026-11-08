@@ -28,7 +28,7 @@ Paths below are M51's (`RUN\SP\M51\…`); multiplayer maps use `RUN\MP\MP51\…`
 
 | File | Maps | Holds | Map Builder |
 |---|---:|---|---|
-| `<MAP>_GEO.ZED` | 34 | The scene: model definitions, placed references, visuals, `di` collision faces, ladders | Read ([geo.md](geo.md)) |
+| `<MAP>_GEO.ZED` | 34 | The scene: model definitions, placed references, visuals, `di` collision faces, ladders | Read ([geo.md](geo.md), [collision.md](collision.md)) |
 | `<MAP>_MDL.ZED`, `WORL_MDL.ZED` | 33 / 34 | Prop models; the world (terrain) model. MP53 has no `_MDL` | Read ([models.md](models.md)) |
 | `<MAP>_TXR.ZED`, `<MAP>_PAL.ZED` | 34 | Map textures and palettes | Read ([textures.md](textures.md)) |
 | `<MAP>.ZED` | 34 | Compiled world settings (below) | Partial |

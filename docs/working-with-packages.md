@@ -33,7 +33,8 @@ The status chip in each page's header shows the package, whether it has unsaved 
 
 - **Runtime VRAM is limited.** Large textures or many new textures may exceed what a map can use in game. The map lint (`assets_validate`) checks a VRAM budget.
 - An imported character can appear correctly in the editors, but spawning it in a mission also requires the relevant character records.
-- AIMAPS points can be moved, renamed and retyped, but not added or removed yet.
+- AIMAPS points can be moved, renamed and retyped, and added or removed through the MCP. Adding and removing have not been tried in game.
+- Collision is per placed reference (see [Collision](formats/collision.md)). Hiding a world visual leaves its floor or wall solid until `clearCollision` removes it, and a new prop needs `setCollision`.
 - The chartype table (`READERC.ZAR`) is shared by every map, so per-map loadouts cannot be changed from the Map Builder.
 
 ## Related

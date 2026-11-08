@@ -37,6 +37,8 @@ A table of `count` (u32), one more u32, then 24-byte records:
 
 A point's position is the centre of its cell in the first AI map's grid: `min + (cell + 0.5) × cell size` on x and z, and its height is that cell's floor in the grid (below). Moving a point rewrites the packed cell.
 
+The table sits right after the first AI map's row table. The file holds no offsets: the header is the version and the map count, and the tables after the points (the 28-byte named records, then the other AI maps) are count-prefixed and read in order. So `addPoint` inserts a record at the end of the table and `removePoint` takes one out, moving the rest of the file by 24 bytes; both update the count. A new record copies the unused bytes and the packed word's low bits from a point of the same kind. Byte +0x12 is `0x99` on MP2's points. The word after the count, `0x01180B00` on MP2, decodes as a packed cell and is kept. Not yet tried in game.
+
 ## Grid cells
 
 After each AI map's header (+0x58 from the marker) comes a sub-header, then the cells and a row table:

@@ -10,6 +10,7 @@ Every page and every MCP tool talks to the server through one endpoint. Each com
 | `ASSET_LIST_MODELS` / `ASSET_LIST_TEXTURES` / `ASSET_LIST_PALETTES` | `AssetSession` | The package's assets |
 | `ASSET_MODEL_MESH` / `ASSET_DESCRIBE_MODEL` / `ASSET_TEXTURE` | `AssetSession`, `AssetArchive`, `AssetName` | A model's mesh and description; a texture as PNG |
 | `ASSET_MAP_SCENE` / `ASSET_MAP_POINTS` | `AssetSession` | Map instances and AIMAPS points |
+| `ASSET_MAP_COLLISION` | `AssetSession`, JSON `{area?, model?, maxFaces?, faces?}` | Collision faces in world space, counts, and placed props without collision |
 | `ASSET_EDIT` | `AssetSession`, `AssetJson: {op, …}` | One edit (below); `batch` runs several as one undo step |
 | `ASSET_UNDO` / `ASSET_REDO` / `ASSET_SAVE` | `AssetSession` (+ `AssetJson` for save) | History and saving (`zdb` or `pack`) |
 | `ASSET_SAVE_PREFAB` / `ASSET_LIST_PREFABS` / `ASSET_DELETE_PREFAB` | `AssetSession`, `AssetJson: {name, geoIndices?, clutterIndices?, origin?, replace?}` / `AssetName?` | Prefab files in `%LOCALAPPDATA%\MapBuilder\prefabs` (or `MAPBUILDER_PREFABS`) |
@@ -27,7 +28,10 @@ Every page and every MCP tool talks to the server through one endpoint. Each com
 | Op | Fields | Does |
 |---|---|---|
 | `placeInstance` | `{model, position, yaw?, scale?, matrix?, name?, templateGeoIndex?}` | A new placed reference of a package model, copied from the placed reference nearest the position (or `templateGeoIndex`) and added beside it; returns `newGeoIndex` |
-| `setPoint` | `{name, newName?, team?, kind?: start \| waypoint \| other, position?}` | Changes an AIMAPS point in place. Points cannot be added or removed: their table sits mid-file between structures that are not decoded yet. |
+| `setPoint` | `{name, newName?, team?, kind?: start \| waypoint \| other, position?}` | Changes an AIMAPS point in place |
+| `addPoint` / `removePoint` | `{name, kind, team?, position}` / `{name}` | Adds an AIMAPS point at the cell holding the position, or removes one (never the last start or waypoint). See [AI maps](formats/aimaps.md) |
+| `setCollision` | `{model, shape?: box \| mesh \| definition \| none, boxes?, bottom?, material?, like?}` | A model's collision faces, on its definition and every placed reference. See [Collision](formats/collision.md) |
+| `clearCollision` | `{geoIndices? \| visuals? \| area? \| all, references?}` | Removes the world's own collision faces (after hiding world visuals) |
 | `importModel` | `{sourceSession \| source, archive, name, targetArchive?, newName?}` | Copies a model and everything it needs from another package |
 | `importTexture` | `{sourceSession \| source, name, sourceNamespace?, namespace?, newName?}` | Copies a texture with its palette |
 | `addTexture` | `{name, pngBase64 \| imagePath, namespace?, width?, height?, maxSize?, paletteId?}` | A new texture from an image |

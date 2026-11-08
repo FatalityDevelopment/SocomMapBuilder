@@ -30,7 +30,7 @@ The assistant works on the same asset sessions as the pages:
 | Tools | Purpose |
 |---|---|
 | `assets_open`, `assets_sessions`, `assets_status` | Open or join a package session |
-| `assets_list_models`, `assets_describe_model`, `assets_model_mesh`, `assets_list_textures`, `assets_list_palettes`, `assets_texture` (as an image), `assets_map_scene`, `assets_map_points`, `assets_map_tables`, `assets_list_animations`, `assets_animation`, `assets_weapons`, `assets_uv_layout` | Read |
+| `assets_list_models`, `assets_describe_model`, `assets_model_mesh`, `assets_list_textures`, `assets_list_palettes`, `assets_texture` (as an image), `assets_map_scene`, `assets_map_points`, `assets_map_collision`, `assets_map_tables`, `assets_list_animations`, `assets_animation`, `assets_weapons`, `assets_uv_layout` | Read |
 | `assets_effects`, `assets_weapon_fx` | Read ZANIM effects and what firing a weapon plays |
 | `viewer_list`, `viewer_preview`, `viewer_edit`, `viewer_extract` | Browse any folder, file or archive record as the Asset Viewer does, read its typed preview (RDR subtrees, AI maps, GEO scene nodes, clutter pages, decoded ZANIM effects, palettes), change it in place, and copy a record out. Edits are undone and saved with `assets_undo` / `assets_save` on the session `viewer_edit` returns. |
 | `assets_edit` (every `ASSET_EDIT` op; `dryRun: true` previews one without changing anything), `assets_undo`, `assets_redo`, `assets_save`, `assets_close` | Change, save and close |

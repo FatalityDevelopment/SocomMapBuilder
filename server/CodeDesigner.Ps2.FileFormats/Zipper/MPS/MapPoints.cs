@@ -27,10 +27,14 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.MPS
             public int RecordOffset { get; init; }
         }
 
-        public static List<Point> Parse(byte[] mps, MpsMap? grid = null)
+        public static List<Point> Parse(byte[] mps, MpsMap? grid = null) =>
+            Table(mps, grid) is { } t ? t.Points.Where(p => p.Kind != "spectator").ToList() : new List<Point>();
+
+        /// <summary>The point table: its offset (the count word), and every record, the spectator's included.</summary>
+        private static (int Offset, List<Point> Points)? Table(byte[] mps, MpsMap? grid = null)
         {
             grid ??= MpsFile.Parse(mps).Maps.FirstOrDefault();
-            if (grid == null || mps.Length < 64) return new List<Point>();
+            if (grid == null || mps.Length < 64) return null;
             for (int o = 0; o + 8 + 24 <= mps.Length; o += 4)
             {
                 uint count = BitConverter.ToUInt32(mps, o);
@@ -61,9 +65,72 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.MPS
                         RecordOffset = r,
                     });
                 }
-                if (ok && points.Any(p => p.Kind is "start" or "waypoint")) return points.Where(p => p.Kind != "spectator").ToList();
+                if (ok && points.Any(p => p.Kind is "start" or "waypoint")) return (o, points);
             }
-            return new List<Point>();
+            return null;
+        }
+
+        /// <summary>
+        /// Adds a point at the end of the table: a copy of an existing record of the same kind (its unused bytes and
+        /// the packed word's low bits), named, teamed and moved to the cell holding (x, z). The table is one of the
+        /// file's count-prefixed tables read in order, with no offsets into the file after it, so the records after
+        /// it move down by 24 bytes. Not yet tried in game.
+        /// </summary>
+        public static byte[] Add(byte[] mps, string name, string kind, int? team, float x, float z)
+        {
+            var (offset, points) = Table(mps) ?? throw new InvalidDataException("AIMAPS.MPS has no point table");
+            CheckName(name, points, null);
+            byte kindByte = KindByte(kind);
+            if (points.Count >= 256) throw new InvalidOperationException("The point table holds at most 256 points");
+            var template = points.FirstOrDefault(p => mps[p.RecordOffset + 0x11] == kindByte && p.Kind != "spectator") ?? points.First(p => p.Kind != "spectator");
+            var record = new byte[24];
+            Array.Copy(mps, template.RecordOffset, record, 0, 24);
+            Array.Clear(record, 0, 16);
+            Encoding.ASCII.GetBytes(name).CopyTo(record, 0);
+            record[0x11] = kindByte;
+            if (team is int t)
+            {
+                if (t is < 0 or > 255) throw new ArgumentOutOfRangeException(nameof(team), "team is a byte (0-255)");
+                record[0x10] = (byte)t;
+            }
+            int at = offset + 8 + points.Count * 24;
+            var copy = new byte[mps.Length + 24];
+            Array.Copy(mps, copy, at);
+            record.CopyTo(copy, at);
+            Array.Copy(mps, at, copy, at + 24, mps.Length - at);
+            BitConverter.GetBytes((uint)(points.Count + 1)).CopyTo(copy, offset);
+            return Move(copy, name, x, z);
+        }
+
+        /// <summary>Removes a point (not the spectator) and closes the gap; the points after it move up one record.</summary>
+        public static byte[] Remove(byte[] mps, string name)
+        {
+            var (offset, points) = Table(mps) ?? throw new InvalidDataException("AIMAPS.MPS has no point table");
+            var point = points.FirstOrDefault(p => p.Kind != "spectator" && p.Name.Equals(name, StringComparison.OrdinalIgnoreCase))
+                ?? throw new KeyNotFoundException($"No point named {name}");
+            if (point.Kind is "start" or "waypoint" && points.Count(p => p.Kind is "start" or "waypoint") == 1)
+                throw new InvalidOperationException($"{name} is the map's last start or waypoint");
+            var copy = new byte[mps.Length - 24];
+            Array.Copy(mps, copy, point.RecordOffset);
+            Array.Copy(mps, point.RecordOffset + 24, copy, point.RecordOffset, mps.Length - point.RecordOffset - 24);
+            BitConverter.GetBytes((uint)(points.Count - 1)).CopyTo(copy, offset);
+            return copy;
+        }
+
+        private static byte KindByte(string kind) => kind.ToLowerInvariant() switch
+        {
+            "start" => 2,
+            "waypoint" => 1,
+            "other" => 0,
+            _ => throw new ArgumentException("kind is start, waypoint or other"),
+        };
+
+        private static void CheckName(string name, IEnumerable<Point> points, Point? except)
+        {
+            if (name.Length is < 2 or > 15 || name.Any(c => c < 0x20 || c > 0x7E) || name[0] == ' ' || name[^1] == ' ')
+                throw new ArgumentException("A point name is 2-15 printable characters (spaces only between words)");
+            if (points.Any(p => p != except && p.Name.Equals(name, StringComparison.OrdinalIgnoreCase)))
+                throw new ArgumentException($"A point named {name} already exists");
         }
 
         /// <summary>Moves a point to the grid cell holding (x, z); the packed word's other bits are kept.</summary>
@@ -86,8 +153,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.MPS
 
         /// <summary>
         /// Changes a point in place: a new name (2-15 printable characters, unique), team byte or kind (start,
-        /// waypoint or other). Records keep their size and order: the table sits mid-file, so points are never
-        /// added or removed.
+        /// waypoint or other). Records keep their size and order (<see cref="Add"/> and
+        /// <see cref="Remove"/> change the table).
         /// </summary>
         public static byte[] Update(byte[] mps, string name, string? newName, int? team, string? kind)
         {
@@ -97,10 +164,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.MPS
             var copy = (byte[])mps.Clone();
             if (newName != null)
             {
-                if (newName.Length is < 2 or > 15 || newName.Any(c => c < 0x20 || c > 0x7E) || newName[0] == ' ' || newName[^1] == ' ')
-                    throw new ArgumentException("A point name is 2-15 printable characters (spaces only between words)");
-                if (points.Any(p => p != point && p.Name.Equals(newName, StringComparison.OrdinalIgnoreCase)))
-                    throw new ArgumentException($"A point named {newName} already exists");
+                CheckName(newName, points, point);
                 Array.Clear(copy, point.RecordOffset, 16);
                 Encoding.ASCII.GetBytes(newName).CopyTo(copy, point.RecordOffset);
             }
@@ -109,14 +173,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.MPS
                 if (t is < 0 or > 255) throw new ArgumentOutOfRangeException(nameof(team), "team is a byte (0-255)");
                 copy[point.RecordOffset + 0x10] = (byte)t;
             }
-            if (kind != null)
-                copy[point.RecordOffset + 0x11] = kind.ToLowerInvariant() switch
-                {
-                    "start" => 2,
-                    "waypoint" => 1,
-                    "other" => 0,
-                    _ => throw new ArgumentException("kind is start, waypoint or other"),
-                };
+            if (kind != null) copy[point.RecordOffset + 0x11] = KindByte(kind);
             return copy;
         }
 

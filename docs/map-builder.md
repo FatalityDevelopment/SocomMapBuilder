@@ -94,7 +94,7 @@ Every change is one undo step. The same tab offers experimental climb and ladder
 
 ## Spawn and waypoint points
 
-The **Points** tab and the Points layer show the map's AIMAPS points: start points in green, waypoints in blue and others in grey. Select one in the outliner or the viewport and move it, or type its X / Z. Points can be renamed and retyped, but not added or removed yet (their table sits between structures that are not fully decoded). See [AI maps and points](formats/aimaps.md).
+The **Points** tab and the Points layer show the map's AIMAPS points: start points in green, waypoints in blue and others in grey. Select one in the outliner or the viewport and move it, or type its X / Z. Points can be renamed and retyped. Through the MCP (`addPoint` / `removePoint`) they can also be added and removed. See [AI maps and points](formats/aimaps.md).
 
 ## Map check
 

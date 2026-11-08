@@ -103,7 +103,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
         /// Places <paramref name="modelName"/> as a new reference: a copy of the placed reference
         /// <paramref name="templateIndex"/> (a scene node with a <c>model_name</c>) appended next to it, its
         /// <c>model_name</c> rewritten, its local transform set and its nparams bounds taken from the model's own
-        /// definition when it has one. <paramref name="newIndex"/> is the new node's record index.
+        /// definition when it has one, and its collision a copy of the definition's (none when the definition has
+        /// none, never the template's). <paramref name="newIndex"/> is the new node's record index.
         /// </summary>
         public static Dictionary<string, byte[]> PlaceReference(ZipperPackage pkg, string sceneNs, int templateIndex, string modelName,
             float[] localMatrix, string? newName, out int newIndex)
@@ -117,12 +118,14 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             float[] m = CheckMatrix(localMatrix);
             var bounds = pkg.FindDefinition(model)?.Node.Bounds;
             ZedTree.Record template = ZedTree.Copy(container.Nodes, templateIndex);
-            var children = template.Children.Select(c => c.Name switch
+            // The template's collision is its own model's: the new reference carries a copy of the placed model's.
+            var children = template.Children.Where(c => c.Name != "di").Select(c => c.Name switch
             {
                 "model_name" => c with { Data = ModelNameData(c.Data, model.Name) },
                 "nparams" => c with { Data = Nparams(c.Data, m, bounds) },
                 _ => c,
             }).ToList();
+            if (CollisionEdits.DefinitionRegion(pkg, model) is { } region) children.Add(region);
             var copy = template with { Name = string.IsNullOrWhiteSpace(newName) ? model.Name : newName, Children = children };
             newIndex = ZedTree.AppendChild(container, parent, copy);
             return One(leaf, container);
@@ -165,22 +168,7 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             var model = pkg.ResolveModel(modelName) is { } m && m.Name.Equals(modelName, StringComparison.OrdinalIgnoreCase) ? m
                 : throw new ArgumentException($"No model '{modelName}' in the package (see ASSET_LIST_MODELS)");
             var def = pkg.FindDefinition(model) ?? throw new InvalidOperationException($"{model.Name} has no GEO definition to hold bounds");
-            var mesh = ZipperModelMesh.Build(pkg, model);
-            min = new[] { float.MaxValue, float.MaxValue, float.MaxValue };
-            max = new[] { float.MinValue, float.MinValue, float.MinValue };
-            foreach (var c in mesh.Chunks)
-            {
-                var p = c.Positions;
-                bool speck = true;
-                for (int i = 3; i < p.Length && speck; i++) speck = p[i] == p[i % 3];
-                if (speck) continue;
-                for (int i = 0; i < p.Length; i++)
-                {
-                    min[i % 3] = MathF.Min(min[i % 3], p[i]);
-                    max[i % 3] = MathF.Max(max[i % 3], p[i]);
-                }
-            }
-            if (min[0] > max[0]) throw new InvalidOperationException($"{model.Name} draws no geometry to fit");
+            (min, max) = GeometryBounds(pkg, model);
 
             var changed = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
             int placed = 0;
@@ -208,6 +196,28 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             }
             references = placed;
             return changed;
+        }
+
+        /// <summary>The box around what a model draws (its chunks' positions; hidden visuals' zero-area specks left out).</summary>
+        public static (float[] Min, float[] Max) GeometryBounds(ZipperPackage pkg, ZipperPackage.ModelRef model)
+        {
+            var mesh = ZipperModelMesh.Build(pkg, model);
+            var min = new[] { float.MaxValue, float.MaxValue, float.MaxValue };
+            var max = new[] { float.MinValue, float.MinValue, float.MinValue };
+            foreach (var c in mesh.Chunks)
+            {
+                var p = c.Positions;
+                bool speck = true;
+                for (int i = 3; i < p.Length && speck; i++) speck = p[i] == p[i % 3];
+                if (speck) continue;
+                for (int i = 0; i < p.Length; i++)
+                {
+                    min[i % 3] = MathF.Min(min[i % 3], p[i]);
+                    max[i % 3] = MathF.Max(max[i % 3], p[i]);
+                }
+            }
+            if (min[0] > max[0]) throw new InvalidOperationException($"{model.Name} draws no geometry");
+            return (min, max);
         }
 
         public static Dictionary<string, byte[]> DeleteInstance(ZipperPackage pkg, string sceneNs, int geoIndex)

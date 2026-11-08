@@ -61,6 +61,7 @@ namespace MapBuilder.Server.Services
             reg.Add(c => Assets.GtaAssetService.Route(c, "ASSET_MODEL_MESH_BATCH") ?? Responses.Error("A GTA session is required for mesh batches."), "ASSET_MODEL_MESH_BATCH");
             reg.Add(c => CaRoute(c, "ASSET_MAP_SCENE") ?? WithSession(c.AssetSession, "ASSET_MAP_SCENE", s => MapScene(s, c.AssetJson)), "ASSET_MAP_SCENE");
             reg.Add(c => CaRoute(c, "ASSET_MAP_POINTS") ?? WithSession(c.AssetSession, "ASSET_MAP_POINTS", s => MapPointsOf(s)), "ASSET_MAP_POINTS");
+            reg.Add(c => WithSession(c.AssetSession, "ASSET_MAP_COLLISION", s => MapCollision(s, c.AssetJson)), "ASSET_MAP_COLLISION");
             reg.Add(c => CaRoute(c, "ASSET_LIST_ANIMATIONS") ?? WithSession(c.AssetSession, "ASSET_LIST_ANIMATIONS", s => ListAnimations(s, c.AssetJson)), "ASSET_LIST_ANIMATIONS");
             reg.Add(c => CaRoute(c, "ASSET_ANIMATION") ?? WithSession(c.AssetSession, "ASSET_ANIMATION", s => Animation(s, c.AssetName, c.AssetArchive)), "ASSET_ANIMATION");
             reg.Add(c => CaRoute(c, "ASSET_WEAPONS") ?? WithSession(c.AssetSession, "ASSET_WEAPONS", s => Weapons(s)), "ASSET_WEAPONS");
@@ -170,6 +171,69 @@ namespace MapBuilder.Server.Services
                         if (pos != null) data = MapPoints.Move(data, newName ?? name, pos[0], pos[2]);
                         return new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase) { [leaf] = data };
                     });
+                }
+                case "addPoint":
+                case "removePoint":
+                {
+                    string name = Str(a, "name") ?? throw new ArgumentException("\"name\" is required");
+                    string leaf = s.Package.Entries.FirstOrDefault(e => e.Leaf.EndsWith(".MPS", StringComparison.OrdinalIgnoreCase))?.Leaf
+                        ?? throw new InvalidOperationException("The package has no AIMAPS.MPS");
+                    if (op == "removePoint")
+                        return ApplyEdit(s, Str(a, "label") ?? $"remove point {name}", p => new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase)
+                        {
+                            [leaf] = MapPoints.Remove(p.Entry(leaf)!.Data, name),
+                        });
+                    string kind = Str(a, "kind") ?? throw new ArgumentException("\"kind\" (start, waypoint or other) is required");
+                    float[] pos = Vec(a, "position", 3) ?? throw new ArgumentException("\"position\" [x, y, z] is required");
+                    return ApplyEdit(s, Str(a, "label") ?? $"add point {name}", p => new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        [leaf] = MapPoints.Add(p.Entry(leaf)!.Data, name, kind, OptInt(a, "team"), pos[0], pos[2]),
+                    });
+                }
+                case "setCollision":
+                {
+                    string model = Str(a, "model") ?? throw new ArgumentException("\"model\" is required");
+                    var mref = pkg.ResolveModel(model) is { } mr && mr.Name.Equals(model, StringComparison.OrdinalIgnoreCase) ? mr
+                        : throw new ArgumentException($"No model '{model}' in the package (see assets_list_models)");
+                    GeoCollision.Profile profile = Str(a, "like") is { } like
+                        ? CollisionEdits.Faces(pkg, pkg.ResolveModel(like) ?? throw new ArgumentException($"No model '{like}'")).FirstOrDefault()?.Profile
+                            ?? throw new ArgumentException($"{like} has no collision to copy")
+                        : new GeoCollision.Profile((uint)(OptInt(a, "material") ?? 3));
+                    bool bottom = a.TryGetProperty("bottom", out var bt) && bt.ValueKind == JsonValueKind.True;
+                    string shape = Str(a, "shape") ?? "box";
+                    List<GeoCollision.Face> faces;
+                    if (a.TryGetProperty("boxes", out var boxes) && boxes.ValueKind == JsonValueKind.Array)
+                        faces = boxes.EnumerateArray().SelectMany(b => GeoCollision.Box(
+                            Vec(b, "min", 3) ?? throw new ArgumentException("each box needs min [x, y, z]"),
+                            Vec(b, "max", 3) ?? throw new ArgumentException("each box needs max [x, y, z]"), profile, bottom)).ToList();
+                    else
+                        faces = shape switch
+                        {
+                            "none" => new List<GeoCollision.Face>(),
+                            // The definition's own faces again, on every reference (ones placed before placeInstance
+                            // copied the model's faces carry their template's).
+                            "definition" => CollisionEdits.Faces(pkg, mref) is { Count: > 0 } own ? own
+                                : throw new ArgumentException($"{model}'s definition has no collision"),
+                            "mesh" => GeoCollision.FromMesh(ZipperModelMesh.Build(pkg, mref), profile),
+                            "box" => PackageEdits.GeometryBounds(pkg, mref) is var (min, max) ? GeoCollision.Box(min, max, profile, bottom) : null!,
+                            _ => throw new ArgumentException("shape is box, mesh, definition or none"),
+                        };
+                    int references = 0;
+                    var result = ApplyEdit(s, Str(a, "label") ?? $"collision of {model}", p => CollisionEdits.SetCollision(p, model, faces, out references));
+                    return new { result, faces = faces.Count, references };
+                }
+                case "clearCollision":
+                {
+                    var indices = a.TryGetProperty("geoIndices", out var gi) && gi.ValueKind == JsonValueKind.Array ? gi.EnumerateArray().Select(e => e.GetInt32()).ToList() : null;
+                    var visuals = a.TryGetProperty("visuals", out var vi) && vi.ValueKind == JsonValueKind.Array ? vi.EnumerateArray().Select(e => e.GetString() ?? "").ToList() : null;
+                    float[]? area = Vec(a, "area", 4);
+                    bool all = a.TryGetProperty("all", out var al) && al.ValueKind == JsonValueKind.True;
+                    bool refs = a.TryGetProperty("references", out var rf) && rf.ValueKind == JsonValueKind.True;
+                    if (indices == null && visuals == null && area == null && !all) throw new ArgumentException("Pick nodes: geoIndices, visuals, area or all");
+                    List<string> removed = new();
+                    int faces = 0;
+                    var result = ApplyEdit(s, Str(a, "label") ?? "clear world collision", p => CollisionEdits.ClearWorldCollision(p, indices, visuals, area, all, refs, out removed, out faces));
+                    return new { result, nodes = removed.Count, faces, names = removed.Distinct().Take(40).ToList() };
                 }
                 case "placeInstance":
                 {
@@ -917,6 +981,11 @@ namespace MapBuilder.Server.Services
                             Add("info", "outside-ai-map", $"{i.InstanceName} at ({i.Matrix[12]:0.#}, {i.Matrix[14]:0.#}) is outside the AI map",
                                 i.ClutterIndex >= 0 ? ("clutterIndex", i.ClutterIndex) : ("geoIndex", i.Node?.Index));
             }
+
+            // Placed props with no collision faces are walked and shot through (on purpose for water and decals).
+            foreach (var i in instances.Where(i => i.Kind == "reference" && i.Node is { } n && n.Child("di") == null
+                && s.Package.ResolveModel(i.ModelName) is { Kind: not ("character" or "weapon") }))
+                Add("info", "no-collision", $"{i.InstanceName} ({i.ModelName}) has no collision: setCollision gives it some", ("geoIndex", i.Node!.Index));
 
             // Textures: names retail models cannot hold, and the total the map asks VRAM for.
             long textureBytes = 0;
