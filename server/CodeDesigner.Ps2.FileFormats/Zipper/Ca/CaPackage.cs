@@ -794,6 +794,21 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         public Model? ModelByHash(uint hash, string kind) => hash == 0 ? null : Models()
             .FirstOrDefault(m => m.Kind == kind && _libraries[m.LibraryIndex].Lib.ModelHash(m.Offset) == hash);
 
+        /// <summary>
+        /// The model of a vehicle or turret type (an actor's type in vehicles.rdr, a GLOBAL ai_vehicles hash): the type
+        /// is CRC32 of its library's name without .rdr (<c>veh_humvee_50cal</c>), whose body is its largest model (the
+        /// others are its wheels, guns and low-detail copies). Null when the package has no such library.
+        /// </summary>
+        public Model? VehicleModel(uint type)
+        {
+            int lib = Enumerable.Range(0, _libraries.Count).FirstOrDefault(i =>
+                CaNames.Crc32(Path.GetFileNameWithoutExtension(_libraries[i].Res.Name)) == type, -1);
+            if (lib < 0) return null;
+            return Models().Where(m => m.LibraryIndex == lib && m.Nodes >= 0).Select(m => (m, mesh: BuildMesh(m)))
+                .Where(x => x.mesh.Chunks.Count > 0)
+                .MaxBy(x => Enumerable.Range(0, 3).Aggregate(1f, (v, k) => v * Math.Max(1f, x.mesh.BoundsMax[k] - x.mesh.BoundsMin[k]))).m;
+        }
+
         /// <summary>A mission's resource of <paramref name="tag"/> (in its own ZDB), or null.</summary>
         public Resource? MissionResource(string missionId, string tag)
         {

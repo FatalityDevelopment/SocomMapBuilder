@@ -17,14 +17,22 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         /// from north, as SOCOM II's <c>setup</c>.</summary>
         public sealed record Start(string Point, int Heading, int RecordOffset);
 
+        /// <summary>A start slot that names no point but stores its own place (online vehicles: humvees, trucks, boats):
+        /// x, y, z (world units) at the slot's +0x10 and its heading, 0–7 eighths of a turn clockwise from north.</summary>
+        public sealed record Spawn(float X, float Y, float Z, int Heading, int RecordOffset);
+
         /// <summary>
         /// An actor: name, display message key, its type (a character type of the mission's character.rdr, or a vehicle
         /// or turret of GLOBAL's ai_vehicles / ai_turrets), its object kind at +0x54 and its starts.
-        /// Online missions leave the start empty (players spawn at the game's team spawns).
+        /// Online missions leave the start's name empty: a vehicle's slot then holds its spawn place (<see cref="Spawns"/>);
+        /// the player's is not a place on the map (players spawn at the game's team spawns).
         /// </summary>
-        public sealed record Actor(int Row, string Name, string? Display, uint Type, int Group, List<Start> Starts)
+        public sealed record Actor(int Row, string Name, string? Display, uint Type, int Group, List<Start> Starts, List<Spawn>? PlacedSpawns = null)
         {
             public string Kind => Group switch { 1 => "character", 2 => "vehicle", 3 => "turret", _ => "other" };
+
+            /// <summary>The start slots that hold a place instead of a point name (vehicles and turrets of online missions).</summary>
+            public List<Spawn> Spawns => PlacedSpawns ?? new List<Spawn>();
         }
 
         /// <summary>A character type: hash, its high- and low-detail <c>clib</c> models (root hashes), its display name
@@ -63,7 +71,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
         /// <summary>
         /// vehicles.rdr: +0x00 / +0x04 the actor records' begin and end, 0x1EC bytes each: name char[32], display key
         /// char[32], type hash (+0x40), group (+0x54), start count (+0x58), starts from +0x5C (32 bytes: point char[28],
-        /// heading u32).
+        /// heading u32). A slot with an empty name holds a place instead (+0x10 x, y, z floats; online missions' vehicles
+        /// and turrets): read into <see cref="Actor.Spawns"/> for vehicles and turrets.
         /// </summary>
         /// <remarks>Fireteam Bravo 2 (<paramref name="psp"/>): 0x1BC-byte records without the display key: character type (a character.rdr record hash; +0x20 is another hash)
         /// +0x24, group +0x30, start count +0x34, starts from +0x38. Its player actor leaves the start's name empty
@@ -83,17 +92,30 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Ca
             {
                 int n = (int)Math.Min(U32(data, o + count), 8);
                 var starts = new List<Start>();
+                var spawns = new List<Spawn>();
+                int kind = (int)U32(data, o + group);
                 for (int i = 0; i < n; i++)
                 {
                     int offset = o + first + i * 32;
                     if (Str(data, offset, 28) is { } point) starts.Add(new Start(point, (int)U32(data, offset + 28), offset));
+                    else if (!psp && !ftb1 && kind is 2 or 3 && PlaceAt(data, offset + 0x10) is { } at)
+                        spawns.Add(new Spawn(at.X, at.Y, at.Z, (int)U32(data, offset + 28), offset));
                 }
-                list.Add(new Actor(row, Str(data, o, 32) ?? $"actor{row}", display ? Str(data, o + 0x20, 32) : null, U32(data, o + hash), (int)U32(data, o + group), starts));
+                list.Add(new Actor(row, Str(data, o, 32) ?? $"actor{row}", display ? Str(data, o + 0x20, 32) : null, U32(data, o + hash), kind, starts, spawns));
             }
             return list;
         }
 
         private const int PspActorSize = 0x1BC, Ftb1ActorSize = 0x1A0;
+
+        /// <summary>Three finite floats at <paramref name="o"/>, not all zero (an unused slot is zeros), else null.</summary>
+        private static (float X, float Y, float Z)? PlaceAt(byte[] d, int o)
+        {
+            if (o < 0 || o + 12 > d.Length) return null;
+            float x = BitConverter.ToSingle(d, o), y = BitConverter.ToSingle(d, o + 4), z = BitConverter.ToSingle(d, o + 8);
+            bool sane = float.IsFinite(x) && float.IsFinite(y) && float.IsFinite(z) && Math.Abs(x) < 1e6 && Math.Abs(y) < 1e6 && Math.Abs(z) < 1e6;
+            return sane && (x != 0 || y != 0 || z != 0) ? (x, y, z) : null;
+        }
 
         /// <summary>
         /// character.rdr: +0x08 / +0x0C a list of record offsets. A record: hash, model (+0x04), low-detail model

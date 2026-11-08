@@ -217,9 +217,12 @@ namespace MapBuilder.Server.Services
                 {
                     row = a.Row, path = new object[] { a.Row }, name = a.Name, display = Text(a.Display),
                     character = type != null ? $"{type.Display ?? kind} {a.Type:x8}" : $"{kind} {a.Type:x8}",
-                    model = type != null && type.Model != 0 ? ModelRef(type.Model, "character") : null,
+                    model = type != null && type.Model != 0 ? ModelRef(type.Model, "character")
+                        : a.Kind is "vehicle" or "turret" && p.VehicleModel(a.Type) is { } vm ? $"{CaArchive(vm)}:{vm.Name}" : null,
                     weapons = loadout, weapon = held, animSet = (string?)null, stand = (string?)null,
-                    starts = a.Starts.Select(st => new { point = st.Point, value = (object)st.Heading }).ToList(),
+                    // A vehicle's own spawn place stands at a read-only point named after it (ASSET_MAP_POINTS' teamSpawns).
+                    starts = a.Starts.Select(st => new { point = st.Point, value = (object)st.Heading })
+                        .Concat(a.Spawns.Select((sp, i) => new { point = VehicleSpawnName(a, i), value = (object)sp.Heading })).ToList(),
                     teams = Array.Empty<int>(),
                     flags = new[] { new { name = kind, values = Array.Empty<object>() } },
                     ai = (object?)null,
@@ -260,6 +263,20 @@ namespace MapBuilder.Server.Services
             };
         }
 
+        /// <summary>The read-only point a vehicle's <paramref name="index"/>th spawn place is shown as: its actor's name.</summary>
+        private static string VehicleSpawnName(CaMissionTables.Actor a, int index) => index == 0 ? a.Name : $"{a.Name}~{index}";
+
+        /// <summary>The session mission's vehicle and turret spawn places (vehicles.rdr start slots that hold a place).</summary>
+        private static List<(string Name, CaMissionTables.Spawn Spawn)> CaVehicleSpawns(CaSession s)
+        {
+            var p = s.Package;
+            if (s.Mission == null || p.IsPsp || p.MissionResource(s.Mission, "MSNv") is not { } res) return new();
+            List<CaMissionTables.Actor> actors;
+            try { actors = CaMissionTables.ParseActors(res.Data); }
+            catch (InvalidDataException) { return new(); }
+            return actors.SelectMany(a => a.Spawns.Select((sp, i) => (VehicleSpawnName(a, i), sp))).ToList();
+        }
+
         private static object CaPoints(CaSession s, string? json)
         {
             if (Parse<PointArgs>(json)?.Mission is { Length: > 0 } pick)
@@ -273,7 +290,11 @@ namespace MapBuilder.Server.Services
                 teamSpawns = CaMissions.TeamSpawns(s.Package, s.Mission, points).Select(p => new
                 {
                     p.Name, p.Faction, p.Team, kind = "start", p.X, y = (float?)null, p.Z, p.CellX, p.CellZ, p.Zone, p.Island, editable = false,
-                }).ToList(),
+                }).Concat(CaVehicleSpawns(s).Select(v => new
+                {
+                    v.Name, Faction = (string)"vehicle", Team = 0, kind = "vehicle spawn", v.Spawn.X, y = (float?)v.Spawn.Y, v.Spawn.Z,
+                    CellX = 0, CellZ = 0, Zone = -1, Island = (string?)null, editable = false,
+                })).ToList(),
             };
         }
 
