@@ -1,4 +1,4 @@
-# SOCOM 3 / Combined Assault locations, missions, points and tables
+﻿# SOCOM 3 / Combined Assault locations, missions, points and tables
 
 *SOCOM: Combined Assault* keeps each location in one archive on the disc, and each archive holds several missions. A mission's named points (squad starts, AI spawns and nav points, map markers) are in its `mission.rdr`, on AI grids stored per island. Code: `Ca/CaMissions.cs`, `CaPackage.Missions` / `MissionPoints` / `Location`, `Ca/CaDisc.cs`, `Services/AssetService.Ca.cs`. Tests: `CaMissionsTests` (the retail check needs `MAPBUILDER_CA_DISC`, the disc root).
 
@@ -116,7 +116,9 @@ CA's counterpart of SOCOM II's `READERM.ZAR` (see [map tables](map-tables.md)) i
 | +0x5C | 32 × n | starts: point char[28] (a `mission.rdr` point), heading u32 (0–7, eighths of a turn clockwise from north, as SOCOM II's `setup`) |
 | +0x16C | f32 × 12 | Probably AI values (−1, 0.6, 0.5, 1, 500, 180, 0.5 …); not shown |
 
-Online missions leave their actors' starts empty, presumably because players spawn at the game's team spawns.
+Online missions leave the start's point name empty. A vehicle's or turret's slot then holds its own spawn place instead: x, y, z (f32, world units) at the slot's +0x10 and the heading at +0x1C as usual. On POLAND_RURAL MP341CTR (Farm) `tech_suv1` spawns at (−3335, 425, 85) facing south on the farm road, `soc_r1` at (−3870, 350, 3135). The Map Builder shows each as a read-only *vehicle spawn* point named after the actor, with the vehicle drawn on it. The player's empty slot also holds a place, but players spawn at the game's team spawns, so it is not shown.
+
+A vehicle or turret type is CRC32 of its model library's name without `.rdr` (`veh_humvee_50cal`, `veh_tech_suv`, `veh_soc_r`, `veh_multi_turret_humvee`), so the type names the `RUN\VEH_*.ZDB` library it comes from. The body is that library's largest model; the others are its wheels, guns and low-detail copies.
 
 On the disc all 420 actor records with a character-model match use kind 1, all 285 identified GLOBAL vehicles use 2, and all 104 identified GLOBAL turrets use 3. Both teams' vehicles use kind 2. The 139 records without a model match include patrols in kind 1 and `boat_tech1`, `boat_tech2` and `little_bird` in kind 2.
 

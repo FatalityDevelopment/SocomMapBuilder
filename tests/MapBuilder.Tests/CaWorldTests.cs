@@ -1,4 +1,4 @@
-using CodeDesigner.Ps2.FileFormats.Zipper.Ca;
+﻿using CodeDesigner.Ps2.FileFormats.Zipper.Ca;
 using Xunit;
 
 namespace MapBuilder.Tests;
@@ -128,5 +128,24 @@ public sealed class CaWorldTests
         var surface = scene.Select(p => reservoir.ObjectMesh(p.LibraryIndex, p.Object))
             .SelectMany(m => m.Chunks).First(c => c.Texture == "ca_34c168b2");
         Assert.True(surface.MaterialBlend);
+    }
+
+    [Fact]
+    public void Retail_farm_road_materials_bind_their_own_textures()
+    {
+        string? disc = Environment.GetEnvironmentVariable("MAPBUILDER_CA_DISC");
+        string archive = Path.Combine(disc ?? "", "RUN", "055146D2.ZAR");
+        if (string.IsNullOrEmpty(disc) || !File.Exists(archive)) return;
+
+        // POLAND_RURAL's farm_i2: road and grass are both 256x256 8-bit with TEX0 base 0, so TEX0 alone cannot tell
+        // them apart. Material 0x8190 binds fc701c5f (an object that uses it alone says so), 0x8990 c04aac7a.
+        var rural = CaPackage.Open(archive);
+        var lib = rural.Libraries.Single(l => l.Res.Name == "farm_i2.src").Lib;
+        var known = lib.MaterialTextures();
+        Assert.Equal("ca_fc701c5f", CaLibrary.TextureName(lib.TextureHash(known[0x8190])));
+        Assert.Equal("ca_c04aac7a", CaLibrary.TextureName(lib.TextureHash(known[0x8990])));
+        var road = lib.Sections(0x106CD0);
+        Assert.Equal(new[] { "ca_09fde591", "ca_c04aac7a", "ca_fc701c5f" },
+            road.Select(s => CaLibrary.TextureName(lib.TextureHash(s.TextureRecord!.Value))));
     }
 }

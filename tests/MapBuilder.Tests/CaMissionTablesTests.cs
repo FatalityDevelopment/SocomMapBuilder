@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using CodeDesigner.Ps2.FileFormats.Zipper.Ca;
 using Xunit;
 
@@ -23,7 +23,10 @@ public sealed class CaMissionTablesTests
         Put(d, 0x14, "player"); Put(d, 0x34, "_15020_SPECTER_OCN_MSG"); Put(d, 0x54, 0x9B290F55u);
         Put(d, 0x14 + 0x54, 1u); Put(d, 0x14 + 0x58, 1u); Put(d, 0x14 + 0x5C, "s_Able1"); Put(d, 0x14 + 0x5C + 28, 2u);
         int o = 0x14 + 0x1EC;
-        Put(d, o, "tech_suv1"); Put(d, o + 0x40, 0xABCDu); Put(d, o + 0x54, 2u); Put(d, o + 0x58, 1u);   // an online start: empty
+        Put(d, o, "tech_suv1"); Put(d, o + 0x40, 0xABCDu); Put(d, o + 0x54, 2u); Put(d, o + 0x58, 1u);   // an online start: no point name
+        // ...holds the vehicle's own spawn place: x, y, z at +0x10, heading at +0x1C.
+        BitConverter.GetBytes(-3335f).CopyTo(d, o + 0x5C + 0x10); BitConverter.GetBytes(425f).CopyTo(d, o + 0x5C + 0x14);
+        BitConverter.GetBytes(85f).CopyTo(d, o + 0x5C + 0x18); Put(d, o + 0x5C + 28, 4u);
 
         var actors = CaMissionTables.ParseActors(d);
 
@@ -33,6 +36,8 @@ public sealed class CaMissionTablesTests
         Assert.Equal("vehicle", actors[1].Kind);
         Assert.Equal(new[] { new CaMissionTables.Start("s_Able1", 2, 0x14 + 0x5C) }, actors[0].Starts);
         Assert.Empty(actors[1].Starts);
+        Assert.Empty(actors[0].Spawns);
+        Assert.Equal(new[] { new CaMissionTables.Spawn(-3335f, 425f, 85f, 4, o + 0x5C) }, actors[1].Spawns);
         Assert.Throws<InvalidDataException>(() => CaMissionTables.ParseActors(d[..^4]));
     }
 
@@ -146,5 +151,13 @@ public sealed class CaMissionTablesTests
         var gveh = rural.GlobalResource("GVEH")!.Data;
         var suv = CaMissionTables.ParseActors(rural.MissionResource("MP341CTR", "MSNv")!.Data).First(a => a.Name == "tech_suv1");
         Assert.True(gveh.AsSpan().IndexOf(BitConverter.GetBytes(suv.Type)) >= 0);
+        // Its spawn place is in its start slot, on Farm's west island; the type names its library (veh_tech_suv),
+        // whose largest model is the body.
+        var spawn = Assert.Single(suv.Spawns);
+        Assert.Equal((-3335f, 425f, 85f, 4), (MathF.Round(spawn.X), MathF.Round(spawn.Y), MathF.Round(spawn.Z), spawn.Heading));
+        Assert.Equal(CaNames.Crc32("veh_tech_suv"), suv.Type);
+        var body = Assert.IsType<CaPackage.Model>(rural.VehicleModel(suv.Type));
+        Assert.Equal("veh_tech_suv.rdr", body.Resource);
+        Assert.Equal("veh_tech_suv_98b0c023", body.Name);
     }
 }

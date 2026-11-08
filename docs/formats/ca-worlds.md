@@ -1,4 +1,4 @@
-# SOCOM 3 / Combined Assault worlds: scatter instances and surfaces
+﻿# SOCOM 3 / Combined Assault worlds: scatter instances and surfaces
 
 How the Map Builder draws a *SOCOM: Combined Assault* location: the island's node tree, the scatter instances placed beside it, and the GS state that decides how each surface draws. Code: `Ca/CaLibrary.cs` (`Instances`, `AdRegisters`, `IsBlend`, `AlphaTest`, `TextureState`), `Ca/CaPackage.cs` (`MapScene`, `FindTextureState`), `Services/AssetService.Ca.cs` (`CaTextureInfo`). Tests: `CaWorldTests` (the retail check needs `MAPBUILDER_CA_DISC`, the disc root).
 
@@ -42,6 +42,12 @@ Each static object's sections begin with a material (DMA tag kind 6), a GS A+D p
 | `0x4000000000`: Cs | `0x5040B` (GEQUAL 0x40) | Cut-out foliage | Opaque, texels under half alpha discarded |
 | `0x48`: Cs·As + Cd | off | Effects | Additive (drawn as blended) |
 | `0x42`: Cd − Cs·As | off | Effects | Subtractive (drawn as blended) |
+
+### Which texture a material binds
+
+A material's TEX0 is meant to say which of the object's textures (`+0x40`) it draws with, but every CA texture's TEX0 has base pointer 0 (the game places textures at run time). Two textures of the same size and format therefore look identical. On Farm (POLAND_RURAL `farm_i2`) the road and the grass are both 256×256 8-bit, and taking the first match painted the road layer with the dark ground texture, so the road vanished into dark, straight-edged patches. About a third of sections on the locations checked (1,780 of 5,231 on POLAND_RURAL) match more than one texture.
+
+Objects share material packets, and on every location checked a packet that matches exactly one texture of its object always matches the same texture (no packet ever binds two). `CaLibrary.MaterialTextures` therefore learns packet → texture from those single matches across the library. It then settles the remaining ties object by object, leaving out textures that the object's other materials already bind, and repeats until nothing changes. A material still undecided takes the first matching texture an earlier section of the object has not used.
 
 CLAMP_1 is 0 (repeat) or 5 (clamp S and T). The material's ALPHA_1 gives each chunk's `materialBlend` (the rule SOCOM II uses: B or D is Cd). The texture's registers give the texture info's `alphaBlend`, `alphaTest` and `clamp`.
 

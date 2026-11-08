@@ -183,7 +183,7 @@ function ItemTab(p: PropsPanelProps) {
               : <input className="me-num" disabled value="—" title="Ground height" readOnly />}
             <NumField value={fmt(pointInfo.z)} step={1} disabled={pointLocked} title="Point Z" onCommit={v => p.onMovePoint(pointInfo.name, 'z', v)} />
           </div>
-          <div className="lm-muted me-note">{pointInfo.editable === false ? 'Team spawn positions are read-only.'
+          <div className="lm-muted me-note">{pointInfo.editable === false ? (pointInfo.kind === 'vehicle spawn' ? 'Vehicle spawn positions are read-only.' : 'Team spawn positions are read-only.')
             : pointInfo.canMove === false ? "Open the location archive to move this point on its island's grid."
             : 'Drag with the Move tool (G) or enter a position. X and Z snap to the grid.'}</div>
         </div>
