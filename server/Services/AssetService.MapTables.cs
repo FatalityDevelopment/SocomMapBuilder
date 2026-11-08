@@ -72,14 +72,15 @@ internal sealed partial class ZipperAssetService
     };
 
     private static readonly ConcurrentDictionary<string, (DateTime Stamp, object Value)> RunFileCache = new(StringComparer.OrdinalIgnoreCase);
-    private static readonly Lazy<string?> DiscRun = new(() => Socom2Templates.FindRunDir(null));
-
-    /// <summary>A RUN file next to the package (its folder or the one above), else on the SOCOM II disc's RUN folder.</summary>
+    /// <summary>
+    /// A RUN file next to the package (its folder or the one above), else the SOCOM II disc's: a mounted disc's RUN
+    /// folder or a copy out of a SOCOM II disc image on this machine (<see cref="Socom2Templates.RunFile"/>).
+    /// </summary>
     private static string? RunFile(AssetSession s, string leaf)
     {
         string dir = s.Package.IsZdb ? Path.GetDirectoryName(s.Package.SourcePath) ?? "." : s.Package.SourcePath;
-        var dirs = new List<string?> { dir, Path.GetDirectoryName(dir), DiscRun.Value };
-        return dirs.Where(d => d != null).Select(d => Path.Combine(d!, leaf)).FirstOrDefault(File.Exists);
+        var dirs = new List<string?> { dir, Path.GetDirectoryName(dir) };
+        return dirs.Where(d => d != null).Select(d => Path.Combine(d!, leaf)).FirstOrDefault(File.Exists) ?? Socom2Templates.RunFile(leaf);
     }
 
     private static T? CachedRunRecord<T>(string? path, string record, Func<byte[], T> parse) where T : class
@@ -88,7 +89,8 @@ internal sealed partial class ZipperAssetService
         try
         {
             var stamp = File.GetLastWriteTimeUtc(path);
-            string key = path + "|" + record;
+            // One record is read as several tables (character.rdr: loadouts, character types): key by the type too.
+            string key = path + "|" + record + "|" + typeof(T).FullName;
             if (RunFileCache.TryGetValue(key, out var hit) && hit.Stamp == stamp) return hit.Value as T;
             var node = ZedContainer.FromBytes(File.ReadAllBytes(path)).Nodes.FirstOrDefault(n => n.Name.Equals(record, StringComparison.OrdinalIgnoreCase)
                 || (record == "*.rdr" && n.Name.EndsWith(".rdr", StringComparison.OrdinalIgnoreCase)));
@@ -220,7 +222,9 @@ internal sealed partial class ZipperAssetService
         var actors = new List<object>();
         Dictionary<string, string>? models = null;
         string? loadoutSource = null;
-        var characterTypes = CharacterTypesBeside(s);
+        // The map's own character.rdr, else READERC.ZAR beside the package or on the SOCOM II disc.
+        var characterTypes = CharacterTypesOf(s).Types;
+        HashSet<string>? callbackShown = null, weaponNames = null;
         var weaponDefs = characterTypes == null ? null : WeaponDefsOf(s);
         if (ReaderRecord(s, "vehicles.rdr") is { } vehicles)
         {
@@ -255,6 +259,9 @@ internal sealed partial class ZipperAssetService
                     model = CharacterModel(models, character, CharTypes.Value)
                         ?? CharacterModel(models, characterTypes?.Resolve(character)?.Model, CharTypes.Value),
                     chartype = ActorCharacter(characterTypes, weaponDefs, character),
+                    // Its chartype's worn gear (default_gear) on bones, as the figure draws it; gear a clip's callback
+                    // shows (the cigarette) is left off.
+                    gear = ActorGear(characterTypes, character, models, callbackShown ??= ShownByCallbacks(s), weaponNames ??= WeaponNamesOf(s)),
                     // The chartype's default weapons (character.rdr), null when no chartype table was found or the type is not in it.
                     weapons = weapons?.Select(w => new { name = w.Name, model = w.Model }).ToArray(),
                     weapon = held,

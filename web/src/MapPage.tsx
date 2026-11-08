@@ -149,6 +149,8 @@ export function MapPage() {
   const [objectiveMarkersOn, setObjectiveMarkersOn] = useState(initialPreferences.objectiveMarkers);
   const [collisionOn, setCollisionOn] = useState(initialPreferences.collision);
   const [figuresOn, setFiguresOn] = useState(initialPreferences.actorFigures);
+  const [figureGearOn, setFigureGearOn] = useState(initialPreferences.figureGear);
+  const [figureWeaponsOn, setFigureWeaponsOn] = useState(initialPreferences.figureWeapons);
   // How each actor is drawn (by actor name), for the Mission tab.
   const [figurePlans, setFigurePlans] = useState<FigurePlan[]>([]);
   // The HUD minimap: the game's radar art and tactical map (ASSET_MAP_HUD), and a top-down render for maps without one.
@@ -377,7 +379,7 @@ export function MapPage() {
           multiplayer: /^mp\d/i.test(status?.mission ?? status?.mapNamespace ?? '') });
         if (live) { setFigurePlans(plans); }
         const figures = await Promise.all(plans.map(async plan => {
-          const [character, weapon] = await Promise.all([loadModel(plan.model), plan.weapon ? loadModel(plan.weapon) : Promise.resolve(null)]);
+          const [character, weapon] = await Promise.all([loadModel(plan.model), plan.weapon && figureWeaponsOn ? loadModel(plan.weapon) : Promise.resolve(null)]);
           let clip: PoseClip | null = null;
           if (plan.clip) {
             if (!poseCacheRef.current.has(plan.clip)) {
@@ -386,14 +388,19 @@ export function MapPage() {
             clip = poseCacheRef.current.get(plan.clip) ?? null;
           }
           const actor = tables.actors.find(a => (a.name ?? a.character) === plan.actor);
+          // Its chartype's worn gear (hats, goggles, holster, pouches) on its bones.
+          const gear = (await Promise.all((figureGearOn ? actor?.gear ?? [] : []).map(async g => {
+            const model = await loadModel(g.model).catch(() => null);
+            return model ? { model, bone: g.bone, position: g.position, rotation: g.rotation } : null;
+          }))).filter((g): g is NonNullable<typeof g> => !!g);
           return character ? { point: plan.point, actor: plan.actor, character, clip, weapon, weaponName: weapon ? weaponLabel(plan.weapon, actor) : null,
-            heading: plan.heading, offset: plan.offset, clipName: plan.clip } : null;
+            heading: plan.heading, offset: plan.offset, clipName: plan.clip, gear } : null;
         }));
         if (live && client.session === session) { vp.setActorFigures(figures.filter((f): f is NonNullable<typeof f> => !!f)); }
       } catch (err) { if (live) { say(`Could not draw the actors: ${errText(err)}`, true); } }
     })();
     return () => { live = false; };
-  }, [tables, points, figuresOn, actorWeapons, weaponModels, status?.session, sceneReady]);
+  }, [tables, points, figuresOn, figureGearOn, figureWeaponsOn, actorWeapons, weaponModels, status?.session, sceneReady]);
   const toggleFigures = () => setFiguresOn(on => !on);
   const toggleActionMarkers = () => {
     const next = !actionMarkersOn;
@@ -741,6 +748,8 @@ export function MapPage() {
         { label: 'Objective flags', action: toggleObjectiveMarkers, checked: () => objectiveMarkersOn },
         { label: 'Collision', action: () => setCollisionOn(on => !on), checked: () => collisionOn, disabled: () => !collisionAvailable },
         { label: 'Characters at start points', action: toggleFigures, checked: () => figuresOn },
+        { label: 'Character gear', action: () => setFigureGearOn(on => !on), checked: () => figureGearOn, disabled: () => !figuresOn },
+        { label: 'Character weapons', action: () => setFigureWeaponsOn(on => !on), checked: () => figureWeaponsOn, disabled: () => !figuresOn },
         { label: 'Minimap', shortcut: SHORTCUTS.minimap.label, action: toggleMinimap, checked: () => minimapOn },
         { separator: true, label: '' },
         { label: 'Walk mode', shortcut: SHORTCUTS.walk.label, action: toggleWalk, checked: () => walking, disabled: () => !status },
@@ -896,10 +905,10 @@ export function MapPage() {
       placeYaw, placeScale, randomYaw, randomScale, minPlaceScale, maxPlaceScale, alignSurface,
       snapTarget, pivotMode, placeAs, brushRadius, brushSpacing, brushDensity, brushSlope, brushErase,
       actionMarkers: actionMarkersOn, objectiveMarkers: objectiveMarkersOn, collision: collisionOn, actorFigures: figuresOn,
-      minimap: minimapOn, minimapRange });
+      figureGear: figureGearOn, figureWeapons: figureWeaponsOn, minimap: minimapOn, minimapRange });
   }, [shading, lighting, grid, snap, snapMove, snapRotate, snapScale, gizmoLocal, ortho, backfaces,
     placeYaw, placeScale, randomYaw, randomScale, minPlaceScale, maxPlaceScale, alignSurface,
-    snapTarget, pivotMode, placeAs, brushRadius, brushSpacing, brushDensity, brushSlope, brushErase, actionMarkersOn, objectiveMarkersOn, collisionOn, figuresOn, minimapOn, minimapRange]);
+    snapTarget, pivotMode, placeAs, brushRadius, brushSpacing, brushDensity, brushSlope, brushErase, actionMarkersOn, objectiveMarkersOn, collisionOn, figuresOn, figureGearOn, figureWeaponsOn, minimapOn, minimapRange]);
   // ------------------------------------------------------------------ AI (MCP)
 
   // ui_view on this page: shading, lighting, camera preset, framing.

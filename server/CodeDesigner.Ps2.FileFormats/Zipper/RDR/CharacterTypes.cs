@@ -15,6 +15,16 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.RDR
     {
         public sealed record Weapon(string Name, int? Ammo, int? Magazines);
 
+        /// <summary>
+        /// One worn item of the root <c>gear</c> table: <c>{name, model, ofs [bone, [x, y, z], [rx, ry, rz]]}</c>. The model
+        /// is authored (<c>seal_black_hat.mb</c>); the package holds it in <c>FLIB_MDL.ZED</c> without the extension. The
+        /// offset is in the bone's space, the angles in the table's <c>AngleUnits</c> (degrees on retail).
+        /// </summary>
+        public sealed record GearItem(string Name, string ModelFile, string Bone, float[] Position, float[] Rotation)
+        {
+            public string Model => StripExtension(ModelFile);
+        }
+
         /// <summary>One type as stored (fields it does not set are null).</summary>
         public sealed class CharacterType
         {
@@ -47,12 +57,27 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.RDR
 
         public IReadOnlyCollection<CharacterType> Types => _types.Values;
 
+        private readonly Dictionary<string, GearItem> _gear = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>The root <c>gear</c> table in file order (a later row of the same name replaces an earlier one).</summary>
+        public IReadOnlyCollection<GearItem> GearTable => _gear.Values;
+
+        public GearItem? GearItemOf(string name) => _gear.TryGetValue(name, out var g) ? g : null;
+
+        /// <summary>Whether the table's angles are radians (<c>AngleUnits RAD</c>); retail says DEG.</summary>
+        public bool Radians { get; private set; }
+
         public CharacterType? Get(string name) => _types.TryGetValue(name, out var t) ? t : null;
 
         public static CharacterTypes Parse(byte[] rdr)
         {
             var doc = RdrDocument.Parse(rdr);
             var result = new CharacterTypes();
+            result.Radians = Text(doc, 0, "AngleUnits") is string units && units.StartsWith("RAD", StringComparison.OrdinalIgnoreCase);
+            int gear = doc.Field(0, "gear");
+            if (gear >= 0 && doc.TypeOf(gear) == RdrDocument.List)
+                foreach (int row in doc.Children(gear))
+                    if (doc.TypeOf(row) == RdrDocument.List && GearRow(doc, row) is { } item) result._gear[item.Name] = item;
             int list = doc.Field(0, "characters");
             if (list < 0 || doc.TypeOf(list) != RdrDocument.List) return result;
             int[] items = doc.Children(list).ToArray();
@@ -114,6 +139,33 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.RDR
                 i++;
             }
             return teams;
+        }
+
+        // {name [n], model [file], ofs [bone, [x y z], [rx ry rz]]}; a missing vector is zeros.
+        private static GearItem? GearRow(RdrDocument doc, int row)
+        {
+            if (Text(doc, row, "name") is not string name || Text(doc, row, "model") is not string model) return null;
+            int ofs = doc.Field(row, "ofs");
+            string bone = "hips";
+            float[] pos = new float[3], rot = new float[3];
+            if (ofs >= 0 && doc.TypeOf(ofs) == RdrDocument.List)
+            {
+                int[] parts = doc.Children(ofs).ToArray();
+                if (parts.Length > 0 && doc.ValueOf(parts[0]) is string b) bone = b;
+                if (parts.Length > 1) pos = Vector(doc, parts[1]);
+                if (parts.Length > 2) rot = Vector(doc, parts[2]);
+            }
+            return new GearItem(name, model, bone, pos, rot);
+        }
+
+        private static float[] Vector(RdrDocument doc, int atom)
+        {
+            var v = new float[3];
+            if (doc.TypeOf(atom) != RdrDocument.List) return v;
+            object?[] values = doc.Values(atom);
+            for (int k = 0; k < 3 && k < values.Length; k++)
+                v[k] = values[k] switch { int i => i, float f => f, double d => (float)d, _ => 0f };
+            return v;
         }
 
         public static string StripExtension(string file)

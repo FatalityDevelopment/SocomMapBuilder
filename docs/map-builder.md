@@ -52,7 +52,7 @@ Select props and clutter, then choose **Assets › Prefabs › Save selection as
 
 <img src="screenshots/map-characters.jpg" alt="The SEAL team standing at the player's start point holding their weapons" width="850">
 
-Actors are drawn as their characters at their AIMAPS start points (View › **Characters at start points**): textured, turned to their start's heading and posed in their animation set's Stand clip. Each figure holds **its own weapon**, read from the game's chartype table (`RUN\READERC.ZAR › character.rdr`, found beside the package or on the disc) and `zweapon.rdr`. On M51, for example, the SEALs hold the M4A1 SD, smugglers the 9mm Sub, the foreman the 870 and snipers the M82A1A.
+Actors are drawn as their characters at their AIMAPS start points (View › **Characters at start points**): textured, turned to their start's heading and posed in their animation set's Stand clip. Each figure holds **its own weapon** and wears **its own gear** (View › **Character weapons** and **Character gear** turn them off) (hats, goggles, holster, vest kit, pouches, satchel), read from the game's chartype table (`RUN\READERC.ZAR › character.rdr`, found beside the package, on a mounted disc or in a SOCOM II `.ISO`; see [Animation Editor](animation-editor.md#weapons)) and `zweapon.rdr`. On M51, for example, the SEALs hold the M4A1 SD, smugglers the 9mm Sub, the foreman the 870 and snipers the M82A1A.
 
 - The SEAL team stands together at the player's start; on multiplayer maps the `player` template is not drawn.
 - Each figure has a ring on the ground in its point's colour; click it to select the point.

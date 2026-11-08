@@ -129,3 +129,16 @@ export function weightColor(w: number): [number, number, number] {
   }
   return stops[stops.length - 1][1];
 }
+
+// character.rdr's gear offset: translate, then rotate by the angles (degrees) as Maya's XYZ rotate order does (THREE's
+// 'ZYX' composes Rz Ry Rx). Checked on M51: the hat and helmet stand up along the head bone, the goggles face forward.
+const GEAR_EULER: THREE.EulerOrder = 'ZYX';
+
+/** A gear offset (units, degrees) as a bone-local matrix. */
+export function gearLocal(position: number[], rotation: number[]): THREE.Matrix4 {
+  const [rx, ry, rz] = rotation.map(d => d * Math.PI / 180);
+  return new THREE.Matrix4().compose(
+    new THREE.Vector3(position[0] ?? 0, position[1] ?? 0, position[2] ?? 0),
+    new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, rz, GEAR_EULER)),
+    new THREE.Vector3(1, 1, 1));
+}

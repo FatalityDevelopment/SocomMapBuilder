@@ -47,8 +47,8 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Conversion
 
         /// <summary>
         /// The first <c>X:/RUN</c> (or <paramref name="hint"/>) holding SOCOM II's MP52.ZDB and MOTION_P.ZAR. A SOCOM II
-        /// disc image works too (the hint, else an .ISO in a drive's root): its template files are copied once into a
-        /// cache folder, which is returned.
+        /// disc image works too (the hint, else one <see cref="DiscImage"/> finds): its template files are copied once
+        /// into a cache folder, which is returned.
         /// </summary>
         public static string? FindRunDir(string? hint = null)
         {
@@ -56,41 +56,118 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Conversion
             if (!string.IsNullOrEmpty(hint) && hint.EndsWith(".iso", StringComparison.OrdinalIgnoreCase) && RunFromIso(hint) is { } named) return named;
             var candidates = new List<string>();
             if (!string.IsNullOrEmpty(hint) && !hint.EndsWith(".iso", StringComparison.OrdinalIgnoreCase)) { candidates.Add(hint); candidates.Add(Path.Combine(hint, "RUN")); }
-            var roots = new List<string>();
-            foreach (var d in DriveInfo.GetDrives())
-            {
-                try { if (d.IsReady) { candidates.Add(Path.Combine(d.RootDirectory.FullName, "RUN")); roots.Add(d.RootDirectory.FullName); } }
-                catch (IOException) { }
-            }
-            string? folder = candidates.FirstOrDefault(c => File.Exists(Path.Combine(c, "MP52.ZDB")) && File.Exists(Path.Combine(c, "MOTION_P.ZAR")));
+            candidates.AddRange(MountedRunDirs());
+            string? folder = candidates.FirstOrDefault(IsRunDir);
             if (folder != null) return folder;
-            foreach (string root in roots)
-            {
-                IEnumerable<string> isos;
-                try { isos = Directory.EnumerateFiles(root, "*.iso").ToList(); }
-                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
-                foreach (string iso in isos)
-                    if (RunFromIso(iso) is { } run) return run;
-            }
-            return null;
+            return DiscImage() is { } iso ? RunFromIso(iso) : null;
         }
 
-        /// <summary>A SOCOM II disc image's template files in a cache folder (copied on first use); null when the image
-        /// is not SOCOM II.</summary>
-        public static string? RunFromIso(string iso)
+        private static bool IsRunDir(string dir) => File.Exists(Path.Combine(dir, "MP52.ZDB")) && File.Exists(Path.Combine(dir, "MOTION_P.ZAR"));
+
+        private static IEnumerable<string> MountedRunDirs()
+        {
+            foreach (var d in DriveInfo.GetDrives())
+            {
+                string? run = null;
+                try { if (d.IsReady) run = Path.Combine(d.RootDirectory.FullName, "RUN"); }
+                catch (IOException) { }
+                if (run != null) yield return run;
+            }
+        }
+
+        private static readonly object DiscGate = new();
+        private static string? _discImage;
+        private static DateTime _discMissAt = DateTime.MinValue;
+
+        /// <summary>
+        /// A SOCOM II disc image on this machine: <c>MAPBUILDER_SOCOM2_DISC</c> (an .ISO, or a folder holding one), else
+        /// the first SOCOM II .ISO in a drive's root, one folder below a root (<c>F:\Desktop\…iso</c>), or the user's
+        /// Desktop, Downloads or Documents. The answer is kept; a miss is retried after a minute.
+        /// </summary>
+        public static string? DiscImage()
+        {
+            lock (DiscGate)
+            {
+                if (_discImage != null && File.Exists(_discImage)) return _discImage;
+                if (DateTime.UtcNow - _discMissAt < TimeSpan.FromMinutes(1)) return null;
+                _discImage = CandidateImages().FirstOrDefault(IsSocom2Image);
+                if (_discImage == null) _discMissAt = DateTime.UtcNow;
+                return _discImage;
+            }
+        }
+
+        private static IEnumerable<string> CandidateImages()
+        {
+            var folders = new List<string>();
+            string? env = Environment.GetEnvironmentVariable("MAPBUILDER_SOCOM2_DISC");
+            if (!string.IsNullOrWhiteSpace(env))
+            {
+                if (File.Exists(env)) yield return env;
+                else folders.Add(env);
+            }
+            foreach (var d in DriveInfo.GetDrives())
+            {
+                try
+                {
+                    if (!d.IsReady) continue;
+                    folders.Add(d.RootDirectory.FullName);
+                    folders.AddRange(Directory.EnumerateDirectories(d.RootDirectory.FullName));
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            }
+            string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            folders.AddRange(new[] { Path.Combine(home, "Desktop"), Path.Combine(home, "Downloads"), Path.Combine(home, "Documents") });
+            foreach (string folder in folders.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                List<string> isos;
+                try { isos = Directory.Exists(folder) ? Directory.EnumerateFiles(folder, "*.iso").ToList() : new List<string>(); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
+                foreach (string iso in isos) yield return iso;
+            }
+        }
+
+        private static bool IsSocom2Image(string iso)
         {
             try
             {
                 var files = Gta.Iso9660.Files(iso);
-                if (!files.ContainsKey("RUN/MP52.ZDB") || !files.ContainsKey("RUN/MOTION_P.ZAR")) return null;
+                return files.ContainsKey("RUN/MP52.ZDB") && files.ContainsKey("RUN/MOTION_P.ZAR");
+            }
+            catch (Exception e) when (e is IOException or InvalidDataException or UnauthorizedAccessException or EndOfStreamException or ArgumentException) { return false; }
+        }
+
+        /// <summary>A SOCOM II disc image's template files in a cache folder (copied on first use); null when the image
+        /// is not SOCOM II.</summary>
+        public static string? RunFromIso(string iso) => IsSocom2Image(iso) ? CopyFromIso(iso, TemplateFiles) : null;
+
+        /// <summary>
+        /// One file of SOCOM II's RUN folder (<c>ZWEAPON.ZAR</c>, <c>READERC.ZAR</c>, <c>EXTZANIM.ZAR</c> …): from a
+        /// mounted disc's RUN folder, else copied out of the disc image <see cref="DiscImage"/> finds into the cache
+        /// folder. Null when there is no SOCOM II disc or it has no such file.
+        /// </summary>
+        public static string? RunFile(string leaf)
+        {
+            foreach (string run in MountedRunDirs())
+                if (IsRunDir(run) && File.Exists(Path.Combine(run, leaf))) return Path.Combine(run, leaf);
+            if (DiscImage() is not { } iso || CopyFromIso(iso, new[] { leaf }) is not { } cache) return null;
+            string path = Path.Combine(cache, leaf);
+            return File.Exists(path) ? path : null;
+        }
+
+        private static string? CopyFromIso(string iso, IEnumerable<string> names)
+        {
+            try
+            {
+                var files = Gta.Iso9660.Files(iso);
                 var info = new FileInfo(iso);
                 string cache = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MapBuilder", "socom2-run",
                     $"{Path.GetFileNameWithoutExtension(iso)}-{info.Length:x}");
                 Directory.CreateDirectory(cache);
-                foreach (string name in TemplateFiles)
+                foreach (string name in names)
                 {
                     string target = Path.Combine(cache, name);
-                    if (File.Exists(target) || !files.TryGetValue("RUN/" + name, out var span)) continue;
+                    if (File.Exists(target) || !files.TryGetValue("RUN/" + name.Replace('\\', '/'), out var span)) continue;
+                    Directory.CreateDirectory(Path.GetDirectoryName(target)!);
                     File.WriteAllBytes(target + ".tmp", span.Read());
                     File.Move(target + ".tmp", target, true);
                 }

@@ -505,7 +505,8 @@ namespace MapBuilder.Server.Services
                 case "deleteAnimation":
                 case "renameAnimation":
                 case "setAnimation":
-                case "setAnimationKey": return ("animations", null, null);
+                case "setAnimationKey":
+                case "setEffectField": return ("animations", null, null);
                 case "importModel":
                 case "newWeapon":
                 case "newProp":
@@ -952,9 +953,16 @@ namespace MapBuilder.Server.Services
 
             AddSync("assets_weapon_fx", "Read weapon effects",
                 "What firing a weapon plays: its zweapon.rdr definition (fire animation, fire wait, tracer) and the ZANIM effect tree " +
-                "(sub-effects, models such as muzzle flashes and shells, textures, tracks). Needs RUN/ZWEAPON.ZAR beside the package. Risk: read-only.",
+                "(sub-effects, models such as muzzle flashes and shells, textures, tracks). Needs RUN/ZWEAPON.ZAR beside the package or a SOCOM II disc. Risk: read-only.",
                 true, Schema(new[] { "session", "weapon" }, session, P("weapon", "string", "Weapon model or internal name (assets_weapons lists them).")),
                 a => FromCommand(new CommandMessage { Command = "ASSET_WEAPON_FX", AssetSession = Session(a), AssetName = Str(a, "weapon") }, _ => Str(a, "weapon")!));
+
+            AddSync("characters_gear", "Read character gear",
+                "What a SOCOM II character wears: the character types (character.rdr) drawn with the model, each with its default_gear, and " +
+                "the gear table (every worn model with the package model it draws as, its bone and offset: position in units, rotation in degrees). " +
+                "Needs READERC.ZAR beside the package or a SOCOM II disc. Clips answer their motion.rdr callbacks in assets_animation (motion). Risk: read-only.",
+                true, Schema(new[] { "session", "model" }, session, P("model", "string", "Character model, e.g. MESH_seal_A_woodland_LO.")),
+                a => FromCommand(new CommandMessage { Command = "ASSET_CHARACTER_GEAR", AssetSession = Session(a), AssetName = Str(a, "model") }, _ => Str(a, "model")!));
 
             AddSync("assets_export", "Convert a model",
                 "Convert the selected GTA: San Andreas or Combined Assault model into a SOCOM II pack, or a SOCOM II model into a Combined Assault ZDB. Reads the current session including edits and returns the written path.",

@@ -12,3 +12,24 @@ app-animation-editor-page { display: block; height: 100vh; }
 .an-track { margin-top: 4px; font-size: 11px; font-weight: 600; color: var(--me-muted); text-transform: uppercase; letter-spacing: 0.05em; }
 .an-ins { font-family: monospace; font-size: 11px; line-height: 1.5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .an-cond { opacity: 0.8; font-style: italic; }
+
+/* Game events (motion.rdr callbacks) as markers over the scrubber. */
+.an-scrub-wrap { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; }
+.an-scrub-wrap .an-scrub { width: 100%; }
+.an-event { position: absolute; top: -2px; width: 8px; height: 8px; margin-left: -4px; padding: 0; border: 1px solid var(--me-panel); border-radius: 50%; background: #f5a524; cursor: pointer; }
+.an-event:hover { transform: scale(1.4); }
+.an-event-row { width: 100%; }
+
+/* Gear and attachments. */
+.an-type-head { grid-template-columns: 62px 1fr; margin-bottom: 4px; }
+.an-attach-list { max-height: 180px; overflow-y: auto; margin: 4px 0; }
+.an-attach-list .me-tree-row { display: flex; align-items: center; gap: 6px; }
+.an-attach-list .me-tree-row > span:nth-of-type(1) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.an-x { padding: 0 6px; min-width: 0; line-height: 16px; }
+.an-span3 { grid-column: span 3; min-width: 0; }
+
+/* Editable effect fields. */
+.an-ins:has(.an-fields) { white-space: normal; }
+.an-fields { display: inline-flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; }
+.an-field { display: inline-flex; gap: 3px; align-items: center; color: var(--me-muted); }
+.an-field .me-num { width: 64px; }
