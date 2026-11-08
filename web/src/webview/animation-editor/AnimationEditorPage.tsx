@@ -4,6 +4,7 @@ import { openRequest, useSignals } from '../../shared';
 import { aiChange, samePath } from '../../shared/aiBridge';
 import { PageHeader } from '../../shared/PageHeader';
 import { AnimationEditorPageLogic } from './animation-editor-page';
+import type { FxInstruction, FxNode } from '../model-editor/asset-client';
 
 // The Animation Editor's view: CodeDesigner's Angular template in JSX over the same logic class.
 export function AnimationEditorPage() {
@@ -39,6 +40,11 @@ export function AnimationEditorPage() {
   const w = c.weaponInfo();
   const bone = c.selectedBone();
   const local = c.boneLocal();
+  const motion = c.motion();
+  const shown = c.gameShown();
+  const att = c.attachments().find(a => a.id === c.selectedAttachment()) ?? null;
+  const choices = c.attachChoices();
+  const pickIsGear = c.attachPick().startsWith('gear:');
 
   return (
     <div className="me-app has-header" onPointerDown={e => c.closeMenusOutside(e.nativeEvent)}>
@@ -90,8 +96,10 @@ export function AnimationEditorPage() {
             {c.weapons().map(wp => <option key={wp.model} value={wp.model}>{wp.internalName || wp.model}</option>)}
           </select>
         </label>
-        <button className="lm-tool-btn" disabled={!c.weaponKey()} onClick={() => c.fire()} title="Fire one shot (Enter): the weapon's FireAnimName effect">Fire</button>
-        <label className="me-toggle" title="Fire at the weapon's FireWait rate"><input type="checkbox" checked={c.autoFire()} disabled={!c.weaponKey()} onChange={e => c.setAutoFire(e.target.checked)} /> Auto</label>
+        <label className="me-toggle" title="Show the weapon in the hand"><input type="checkbox" checked={c.showWeapon()} disabled={!c.weaponKey()} onChange={e => c.setShowWeapon(e.target.checked)} /> Show</label>
+        <button className="lm-tool-btn" disabled={!c.weaponKey() || !c.showWeapon()} onClick={() => c.fire()} title="Fire one shot (Enter): the weapon's FireAnimName effect">Fire</button>
+        <label className="me-toggle" title="Fire at the weapon's FireWait rate"><input type="checkbox" checked={c.autoFire()} disabled={!c.weaponKey() || !c.showWeapon()} onChange={e => c.setAutoFire(e.target.checked)} /> Auto</label>
+        <label className="me-toggle" title="Show the character's worn gear (character.rdr default_gear)"><input type="checkbox" checked={c.showGear()} disabled={!!s?.game} onChange={e => void c.setShowGear(e.target.checked)} /> Gear</label>
         <label className="me-toggle"><input type="checkbox" checked={c.showSkeleton()} onChange={e => c.setSkeleton(e.target.checked)} /> Skeleton</label>
         <label className="me-toggle"><input type="checkbox" checked={c.showMesh()} onChange={e => c.setMesh(e.target.checked)} /> Mesh</label>
         <span className="me-spacer" />
@@ -165,7 +173,14 @@ export function AnimationEditorPage() {
             <button className="lm-tool-btn" onClick={() => c.stepFrame(-1)} title="Previous frame (,)">⏮</button>
             <button className="lm-tool-btn an-play" onClick={() => c.togglePlay()} title={c.playing() ? 'Pause (Space)' : 'Play (Space)'}>{c.playing() ? '⏸' : '▶'}</button>
             <button className="lm-tool-btn" onClick={() => c.stepFrame(1)} title="Next frame (.)">⏭</button>
-            <input className="an-scrub" type="range" min="0" max={(clip?.samples ?? 1) - 1} step="1" value={c.frame()} onChange={e => c.scrub(e.target.value)} />
+            <div className="an-scrub-wrap">
+              <input className="an-scrub" type="range" min="0" max={(clip?.samples ?? 1) - 1} step="1" value={c.frame()} onChange={e => c.scrub(e.target.value)} />
+              {clip && motion?.callbacks.map((cb, i) => (
+                <button key={i} type="button" className="an-event" style={{ left: `${Math.min(100, cb.time / Math.max(1e-6, clip.duration) * 100)}%` }}
+                  title={`${cb.time.toFixed(2)}s ${cb.effect}${cb.shows.length ? ' · shows ' + cb.shows.join(', ') : ''}${cb.hides.length ? ' · hides ' + cb.hides.join(', ') : ''}`}
+                  onClick={() => c.jumpTo(cb.time)} />
+              ))}
+            </div>
             <span className="lm-muted an-frame">{c.frame()}</span>
             <label className="me-toggle">Speed
               <select className="me-input" value={c.speed()} onChange={e => c.setSpeed(+e.target.value)}>
@@ -217,6 +232,73 @@ export function AnimationEditorPage() {
                   </div>
                 </div>
               )}
+              {cur && motion && (
+                <div className="me-card">
+                  <div className="me-card-title">Game events <span className="lm-muted">motion.rdr</span></div>
+                  {(motion.flags.length > 0 || Object.keys(motion.values).length > 0) && (
+                    <div className="lm-muted me-note">{[...motion.flags, ...Object.entries(motion.values).map(([k, v]) => `${k} ${+v.toFixed(3)}`)].join(' · ')}</div>
+                  )}
+                  {motion.callbacks.length ? motion.callbacks.map((cb, i) => (
+                    <button key={i} type="button" className="me-row an-event-row" onClick={() => c.jumpTo(cb.time)} title="Go to this time">
+                      <span className="me-row-name">{cb.time.toFixed(2)}s <b>{cb.effect}</b>{cb.found ? '' : ' (not in CZANIM)'}</span>
+                      <span className="me-row-meta">{[cb.shows.length ? '+' + cb.shows.join(' +') : '', cb.hides.length ? '−' + cb.hides.join(' −') : '', cb.spawns.length ? '→ ' + cb.spawns.join(', ') : ''].filter(Boolean).join(' ')}</span>
+                    </button>
+                  )) : <div className="lm-muted me-note">No ZANIM callbacks.</div>}
+                  <div className="lm-muted me-note">The effects the game runs at these times (markers on the timeline). Objects they turn on or off show and hide the matching gear below.</div>
+                </div>
+              )}
+              {c.hasCharacter() && !s?.game && (
+                <div className="me-card">
+                  <div className="me-card-title">Gear and attachments <span className="lm-muted">{c.attachments().length}</span></div>
+                  {c.gearTypes().length > 0 ? (
+                    <div className="me-xform an-type-head">
+                      <span>Type</span>
+                      <select className="me-input" value={c.charType()} onChange={e => void c.pickCharType(e.target.value)} title="character.rdr types drawn with this model">
+                        {c.gearTypes().map(t => <option key={t.name} value={t.name}>{t.name}{t.gear.length ? ` (${t.gear.length})` : ''}</option>)}
+                      </select>
+                    </div>
+                  ) : <div className="lm-muted me-note">{c.gearTable().length ? 'No character type in character.rdr uses this model.' : 'No character.rdr (READERC.ZAR) beside the package or on a SOCOM II disc.'}</div>}
+                  <div className="an-attach-list">
+                    {c.attachments().map(a => (
+                      <div key={a.id} className={`me-tree-row${a.id === c.selectedAttachment() ? ' sel' : ''}`} onClick={() => c.selectedAttachment.set(a.id === c.selectedAttachment() ? null : a.id)}>
+                        <input type="checkbox" checked={a.visible} onClick={e => e.stopPropagation()} onChange={e => c.setAttachmentVisible(a.id, e.target.checked)} title="Show" />
+                        <span className={a.kind === 'user' ? 'an-animated' : ''}>{a.label}</span>
+                        <span className="lm-muted">{a.bone}{shown.get(a.id) === false ? ' · hidden by game' : ''}</span>
+                        {a.kind === 'user' && <button className="lm-tool-btn an-x" title="Detach" onClick={e => { e.stopPropagation(); c.detach(a.id); }}>×</button>}
+                      </div>
+                    ))}
+                  </div>
+                  {att && (
+                    <div className="me-xform">
+                      <span>Bone</span>
+                      <select className="me-input an-span3" value={att.bone} onChange={e => c.setAttachmentBone(att.id, e.target.value)}>
+                        {[...new Set([att.bone, ...c.attachBones()])].map(b => <option key={b} value={b}>{b}</option>)}
+                      </select>
+                      <span>Position</span>
+                      {[0, 1, 2].map(k => <NumInput key={k} step="0.05" value={c.fmt(att.position[k] ?? 0)} onCommit={v => c.setAttachmentValue(att.id, 'position', k, v)} />)}
+                      <span>Rotate °</span>
+                      {[0, 1, 2].map(k => <NumInput key={k} step="5" value={c.fmt(att.rotation[k] ?? 0)} onCommit={v => c.setAttachmentValue(att.id, 'rotation', k, v)} />)}
+                    </div>
+                  )}
+                  <div className="me-xform">
+                    <span>Attach</span>
+                    <select className="me-input an-span3" value={c.attachPick()} onChange={e => c.attachPick.set(e.target.value)}>
+                      <option value="">Pick a model…</option>
+                      {[...new Set(choices.map(x => x.group))].map(g => (
+                        <optgroup key={g} label={g}>{choices.filter(x => x.group === g).map(x => <option key={x.value} value={x.value}>{x.label}</option>)}</optgroup>
+                      ))}
+                    </select>
+                    <span>To bone</span>
+                    <select className="me-input an-span3" value={c.attachBone()} disabled={pickIsGear} onChange={e => c.attachBone.set(e.target.value)} title={pickIsGear ? 'Gear-table items go on their own bone' : ''}>
+                      {[...new Set([c.attachBone(), ...c.attachBones()])].map(b => <option key={b} value={b}>{b}</option>)}
+                    </select>
+                  </div>
+                  <div className="me-actions">
+                    <button className="lm-tool-btn" disabled={!c.attachPick() || !cur} onClick={() => void c.attach()}>Attach to {cur?.name ?? 'clip'}</button>
+                  </div>
+                  <div className="lm-muted me-note">Gear is the type's default_gear from character.rdr, each on its bone at the gear table's offset; edits to it are a preview. Attached models belong to this clip and are kept in this viewer.</div>
+                </div>
+              )}
               {w && (
                 <>
                   <div className="me-card">
@@ -229,7 +311,7 @@ export function AnimationEditorPage() {
                       <dt>Shell</dt><dd className="lm-mono">{w.shell ?? '—'}</dd>
                       <dt>Rate</dt><dd>{w.fireWait} s between shots</dd>
                     </dl>
-                    <div className="lm-muted me-note">Mounted on the clip's rifle bone. Fire runs the effect scripts as the game does (flash roll, scale curve, timing, light, sub-effects).{c.skipped().length ? ` Not modelled yet: ${c.skipped().join(', ')}.` : ''}</div>
+                    <div className="lm-muted me-note">Mounted on the clip's rifle bone. Fire runs the effect scripts as the game does (flash roll, scale curve, timing, light, sub-effects). Edit a value below to change the package's effect (undoable, saved with the package); it fires again to show it.{c.skipped().length ? ` Not modelled yet: ${c.skipped().join(', ')}.` : ''}</div>
                   </div>
                   {c.fxTree().map(fxn => (
                     <div key={fxn.name} className="me-card">
@@ -239,7 +321,9 @@ export function AnimationEditorPage() {
                         <div key={ti}>
                           <div className="an-track">{t.target}</div>
                           {t.instructions.map((ins, ii) => (
-                            <div key={ii} className={`an-ins${ins.condition ? ' an-cond' : ''}`} style={{ paddingLeft: 8 + ins.depth * 12 }}><b>{ins.name}</b> <span className="lm-muted">{c.fieldText(ins.fields)}</span></div>
+                            <div key={ii} className={`an-ins${ins.condition ? ' an-cond' : ''}`} style={{ paddingLeft: 8 + ins.depth * 12 }}>
+                              <b>{ins.name}</b> <EffectFields c={c} fx={fxn} ins={ins} />
+                            </div>
                           ))}
                         </div>
                       ))}
@@ -284,6 +368,36 @@ export function AnimationEditorPage() {
         <span>{c.characterKey()}</span>
       </div>
     </div>
+  );
+}
+
+// An effect instruction's fields: numbers, vectors and flags edit in place (setEffectField), the rest as text.
+function EffectFields({ c, fx, ins }: { c: AnimationEditorPageLogic; fx: FxNode; ins: FxInstruction }) {
+  const keys = Object.keys(ins.fields ?? {}).filter(k => k !== 'flags');
+  if (!keys.some(k => c.fieldEditable(fx, ins, k))) { return <span className="lm-muted">{c.fieldText(ins.fields)}</span>; }
+  return (
+    <span className="an-fields">
+      {keys.map(k => {
+        const v = ins.fields[k];
+        if (!c.fieldEditable(fx, ins, k)) { return <span key={k} className="lm-muted">{k}={String(v)} </span>; }
+        if (typeof v === 'boolean') {
+          return <label key={k} className="an-field">{k} <input type="checkbox" checked={v} onChange={e => void c.setEffectField(fx, ins, k, e.target.checked)} /></label>;
+        }
+        if (Array.isArray(v)) {
+          const vec = v.map(Number);
+          return (
+            <span key={k} className="an-field">{k}
+              {vec.map((x, i) => <NumInput key={i} step="0.1" value={+x.toFixed(4)} onCommit={t => { const n = parseFloat(t); if (Number.isFinite(n)) { const next = [...vec]; next[i] = n; void c.setEffectField(fx, ins, k, next); } }} />)}
+            </span>
+          );
+        }
+        return (
+          <span key={k} className="an-field">{k}
+            <NumInput step="0.01" value={+Number(v).toFixed(4)} onCommit={t => { const n = parseFloat(t); if (Number.isFinite(n)) { void c.setEffectField(fx, ins, k, n); } }} />
+          </span>
+        );
+      })}
+    </span>
   );
 }
 

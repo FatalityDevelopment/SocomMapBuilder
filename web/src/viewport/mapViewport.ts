@@ -14,7 +14,7 @@ import { propDrawChunks } from './propFaces';
 import { groupInstancesByLayer, isSkyChunk, layerOf, movable as isMovable, pointColor } from '../mapModel';
 import { actionIconCanvas, objectiveIconCanvas, type ActionKind } from '../shared/actionIcons';
 import { markerAnchor, type ActionMarker } from './actionMarkers';
-import { heldWeaponMatrix, poseBones, skinChunk, type PoseClip } from '../webview/zipper-core/skinning';
+import { gearLocal, heldWeaponMatrix, poseBones, skinChunk, type PoseClip } from '../webview/zipper-core/skinning';
 import { yawOf } from './actorFigures';
 import { buildPathObject, buildRegionObject } from './mapShapes';
 import type { MapPathWire, MapRegionWire } from '../webview/model-editor/asset-client';
@@ -74,6 +74,8 @@ export interface MapCallbacks {
 /** An actor drawn as its character at an AIMAPS start point, posed by a clip, holding a weapon in its right hand. */
 export interface ActorFigure {
   point: string; character: MapModel; clip: PoseClip | null; weapon: MapModel | null; weaponName?: string | null;
+  /** Worn gear (character.rdr): each model on its bone at its offset (units, degrees). */
+  gear?: Array<{ model: MapModel; bone: string; position: number[]; rotation: number[] }>;
   actor?: string; clipName?: string | null;
   /** 0-7 eighths of a turn clockwise from north (-Z); the models face north unturned. */
   heading?: number | null;
@@ -592,6 +594,13 @@ export class MapViewport extends ViewportCore {
     const grip = f.weapon && mesh.skeleton && heldWeaponMatrix(mesh.skeleton, world, f.clip);
     if (f.weapon && grip) {
       for (const chunk of f.weapon.mesh.chunks) { add(chunk, f.weapon.textureNamespace, grip); }
+    }
+    for (const g of mesh.skeleton ? f.gear ?? [] : []) {
+      const bone = mesh.skeleton!.findIndex(b => b.name.toLowerCase() === g.bone.toLowerCase());
+      if (bone < 0 || !world[bone]) { continue; }
+      const at = world[bone].clone().multiply(gearLocal(g.position, g.rotation));
+      // Eyes carry a shut copy for blinking: draw them open.
+      for (const chunk of g.model.mesh.chunks) { if (!/_shut/i.test(chunk.texture ?? '')) { add(chunk, g.model.textureNamespace, at); } }
     }
     return group;
   }

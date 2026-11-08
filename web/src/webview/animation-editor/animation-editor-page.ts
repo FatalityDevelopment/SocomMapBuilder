@@ -7,10 +7,10 @@
 import { activePage, computed, host, modalOpen, signal } from '../../shared';
 import type { ModelTexturePixels } from '../zipper-core/texture-pixels';
 import type { Shading, ViewPreset } from '../zipper-core/viewport-core';
-import { AssetClient, type AnimationSummary, type FxNode, type ModelSummary, type SessionStatus, type WeaponSummary } from '../model-editor/asset-client';
+import { AssetClient, type AnimationSummary, type CharacterGear, type FxInstruction, type FxNode, type GearItem, type ModelSummary, type SessionStatus, type WeaponSummary } from '../model-editor/asset-client';
 import { TextureCache } from '../model-editor/model-loader';
 import { decodeMesh, type EditorMesh, type MeshWire } from '../model-editor/mesh-data';
-import { AnimViewport, type AnimTool, type ClipData, type ShotEffect } from './anim-viewport';
+import { AnimViewport, type AnimTool, type AttachmentSpec, type ClipData, type ShotEffect } from './anim-viewport';
 
 export interface MenuItem {
   label: string;
@@ -24,6 +24,17 @@ export interface MenuItem {
 export interface Menu { id: string; label: string; items: MenuItem[] }
 
 const PACKAGE_SOURCE = 'MOTION_S.ZAR';
+// Models the user attached to clips, per clip name: kept in this viewer's browser (the game binds models through
+// character.rdr's gear and motion.rdr's callbacks on the disc, which a package does not carry).
+const ATTACH_KEY = 'mb.animation-editor.attachments';
+type SavedAttachment = Pick<AttachmentSpec, 'id' | 'label' | 'model' | 'bone' | 'position' | 'rotation' | 'visible'>;
+
+function loadSaved(): Record<string, SavedAttachment[]> {
+  try { const v = JSON.parse(localStorage.getItem(ATTACH_KEY) ?? '{}') as Record<string, SavedAttachment[]>; return v && typeof v === 'object' ? v : {}; } catch { return {}; }
+}
+function storeSaved(all: Record<string, SavedAttachment[]>): void {
+  try { localStorage.setItem(ATTACH_KEY, JSON.stringify(all)); } catch { /* per-viewer convenience only */ }
+}
 
 export class AnimationEditorPageLogic {
   private readonly client = new AssetClient();
@@ -72,6 +83,20 @@ export class AnimationEditorPageLogic {
   readonly autoFire = signal(false);
   readonly fxTree = signal<FxNode[]>([]);
   readonly skipped = signal<string[]>([]);
+  // Worn gear (character.rdr) and models attached to the clip.
+  readonly gearTypes = signal<CharacterGear['types']>([]);
+  readonly gearTable = signal<GearItem[]>([]);
+  readonly gearSource = signal<string | null>(null);
+  readonly charType = signal('');
+  readonly showGear = signal(true);
+  readonly showWeapon = signal(true);
+  readonly attachments = signal<AttachmentSpec[]>([]);
+  readonly selectedAttachment = signal<string | null>(null);
+  readonly attachPick = signal('');
+  readonly attachBone = signal('rhand');
+  readonly allModels = signal<ModelSummary[]>([]);
+  readonly gameShown = computed(() => { this.time(); this.attachments(); return this.viewport?.gameShown() ?? new Map<string, boolean>(); });
+  readonly motion = computed(() => this.clip()?.motion ?? null);
   readonly weaponInfo = signal<{ name: string; model: string; fireAnim: string; spawns: string[]; flash: string | null; shell: string | null; fireWait: number } | null>(null);
 
   readonly dirtyCount = computed(() => this.status()?.dirty.length ?? 0);
@@ -311,8 +336,14 @@ export class AnimationEditorPageLogic {
     }
   }
 
+  setShowWeapon(on: boolean): void {
+    this.showWeapon.set(on);
+    this.viewport.setWeaponVisible(on);
+    if (!on) { this.setAutoFire(false); }
+  }
+
   fire(): void {
-    if (!this.weaponKey()) { return; }
+    if (!this.weaponKey() || !this.showWeapon()) { return; }
     this.viewport.fire();
     setTimeout(() => this.skipped.set([...this.viewport.skippedOps].sort()), 300);
   }
@@ -324,6 +355,167 @@ export class AnimationEditorPageLogic {
       `${k}=${Array.isArray(v) ? '(' + v.map(x => +Number(x).toFixed(3)).join(', ') + ')' : typeof v === 'number' ? +v.toFixed(4) : v}`).join(' ');
   }
   setAutoFire(on: boolean): void { this.autoFire.set(on); this.viewport.autoFire = on; }
+
+  // ------------------------------------------------------------------ gear and attachments
+
+  /** The character types drawn with this mesh and the gear table (READERC.ZAR › character.rdr). */
+  private async loadGear(mesh: string): Promise<void> {
+    if (this.status()?.game) { this.gearTypes.set([]); this.gearTable.set([]); return; }
+    try {
+      const g = await this.client.characterGear(mesh);
+      this.gearTypes.set(g.types);
+      this.gearTable.set(g.gear);
+      this.gearSource.set(g.source);
+      const keep = g.types.find(t => t.name === this.charType());
+      this.charType.set(keep?.name ?? g.types[0]?.name ?? '');
+      if (g.note) { this.say(g.note, true); }
+      await this.applyGear();
+    } catch (err) {
+      this.gearTypes.set([]);
+      this.gearTable.set([]);
+      this.say(`Gear: ${errText(err)}`, true);
+    }
+  }
+
+  async pickCharType(name: string): Promise<void> { this.charType.set(name); await this.applyGear(); }
+
+  async setShowGear(on: boolean): Promise<void> { this.showGear.set(on); await this.applyGear(); }
+
+  /** Puts the chosen type's default_gear on the character, each on its bone at its gear-table offset. */
+  private async applyGear(): Promise<void> {
+    this.viewport.clearAttachments('gear');
+    const type = this.gearTypes().find(t => t.name === this.charType());
+    const specs: AttachmentSpec[] = [];
+    if (this.showGear() && type) {
+      for (const name of type.gear) {
+        const item = this.gearTable().find(g => g.name.toLowerCase() === name.toLowerCase());
+        if (!item?.model) { continue; }
+        // A weapon worn on the body (the satchel charge's bag) only shows on a type that carries the weapon; it stays
+        // in the list, unticked, so it can be shown.
+        const carried = !item.weapon || (type.weapons ?? []).some(w => w.toLowerCase() === item.weapon!.toLowerCase());
+        const spec: AttachmentSpec = {
+          id: 'gear:' + item.name, label: item.name, kind: 'gear', model: item.model, bone: item.bone,
+          position: [...item.position], rotation: [...item.rotation], visible: carried, objects: [item.model.slice(item.model.indexOf(':') + 1)],
+          hiddenAtStart: item.hiddenAtStart,
+        };
+        if (await this.mountAttachment(spec)) { specs.push(spec); }
+      }
+    }
+    this.attachments.set([...specs, ...this.attachments().filter(a => a.kind === 'user')]);
+  }
+
+  private async mountAttachment(spec: AttachmentSpec): Promise<boolean> {
+    const cut = spec.model.indexOf(':');
+    try {
+      const got = await this.meshAndPixels(spec.model.slice(0, cut), spec.model.slice(cut + 1));
+      this.viewport.setAttachment(spec, got.mesh, got.pixels);
+      return true;
+    } catch (err) {
+      this.say(`${spec.label}: ${errText(err)}`, true);
+      return false;
+    }
+  }
+
+  /** The current clip's attached models (saved per clip in this viewer). */
+  private async applyUserAttachments(): Promise<void> {
+    if (!this.viewport) { return; }
+    this.viewport.clearAttachments('user');
+    const clip = this.current()?.name;
+    const saved = clip ? loadSaved()[clip] ?? [] : [];
+    const specs: AttachmentSpec[] = [];
+    for (const a of saved) {
+      const spec: AttachmentSpec = { ...a, kind: 'user', objects: [a.model.slice(a.model.indexOf(':') + 1)] };
+      if (await this.mountAttachment(spec)) { specs.push(spec); }
+    }
+    this.attachments.set([...this.attachments().filter(a => a.kind === 'gear'), ...specs]);
+    if (!this.attachments().some(a => a.id === this.selectedAttachment())) { this.selectedAttachment.set(null); }
+  }
+
+  private storeUserAttachments(): void {
+    const clip = this.current()?.name;
+    if (!clip) { return; }
+    const all = loadSaved();
+    const mine = this.attachments().filter(a => a.kind === 'user')
+      .map(({ id, label, model, bone, position, rotation, visible }) => ({ id, label, model, bone, position, rotation, visible }));
+    if (mine.length) { all[clip] = mine; } else { delete all[clip]; }
+    storeSaved(all);
+  }
+
+  /** What the attach picker offers: gear-table items (with their own bone and offset) and the package's models. */
+  readonly attachChoices = computed(() => {
+    const gear = this.gearTable().filter(g => g.model).map(g => ({ value: 'gear:' + g.name, label: `${g.name} (${g.bone})`, group: 'Gear table' }));
+    const models = this.allModels().filter(m => ['character', 'prop', 'weapon', 'library'].includes(m.kind) && !/^MESH_/i.test(m.name))
+      .map(m => ({ value: m.archive + ':' + m.name, label: m.name, group: m.archive }));
+    return [...gear, ...models];
+  });
+
+  /** Attaches the picked model to the current clip: a gear-table item on its own bone and offset, else on the chosen bone. */
+  async attach(): Promise<void> {
+    const pick = this.attachPick(), clip = this.current();
+    if (!pick || !clip) { this.say('Pick a clip and a model to attach.', true); return; }
+    const item = pick.startsWith('gear:') ? this.gearTable().find(g => 'gear:' + g.name === pick) : undefined;
+    const model = item?.model ?? pick;
+    const label = item?.name ?? model.slice(model.indexOf(':') + 1);
+    let id = 'user:' + label, n = 2;
+    while (this.attachments().some(a => a.id === id)) { id = `user:${label}${n++}`; }
+    const spec: AttachmentSpec = {
+      id, label, kind: 'user', model, bone: item?.bone ?? this.attachBone(),
+      position: item ? [...item.position] : [0, 0, 0], rotation: item ? [...item.rotation] : [0, 0, 0], visible: true,
+      objects: [model.slice(model.indexOf(':') + 1)],
+    };
+    if (!(await this.mountAttachment(spec))) { return; }
+    this.attachments.set([...this.attachments(), spec]);
+    this.selectedAttachment.set(id);
+    this.storeUserAttachments();
+    this.say(`Attached ${label} to ${spec.bone} on ${clip.name}.`);
+  }
+
+  private changeAttachment(id: string, change: (a: AttachmentSpec) => AttachmentSpec): void {
+    let changed: AttachmentSpec | null = null;
+    this.attachments.set(this.attachments().map(a => a.id === id ? (changed = change(a)) : a));
+    if (!changed) { return; }
+    this.viewport.updateAttachment(changed);
+    if ((changed as AttachmentSpec).kind === 'user') { this.storeUserAttachments(); }
+  }
+
+  setAttachmentVisible(id: string, on: boolean): void { this.changeAttachment(id, a => ({ ...a, visible: on })); }
+  setAttachmentBone(id: string, bone: string): void { this.changeAttachment(id, a => ({ ...a, bone })); }
+  setAttachmentValue(id: string, kind: 'position' | 'rotation', axis: number, value: string): void {
+    const v = parseFloat(value);
+    if (!Number.isFinite(v)) { return; }
+    this.changeAttachment(id, a => { const next = [...a[kind]]; next[axis] = v; return { ...a, [kind]: next }; });
+  }
+
+  detach(id: string): void {
+    const a = this.attachments().find(x => x.id === id);
+    if (!a) { return; }
+    this.viewport.removeAttachment(id);
+    this.attachments.set(this.attachments().filter(x => x.id !== id));
+    if (this.selectedAttachment() === id) { this.selectedAttachment.set(null); }
+    if (a.kind === 'user') { this.storeUserAttachments(); }
+  }
+
+  /** Every bone an attachment can go on: the skeleton's and the clip's mounts. */
+  readonly attachBones = computed(() => this.bones().map(b => b.name));
+
+  jumpTo(time: number): void { this.pause(); this.viewport.setTime(time); }
+
+  // ------------------------------------------------------------------ fire effect edits
+
+  /** Whether an effect field can be edited here: numbers, vectors and flags (objects and names stay as they are). */
+  fieldEditable(fx: FxNode, ins: FxInstruction, key: string): boolean {
+    const v = ins.fields[key];
+    // IF / ELSEIF terms shape the script (ZanimFile.WithField refuses them).
+    return this.canWrite() && fx.found && (fx.sequence ?? -1) >= 0 && ins.offset !== undefined && key !== 'flags' && key !== 'terms'
+      && (typeof v === 'number' || typeof v === 'boolean' || (Array.isArray(v) && v.length === 3));
+  }
+
+  /** One value of a weapon effect's script (setEffectField), then the effect reloaded and fired to show it. */
+  async setEffectField(fx: FxNode, ins: FxInstruction, key: string, value: number | boolean | number[]): Promise<void> {
+    if (ins.offset === undefined) { return; }
+    const ok = await this.edit(`set ${key} of ${fx.name} (${ins.name})`, { op: 'setEffectField', effect: fx.name, offset: ins.offset, field: key, value });
+    if (ok && this.weaponKey()) { await this.pickWeapon(this.weaponKey()); this.fire(); }
+  }
 
   // ------------------------------------------------------------------ loading
 
@@ -341,12 +533,14 @@ export class AnimationEditorPageLogic {
       // SOCOM's SEAL; GTA's swat ped (its first ped, male01, is a placeholder blob).
       const seal = chars.find(c => /seal/i.test(c.name) && !/_\d+(_LO)?$/i.test(c.name)) ?? chars.find(c => c.name.toLowerCase() === 'swat') ?? chars[0];
       if (seal) { await this.loadCharacter(`${seal.archive}:${seal.name}`); } else { this.hasCharacter.set(false); }
-      try { this.weapons.set(await this.client.weapons()); } catch { this.weapons.set([]); }
+      let weaponNote = '';
+      try { this.weapons.set(await this.client.weapons()); } catch (err) { this.weapons.set([]); weaponNote = ` No weapons: ${errText(err)}`; }
+      try { this.allModels.set(await this.client.listModels()); } catch { this.allModels.set([]); }
       const m4 = this.weapons().find(w => w.model === 'm4Acarbine' || w.model === 'm4a1' || w.model === 'm4') ?? this.weapons()[0];
       if (m4) { await this.pickWeapon(m4.model); }
       const first = this.clips().find(c => c.name === 'seal_stand') ?? this.clips().find(c => c.name.toLowerCase() === 'idle_stance') ?? this.clips()[0];
       if (first) { await this.selectClip(first, true); }
-      this.say(`${status.path}: ${this.clips().length} animations (${this.clips().filter(c => c.editable).length} in the package), ${chars.length} characters.`);
+      this.say(`${status.path}: ${this.clips().length} animations (${this.clips().filter(c => c.editable).length} in the package), ${chars.length} characters.${weaponNote}`, !!weaponNote);
       if (!this.pollTimer) { this.pollTimer = setInterval(() => void this.poll(), 2000); }
     } catch (err) {
       this.say(`Could not open ${path}: ${errText(err)}`, true);
@@ -384,10 +578,12 @@ export class AnimationEditorPageLogic {
         const p = await this.textures.get(n, ns);
         if (p) { pixels[n.toLowerCase()] = p; }
       }));
+      this.viewport.clearAttachments();
       this.viewport.setCharacter(mesh, pixels, this.hasCharacter());
       this.viewport.setClip(this.clip());
       this.hasCharacter.set(!!mesh.skeleton);
       this.boneVersion.update(v => v + 1);
+      if (mesh.skeleton) { await this.loadGear(key.slice(cut + 1)); await this.applyUserAttachments(); }
     } catch (err) {
       this.say(`${key}: ${errText(err)}`, true);
     } finally {
@@ -400,6 +596,7 @@ export class AnimationEditorPageLogic {
   async selectClip(c: AnimationSummary, play = false): Promise<void> {
     this.current.set(c);
     await this.loadClip(play);
+    await this.applyUserAttachments();
   }
 
   private async loadClip(play: boolean, keepTime = false): Promise<void> {
@@ -548,6 +745,8 @@ export class AnimationEditorPageLogic {
       this.say(`${undo ? 'Undid' : 'Redid'} ${r.description ?? ''} (revision ${r.revision})`);
       await this.refreshClips();
       await this.loadClip(false, true);
+      // An undone effect edit: fire with the script as it is now.
+      if (this.weaponKey() && /effect|set \w+ of/i.test(r.description ?? '')) { await this.pickWeapon(this.weaponKey()); }
     } catch (err) {
       this.say(errText(err), true);
     } finally {
