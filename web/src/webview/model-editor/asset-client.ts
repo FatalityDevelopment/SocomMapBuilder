@@ -2,6 +2,7 @@
 // Map Builder server (POST /api/command), so every page works on the same session.
 // (CodeDesigner's copy of this file posts the same commands to the VS Code extension instead.)
 
+import type { CollisionFaceWire } from '../../viewport/collisionLayer';
 import { command as postCommand } from '../../api/client';
 import type { MeshWire } from './mesh-data';
 
@@ -310,6 +311,15 @@ export interface MapTables {
 /** A HUD texture as ASSET_MAP_HUD sends it. */
 export interface HudImage { width: number; height: number; png: string }
 /** The game's HUD art for the minimap (RUN\COMMON\HUD2_TXR.ZED) and the map's tactical map, when it has one. */
+export interface MapCollision {
+  world: { nodes: number; faces: number };
+  props: { nodes: number; faces: number };
+  withoutCollision: Array<{ geoIndex: number; node: string; model: string; position: number[] }>;
+  withoutCollisionCount: number;
+  faces: CollisionFaceWire[];
+  truncated: boolean;
+}
+
 export interface MapHud {
   revision: number;
   map: string | null;
@@ -377,6 +387,9 @@ export class AssetClient {
   mapActions(): Promise<MapActions> { return this.call('ASSET_MAP_ACTIONS'); }
   mapTables(): Promise<MapTables> { return this.call('ASSET_MAP_TABLES'); }
   mapHud(): Promise<MapHud> { return this.call('ASSET_MAP_HUD'); }
+
+  // SOCOM II: what is solid (GEO di faces) in world space, and the placed props with none.
+  mapCollision(maxFaces = 60000): Promise<MapCollision> { return this.withJson('ASSET_MAP_COLLISION', { maxFaces }); }
 
   validate(vramBudget?: number): Promise<MapValidation> { return this.withJson('ASSET_VALIDATE', { vramBudget }); }
 

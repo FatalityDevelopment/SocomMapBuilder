@@ -33,7 +33,9 @@ The status chip in each page's header shows the package, whether it has unsaved 
 
 - **Runtime VRAM is limited.** Large textures or many new textures may exceed what a map can use in game. The map lint (`assets_validate`) checks a VRAM budget.
 - An imported character can appear correctly in the editors, but spawning it in a mission also requires the relevant character records.
-- AIMAPS points can be moved, renamed and retyped, but not added or removed yet.
+- AIMAPS points can be moved, renamed and retyped, and added or removed through the MCP. Adding and removing have not been tried in game.
+- `pruneAssets` removes what a map no longer uses. Candidates are only props in the map's own archives that nothing places, then the textures and palettes nothing draws with. Characters, weapons, vehicles, the world, the sky and the shared libraries are never touched. A name that appears elsewhere in the package keeps its asset, except in the authoring tables (`<map>_lib.rdr`, the map's asset library, and `lod.rdr`). Those list every asset, and their entries for removed names are taken out: the library's rows, and the LOD groups' ObjectList items, with a group removed when its list empties. The game is assumed to draw from the compiled archives, which hasn't been checked in game. `assets_validate` reports a model drawing with a texture the package lacks as `missing-texture`.
+- Collision is per placed reference (see [Collision](formats/collision.md)). Hiding a world visual leaves its floor or wall solid until `clearCollision` removes it, and a new prop needs `setCollision`.
 - The chartype table (`READERC.ZAR`) is shared by every map, so per-map loadouts cannot be changed from the Map Builder.
 
 ## Related

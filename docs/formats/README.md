@@ -14,6 +14,7 @@ All values are little-endian. Offsets are in hex. "Confirmed in game" means a fi
 | [Textures and palettes](textures.md) | `*_TXR.ZED` texdat, GS registers, `*_PAL.ZED` CLUTs | `Texture/ZedTextureFile.cs`, `Package/PackageTextures.cs` |
 | [Clutter](clutter.md) | `CLUTTER.ZAR` placements | `Geo/ClutterFile.cs` |
 | [AI maps and points](aimaps.md) | `AIMAPS.MPS` grids, spawns and waypoints | `MPS/MpsFile.cs`, `MPS/MapPoints.cs` |
+| [Collision](collision.md) | GEO `di` faces: what is solid | `Geo/GeoCollision.cs`, `Package/CollisionEdits.cs` |
 | [RDR tables](rdr.md) | `.rdr` typed tables (READERM.ZAR, ZWEAPON …) | `RDR/RdrFile.cs` |
 | [Map mission tables](map-tables.md) | What READERM.ZAR's tables mean: objectives, actors, mission settings, world settings, valves | `Services/AssetService.MapTables.cs`, `RDR/RdrDocument.cs` |
 | [Disc survey](disc-survey.md) | Every map file on the disc, what each holds, known vs unknown, what to decode next; character types and weapons (`character.rdr`), scrolling textures, DBUFFER, map screens and the TacMap | `RDR/CharacterTypes.cs`, `Geo/TextureScroll.cs`, `ZAR/BufferTable.cs`, `Services/AssetService.MapExtras.cs` |

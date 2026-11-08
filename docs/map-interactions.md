@@ -25,6 +25,8 @@ The climb and ladder candidates contain a GEO `di / di` polygon with `params` an
 
 The editor can replace the profile of an existing quad or add a quad across a side of a placed node's local bounds. It preserves existing points when changing a profile. These edits reproduce file structures. Test approach direction, usable height, mount, and dismount in the game. The single-face tool does not reconstruct M51's multi-face ladder layout automatically.
 
+MP2's ladders are bare scene nodes (`ladderdown`, `ladderdown_1` …) with two quads and no visual. The lower quad runs from the floor to the top and faces the climber. The upper one runs from just below the top to about 10 units above it and faces away. Both use the params `000000000300000012002844`. `addLadder {position, top, yaw}` builds one the same way. A visible ladder is a separate prop with no collision of its own. On the container yard that's `yard_ladder`, two rails and rungs made with addMesh shapes. Not tried in game.
+
 ## Other map tables
 
 | Record | Maps | Evidence and editor use |

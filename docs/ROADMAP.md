@@ -130,10 +130,25 @@ MCP (`server/Services/McpServer.cs`):
 
 **Asset CRUD coverage**
 - Delete textures, palettes and whole models.
-- Add and remove AIMAPS points (needs the MPS mid-file structures decoded).
 - Edit existing weapons (today they can only be created from a template).
 - RDR and MPS editing; ZANIM effects.
-- Sounds, collision and lights: research items, each needs a format doc in `docs/formats`.
+- Sounds and lights: research items, each needs a format doc in `docs/formats`.
+- **Map foundations (started, branch `claude/map-foundations`).**
+  - Done: collision ([formats/collision.md](formats/collision.md)): `setCollision`, `clearCollision`, `ASSET_MAP_COLLISION` / `assets_map_collision`, and the `no-collision` check. `placeInstance` now copies the placed model's faces instead of the template's. `addPoint` / `removePoint` for AIMAPS points. `clearMap` gives a blank map in one undo step. The Map Builder has a View › Collision layer (`viewport/collisionLayer.ts`). `addMesh uvTile / uvScale` give repeating textures on big faces (`Package/UvTiling.cs`), and `placeInstance` / `moveInstance` take a per-axis `scale`. The yard's sea used to clamp past 8 repeats and now repeats every 80 units. `assets_describe_model` now returns the drawn geometry's `boundsMin` / `boundsMax` / `size3` and `collisionFaces`. Tests: `CollisionTests`, including the disc test `Disc_faces_re_encode_to_their_retail_params`. Applied to the container yard in `Desktop\ContainerYard\MP2.ZDB`: the rig's 1,603 faces were cleared and 78 props now carry their own 452.
+  - `pruneAssets` (`Package/PackagePrune.cs`, tests `PruneTests`) and the `missing-texture` check. On the yard it removed 33 rig props, 43 textures and 31 palettes, and the file went from 7.50 MB to 6.92 MB.
+  - `clearActions` and the `dangling-action` check. `clearMap` removes the old map's actions, and `pruneAssets` takes removed names out of the authoring tables. `addLadder` builds ladders like MP2's. The yard lost MP2's three stale door actions and gained two ladders up the perimeter wall, each with a visible `yard_ladder` prop.
+  - `bakeLighting` (`Package/MeshLighting.cs`, tests `LightingTests`) prelights new props from the map's GlobalLighting. Checked against MP2's crane, which matches exactly in red; its green and blue are its paint's share. The yard's containers, slabs and ladder are lit with it.
+  - `fitGrid` (`Package/GridFit.cs`) and the cell flags written up in [aimaps.md](formats/aimaps.md). The yard's grid marks exactly its 400 × 400 pier walkable (1,600 cells).
+  - Editor fixes:
+    - Model edits on the package the Map Builder shows no longer pull the app into the Model Editor (`shared/aiBridge.ts`).
+    - A closed session is reopened instead of leaving a "Session refresh failed" banner (`useMapSession.ts`).
+    - `assets_open` on the shown path follows the new session.
+    - "Floors stop drawing after many hideVisual" did not reproduce: a live batch of 98 hides on MP2 draws the same as a page reload, in studio and baked lighting. MP2's baked night lighting draws its deck nearly black.
+  - *Left over:*
+    - None of this has been tried in game.
+    - Multiplayer team spawns are not AIMAPS points (see [map tables](formats/map-tables.md)), so they still can't be placed.
+    - The AI grid can be refitted (fitGrid) but not resized. Its byte 3 and height-word flags are not decoded.
+    - There is no way to write new world geometry.
 
 **Pipeline**
 - Play-test (launch in PCSX2).

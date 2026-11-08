@@ -94,7 +94,7 @@ Every change is one undo step. The same tab offers experimental climb and ladder
 
 ## Spawn and waypoint points
 
-The **Points** tab and the Points layer show the map's AIMAPS points: start points in green, waypoints in blue and others in grey. Select one in the outliner or the viewport and move it, or type its X / Z. Points can be renamed and retyped, but not added or removed yet (their table sits between structures that are not fully decoded). See [AI maps and points](formats/aimaps.md).
+The **Points** tab and the Points layer show the map's AIMAPS points: start points in green, waypoints in blue and others in grey. Select one in the outliner or the viewport and move it, or type its X / Z. Points can be renamed and retyped. Through the MCP (`addPoint` / `removePoint`) they can also be added and removed. See [AI maps and points](formats/aimaps.md).
 
 ## Map check
 
@@ -107,6 +107,7 @@ The **Map** tab summarises the package and lists problems. **Check map** adds ch
 | Tool | How |
 |---|---|
 | **Minimap** | N, or View menu. SOCOM II's own HUD radar, drawn with the game's art (`RUN\COMMON\HUD2_TXR.ZED`) over the map's tactical map (`RUN\UI\MM<nn>_TXR.ZED`) or a top-down render. It turns with the view, shows actors, spare start points, nav points, objectives and action props; the wheel zooms and a click moves the view. Tactical maps are placed in the world by hand in `server/data/tacmaps.json` (M51 so far). [Format notes](formats/hud.md). |
+| **Collision** | View menu (SOCOM II maps). What the game treats as solid, drawn over the map: floors and up-slopes green, walls orange, every face outlined. It reloads after each edit. See [Collision](formats/collision.md) |
 | **Walk mode** | Shift+F, or View menu. Walk at eye height (16 units above the ground) with W A S D; Shift runs, Escape stops. |
 | **Measure** | M. Click two points to see the distance in units and metres (about 10.5 units to a metre). |
 | **Hide / isolate / show all** | H, Shift+H, Alt+H. View-only: hidden props and clutter are not drawn and cannot be picked. A status-bar badge counts them; click it to show them again. |

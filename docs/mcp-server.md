@@ -21,7 +21,8 @@ Claude Code discovers tools when a session starts, so start Map Builder (`dotnet
 The assistant works on the same asset sessions as the pages:
 
 - The **AI activity** panel (activity bar, robot icon) lists every call with its reason, duration and result.
-- With **Follow AI** on, edits bring their page forward: the Map Builder reloads and frames the moved prop or point, the Model Editor opens the edited model, and the Asset Viewer opens the edited record (an RDR value, a GEO node, a ZANIM instruction, a palette) and marks it.
+- With **Follow AI** on, edits bring their page forward: the Map Builder reloads and frames the moved prop or point, the Model Editor opens the edited model, and the Asset Viewer opens the edited record (an RDR value, a GEO node, a ZANIM instruction, a palette) and marks it. While the Map Builder shows a package, an edit to one of its models (a prop built for the map) reloads the map instead of switching to the Model Editor; `ui_show page=models` still goes there.
+- When the Map Builder's session is closed (`assets_close`, or another page closed it), the page opens the package again rather than retrying a session that is gone. `assets_open` on the path it shows switches it to the new session.
 - Browsing with `viewer_list` / `viewer_preview` moves the Asset Viewer along, and any edit to the package it shows reloads it.
 - Edits stay undoable (`Ctrl+Z` undoes the assistant's too) and nothing is written until a save.
 
@@ -30,7 +31,7 @@ The assistant works on the same asset sessions as the pages:
 | Tools | Purpose |
 |---|---|
 | `assets_open`, `assets_sessions`, `assets_status` | Open or join a package session |
-| `assets_list_models`, `assets_describe_model`, `assets_model_mesh`, `assets_list_textures`, `assets_list_palettes`, `assets_texture` (as an image), `assets_map_scene`, `assets_map_points`, `assets_map_tables`, `assets_list_animations`, `assets_animation`, `assets_weapons`, `assets_uv_layout` | Read |
+| `assets_list_models`, `assets_describe_model`, `assets_model_mesh`, `assets_list_textures`, `assets_list_palettes`, `assets_texture` (as an image), `assets_map_scene`, `assets_map_points`, `assets_map_collision`, `assets_map_tables`, `assets_list_animations`, `assets_animation`, `assets_weapons`, `assets_uv_layout` | Read |
 | `assets_effects`, `assets_weapon_fx` | Read ZANIM effects and what firing a weapon plays |
 | `viewer_list`, `viewer_preview`, `viewer_edit`, `viewer_extract` | Browse any folder, file or archive record as the Asset Viewer does, read its typed preview (RDR subtrees, AI maps, GEO scene nodes, clutter pages, decoded ZANIM effects, palettes), change it in place, and copy a record out. Edits are undone and saved with `assets_undo` / `assets_save` on the session `viewer_edit` returns. |
 | `assets_edit` (every `ASSET_EDIT` op; `dryRun: true` previews one without changing anything), `assets_undo`, `assets_redo`, `assets_save`, `assets_close` | Change, save and close |

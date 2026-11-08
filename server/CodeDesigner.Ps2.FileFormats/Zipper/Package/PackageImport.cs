@@ -284,28 +284,6 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
             }
 
             /// <summary>A texture and the mip levels its MIPTBP registers point at (by texture index, same TXR).</summary>
-            private static List<int> MipGroup(ZedContainer txr, int record)
-            {
-                var group = new List<int> { record };
-                int? texdat = TexdatIndexOf(txr, record);
-                if (texdat == null) return group;
-                var byIndex = new Dictionary<int, int>();
-                foreach (int r in TopTextureRecords(txr))
-                    if (TexdatIndexOf(txr, r) is int t && txr.Nodes[t].Data.Length >= 12) byIndex[(int)BitConverter.ToUInt32(txr.Nodes[t].Data, 8)] = r;
-                int self = (int)BitConverter.ToUInt32(txr.Nodes[texdat.Value].Data, 8);
-                foreach (var (reg, lo, hi) in Registers(txr.Nodes[texdat.Value].Data))
-                {
-                    if (reg != RegMipTbp1 && reg != RegMipTbp2) continue;
-                    ulong v = ((ulong)hi << 32) | lo;
-                    for (int level = 0; level < 3; level++)
-                    {
-                        int tbp = (int)((v >> (level * 20)) & 0x3FFF);
-                        if (tbp != 0 && tbp != self && byIndex.TryGetValue(tbp, out int r) && !group.Contains(r)) group.Add(r);
-                    }
-                }
-                return group;
-            }
-
             /// <summary>New texture index (header +0x08, TBP0, MIPTBP) and palette id (TEX0.CBP) for a copied texdat.</summary>
             private byte[] PatchTexdat(byte[] texdat, Dictionary<int, int> indexMap, string sourceNs)
             {
@@ -499,6 +477,29 @@ namespace CodeDesigner.Ps2.FileFormats.Zipper.Package
         }
 
         /// <summary>Index of the top-level record <paramref name="name"/>, or -1.</summary>
+        /// <summary>A texture record and its mip levels (the records its MIPTBP registers point at).</summary>
+        internal static List<int> MipGroup(ZedContainer txr, int record)
+        {
+            var group = new List<int> { record };
+            int? texdat = TexdatIndexOf(txr, record);
+            if (texdat == null) return group;
+            var byIndex = new Dictionary<int, int>();
+            foreach (int r in TopTextureRecords(txr))
+                if (TexdatIndexOf(txr, r) is int t && txr.Nodes[t].Data.Length >= 12) byIndex[(int)BitConverter.ToUInt32(txr.Nodes[t].Data, 8)] = r;
+            int self = (int)BitConverter.ToUInt32(txr.Nodes[texdat.Value].Data, 8);
+            foreach (var (reg, lo, hi) in Registers(txr.Nodes[texdat.Value].Data))
+            {
+                if (reg != RegMipTbp1 && reg != RegMipTbp2) continue;
+                ulong v = ((ulong)hi << 32) | lo;
+                for (int level = 0; level < 3; level++)
+                {
+                    int tbp = (int)((v >> (level * 20)) & 0x3FFF);
+                    if (tbp != 0 && tbp != self && byIndex.TryGetValue(tbp, out int r) && !group.Contains(r)) group.Add(r);
+                }
+            }
+            return group;
+        }
+
         internal static int TopLevel(ZedContainer c, string name)
         {
             for (int i = 0; i < c.Nodes.Count; i = ZedTree.SubtreeEnd(c.Nodes, i))

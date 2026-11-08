@@ -34,6 +34,8 @@ export interface AiChange {
   // The page that should show it (null: reload wherever this package is open, switch nothing).
   page: PageId | null;
   path: string | null;
+  // The server session the event is about (assets_open): a page showing the path under another session reopens it.
+  session?: string | null;
   model?: { archive: string; name: string } | null;
   focus?: AiFocus | null;
   description?: string | null;
@@ -77,6 +79,14 @@ export function provideAiState(page: PageId, fn: () => unknown): () => void {
 
 export const samePath = (a: string | null | undefined, b: string | null | undefined) => !!a && !!b && a.toLowerCase() === b.toLowerCase();
 
+// The package the Map Builder shows (from its ui_state report), or null.
+function mapPath(): string | null {
+  try {
+    const st = stateProviders.get('map')?.() as { path?: unknown } | undefined;
+    return typeof st?.path === 'string' ? st.path : null;
+  } catch { return null; }
+}
+
 let seq = 0;
 const PAGES: PageId[] = ['map', 'models', 'animations', 'viewer'];
 const asPage = (p: unknown): PageId | null => PAGES.includes(p as PageId) ? p as PageId : null;
@@ -103,14 +113,18 @@ function onEvent(e: ServerEvent): void {
     }
     case 'show':
     case 'changed': {
-      const page = asPage(e['page']);
+      let page = asPage(e['page']);
+      // A model edit while the Map Builder shows that package (a prop being built for the map) reloads the map there
+      // instead of taking the user to the Model Editor; ui_show page=models still goes.
+      if (e.type === 'changed' && page === 'models' && activePage() === 'map' && samePath(mapPath(), e['path'] as string | null)) { page = null; }
       const follow = aiFollow() || e['force'] === true;
       if (follow && page) { activePage.set(page); }
       aiChange.set({
         seq: ++seq,
         page: follow ? page : null,
         path: (e['path'] as string | null) ?? null,
-        model: e['model'] as AiChange['model'],
+        session: typeof e['session'] === 'string' ? e['session'] : null,
+        model: page === null && e.type === 'changed' ? null : e['model'] as AiChange['model'],
         focus: e['focus'] as AiFocus | null,
         description: e['description'] as string | null,
         edited: e.type === 'changed',

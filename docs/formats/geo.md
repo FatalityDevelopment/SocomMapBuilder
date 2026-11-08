@@ -13,7 +13,7 @@ A definition is a tree of scene nodes. A **scene node** is any record (not one o
 | `children` | child scene nodes |
 | `model_name` | ASCII reference to another model (a prop built from other models). In `text {name}` the braced part wins: it cleans to `name` |
 
-Container names that are never scene nodes: `models`, `children`, `visuals`, `vis`, `nparams`, `vparams`, `model_name`, `di`, `params`, `points`, `matrix_id`.
+Container names that are never scene nodes: `models`, `children`, `visuals`, `vis`, `nparams`, `vparams`, `model_name`, `di`, `params`, `points`, `matrix_id`. A node's `di` child holds its collision faces (see [Collision](collision.md)).
 
 ### nparams (96 bytes, 24 words)
 

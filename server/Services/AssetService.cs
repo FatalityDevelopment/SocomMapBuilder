@@ -61,6 +61,7 @@ namespace MapBuilder.Server.Services
             reg.Add(c => Assets.GtaAssetService.Route(c, "ASSET_MODEL_MESH_BATCH") ?? Responses.Error("A GTA session is required for mesh batches."), "ASSET_MODEL_MESH_BATCH");
             reg.Add(c => CaRoute(c, "ASSET_MAP_SCENE") ?? WithSession(c.AssetSession, "ASSET_MAP_SCENE", s => MapScene(s, c.AssetJson)), "ASSET_MAP_SCENE");
             reg.Add(c => CaRoute(c, "ASSET_MAP_POINTS") ?? WithSession(c.AssetSession, "ASSET_MAP_POINTS", s => MapPointsOf(s)), "ASSET_MAP_POINTS");
+            reg.Add(c => WithSession(c.AssetSession, "ASSET_MAP_COLLISION", s => MapCollision(s, c.AssetJson)), "ASSET_MAP_COLLISION");
             reg.Add(c => CaRoute(c, "ASSET_LIST_ANIMATIONS") ?? WithSession(c.AssetSession, "ASSET_LIST_ANIMATIONS", s => ListAnimations(s, c.AssetJson)), "ASSET_LIST_ANIMATIONS");
             reg.Add(c => CaRoute(c, "ASSET_ANIMATION") ?? WithSession(c.AssetSession, "ASSET_ANIMATION", s => Animation(s, c.AssetName, c.AssetArchive)), "ASSET_ANIMATION");
             reg.Add(c => CaRoute(c, "ASSET_WEAPONS") ?? WithSession(c.AssetSession, "ASSET_WEAPONS", s => Weapons(s)), "ASSET_WEAPONS");
@@ -114,6 +115,44 @@ namespace MapBuilder.Server.Services
             {
                 case "batch":
                     return Batch(s, a);
+                case "clearMap":
+                    return ClearMap(s, a);
+                case "clearActions":
+                    return ClearActions(s, a);
+                case "addLadder":
+                    return AddLadder(s, a);
+                case "fitGrid":
+                {
+                    // {map?, floor?: lowest | highest}: an AI map's cells fitted to the collision (walkable bit, floor height).
+                    int index = OptInt(a, "map") ?? 0;
+                    bool lowest = (Str(a, "floor") ?? "lowest") switch { "lowest" => true, "highest" => false, _ => throw new ArgumentException("floor is lowest or highest") };
+                    GridFit.Result? fit = null;
+                    string leaf = pkg.Entries.FirstOrDefault(e => e.Leaf.EndsWith(".MPS", StringComparison.OrdinalIgnoreCase))?.Leaf ?? throw new InvalidOperationException("The package has no AIMAPS.MPS");
+                    var result = ApplyEdit(s, Str(a, "label") ?? $"fit AI map #{index} to the collision", p =>
+                    {
+                        fit = GridFit.Fit(p, index, lowest);
+                        return fit.Changed == 0 ? new Dictionary<string, byte[]>() : new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase) { [leaf] = fit.Mps };
+                    });
+                    return new { result, cells = fit!.Cells, walkable = fit.Walkable, changed = fit.Changed, clamped = fit.Clamped };
+                }
+                case "pruneAssets":
+                {
+                    // {models?, textures?, keep?}: props nothing places, then textures and palettes nothing draws with.
+                    bool On(string key) => !a.TryGetProperty(key, out var v) || v.ValueKind != JsonValueKind.False;
+                    var keep = a.TryGetProperty("keep", out var kp) && kp.ValueKind == JsonValueKind.Array ? kp.EnumerateArray().Select(x => x.GetString() ?? "").ToList() : null;
+                    var plan = PackagePrune.Find(pkg, On("models"), On("textures"), keep);
+                    var result = ApplyEdit(s, Str(a, "label") ?? $"prune {plan.Models.Count} model(s), {plan.Textures.Count} texture(s), {plan.Palettes.Count} palette(s)",
+                        p => PackagePrune.Apply(p, plan));
+                    return new
+                    {
+                        result, bytes = plan.Bytes,
+                        models = plan.Models.Select(m => new { archive = m.Archive, name = m.Name, bytes = m.Bytes }).ToList(),
+                        textures = plan.Textures.Select(t => new { archive = t.Archive, name = t.Name, bytes = t.Bytes }).ToList(),
+                        palettes = plan.Palettes.Select(p => new { archive = p.Archive, id = p.Id, bytes = p.Bytes }).ToList(),
+                        // Removed names taken out of the authoring tables (<map>_lib.rdr, lod.rdr) too.
+                        delisted = plan.StillListed,
+                    };
+                }
                 case "mapAction":
                     return EditMapAction(s, a);
                 case "traversalFace":
@@ -131,6 +170,7 @@ namespace MapBuilder.Server.Services
                     int index = Int(a, "clutterIndex");
                     var current = ClutterFile.Parse(pkg.Container(pkg.Entry(PackageEdits.ClutterLeaf)?.Leaf ?? throw new InvalidOperationException("No CLUTTER.ZAR")));
                     if (index < 0 || index >= current.Count) throw new ArgumentOutOfRangeException(nameof(index), $"clutterIndex {index} out of range");
+                    UniformOnly(a);
                     float[] m = Placement(a, current[index].Matrix);
                     return ApplyEdit(s, Str(a, "label") ?? $"move {current[index].ModelName} clutter #{index}", p => PackageEdits.MoveClutter(p, index, m));
                 }
@@ -138,6 +178,7 @@ namespace MapBuilder.Server.Services
                 {
                     string model = Str(a, "model") ?? throw new ArgumentException("\"model\" is required");
                     if (Floats(a, "position") == null && Floats(a, "matrix") == null) throw new ArgumentException("\"position\" [x, y, z] (or \"matrix\") is required");
+                    UniformOnly(a);
                     float[] m = Placement(a, Matrix4.Identity());
                     int newIndex = -1;
                     var result = ApplyEdit(s, Str(a, "label") ?? $"add {model} clutter", p => PackageEdits.AddClutter(p, model, m, out newIndex));
@@ -171,6 +212,69 @@ namespace MapBuilder.Server.Services
                         if (pos != null) data = MapPoints.Move(data, newName ?? name, pos[0], pos[2]);
                         return new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase) { [leaf] = data };
                     });
+                }
+                case "addPoint":
+                case "removePoint":
+                {
+                    string name = Str(a, "name") ?? throw new ArgumentException("\"name\" is required");
+                    string leaf = s.Package.Entries.FirstOrDefault(e => e.Leaf.EndsWith(".MPS", StringComparison.OrdinalIgnoreCase))?.Leaf
+                        ?? throw new InvalidOperationException("The package has no AIMAPS.MPS");
+                    if (op == "removePoint")
+                        return ApplyEdit(s, Str(a, "label") ?? $"remove point {name}", p => new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase)
+                        {
+                            [leaf] = MapPoints.Remove(p.Entry(leaf)!.Data, name),
+                        });
+                    string kind = Str(a, "kind") ?? throw new ArgumentException("\"kind\" (start, waypoint or other) is required");
+                    float[] pos = Vec(a, "position", 3) ?? throw new ArgumentException("\"position\" [x, y, z] is required");
+                    return ApplyEdit(s, Str(a, "label") ?? $"add point {name}", p => new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase)
+                    {
+                        [leaf] = MapPoints.Add(p.Entry(leaf)!.Data, name, kind, OptInt(a, "team"), pos[0], pos[2]),
+                    });
+                }
+                case "setCollision":
+                {
+                    string model = Str(a, "model") ?? throw new ArgumentException("\"model\" is required");
+                    var mref = pkg.ResolveModel(model) is { } mr && mr.Name.Equals(model, StringComparison.OrdinalIgnoreCase) ? mr
+                        : throw new ArgumentException($"No model '{model}' in the package (see assets_list_models)");
+                    GeoCollision.Profile profile = Str(a, "like") is { } like
+                        ? CollisionEdits.Faces(pkg, pkg.ResolveModel(like) ?? throw new ArgumentException($"No model '{like}'")).FirstOrDefault()?.Profile
+                            ?? throw new ArgumentException($"{like} has no collision to copy")
+                        : new GeoCollision.Profile((uint)(OptInt(a, "material") ?? 3));
+                    bool bottom = a.TryGetProperty("bottom", out var bt) && bt.ValueKind == JsonValueKind.True;
+                    string shape = Str(a, "shape") ?? "box";
+                    List<GeoCollision.Face> faces;
+                    if (a.TryGetProperty("boxes", out var boxes) && boxes.ValueKind == JsonValueKind.Array)
+                        faces = boxes.EnumerateArray().SelectMany(b => GeoCollision.Box(
+                            Vec(b, "min", 3) ?? throw new ArgumentException("each box needs min [x, y, z]"),
+                            Vec(b, "max", 3) ?? throw new ArgumentException("each box needs max [x, y, z]"), profile, bottom)).ToList();
+                    else
+                        faces = shape switch
+                        {
+                            "none" => new List<GeoCollision.Face>(),
+                            // The definition's own faces again, on every reference (ones placed before placeInstance
+                            // copied the model's faces carry their template's).
+                            "definition" => CollisionEdits.Faces(pkg, mref) is { Count: > 0 } own ? own
+                                : throw new ArgumentException($"{model}'s definition has no collision"),
+                            "mesh" => GeoCollision.FromMesh(ZipperModelMesh.Build(pkg, mref), profile),
+                            "box" => PackageEdits.GeometryBounds(pkg, mref) is var (min, max) ? GeoCollision.Box(min, max, profile, bottom) : null!,
+                            _ => throw new ArgumentException("shape is box, mesh, definition or none"),
+                        };
+                    int references = 0;
+                    var result = ApplyEdit(s, Str(a, "label") ?? $"collision of {model}", p => CollisionEdits.SetCollision(p, model, faces, out references));
+                    return new { result, faces = faces.Count, references };
+                }
+                case "clearCollision":
+                {
+                    var indices = a.TryGetProperty("geoIndices", out var gi) && gi.ValueKind == JsonValueKind.Array ? gi.EnumerateArray().Select(e => e.GetInt32()).ToList() : null;
+                    var visuals = a.TryGetProperty("visuals", out var vi) && vi.ValueKind == JsonValueKind.Array ? vi.EnumerateArray().Select(e => e.GetString() ?? "").ToList() : null;
+                    float[]? area = Vec(a, "area", 4);
+                    bool all = a.TryGetProperty("all", out var al) && al.ValueKind == JsonValueKind.True;
+                    bool refs = a.TryGetProperty("references", out var rf) && rf.ValueKind == JsonValueKind.True;
+                    if (indices == null && visuals == null && area == null && !all) throw new ArgumentException("Pick nodes: geoIndices, visuals, area or all");
+                    List<string> removed = new();
+                    int faces = 0;
+                    var result = ApplyEdit(s, Str(a, "label") ?? "clear world collision", p => CollisionEdits.ClearWorldCollision(p, indices, visuals, area, all, refs, out removed, out faces));
+                    return new { result, nodes = removed.Count, faces, names = removed.Distinct().Take(40).ToList() };
                 }
                 case "placeInstance":
                 {
@@ -227,6 +331,23 @@ namespace MapBuilder.Server.Services
                     int count = byChunk.Values.Sum(l => l.Count);
                     string label = Str(a, "label") ?? $"edit {count} vertex(es) of {model}";
                     return ApplyEdit(s, label, p => ZipperModelMesh.SetVertices(p, archive, model, byChunk));
+                }
+                case "bakeLighting":
+                {
+                    // {archive, model, scale?, chunks?}: the map's GlobalLighting (ambient + three directional lights)
+                    // baked into the vertex colours, as retail props are prelit. Replaces the colours: occlusion after.
+                    string archive = Str(a, "archive") ?? throw new ArgumentException("\"archive\" is required");
+                    string model = Str(a, "model") ?? throw new ArgumentException("\"model\" is required");
+                    var lighting = MeshLighting.OfMap(pkg) ?? throw new InvalidOperationException("The map's table (READERM.ZAR › <map>.rdr) has no GlobalLighting");
+                    var (_, mesh) = MeshOf(s, model, archive);
+                    var chunks = a.TryGetProperty("chunks", out var lc) && lc.ValueKind == JsonValueKind.Array ? lc.EnumerateArray().Select(x => x.GetInt32()).ToHashSet() : null;
+                    float scale = a.TryGetProperty("scale", out var ls) ? Number(ls, "scale") : 0.5f;
+                    float[]? tint = Vec(a, "tint", 3);
+                    if (tint != null && tint.Any(v => v is < 0 or > 4)) throw new ArgumentException("tint is [r, g, b], 0-1 each (above 1 brightens)");
+                    var edits = MeshLighting.Bake(mesh, lighting, scale, chunks, tint);
+                    if (edits.Count == 0) throw new InvalidOperationException($"{model} has no chunks with vertex colours to light");
+                    var result = ApplyEdit(s, Str(a, "label") ?? $"bake the map's lighting into {model}", p => ZipperModelMesh.SetVertices(p, archive, model, edits));
+                    return new { result, vertices = edits.Values.Sum(e => e.Count), ambient = lighting.Ambient, lights = lighting.Lights.Select(l => new { rgb = l.Rgb, dir = l.Dir }) };
                 }
                 case "bakeOcclusion":
                 {
@@ -788,6 +909,19 @@ namespace MapBuilder.Server.Services
                 what = "mesh";
             }
             else throw new ArgumentException("The op needs \"shapes\" [{kind, material, ...}], \"obj\" / \"objPath\" (OBJ), \"mesh\" / \"meshPath\" {positions, triangles, normals?, uvs?, colors?} or \"primitive\" {kind, size, center}");
+            // Repeating textures: UVs projected one repeat every uvTile units, or the mesh's own scaled by uvScale.
+            if (a.TryGetProperty("uvTile", out var tile) && tile.ValueKind == JsonValueKind.Number)
+            {
+                input = UvTiling.Project(input, tile.GetSingle(), Floats(a, "uvOffset"));
+                what += $", a repeat every {tile.GetSingle():0.##} units";
+            }
+            else if (a.TryGetProperty("uvScale", out var us) && us.ValueKind is JsonValueKind.Number or JsonValueKind.Array)
+            {
+                float[] k = us.ValueKind == JsonValueKind.Number ? new[] { us.GetSingle(), us.GetSingle() } : us.EnumerateArray().Select(x => x.GetSingle()).ToArray();
+                if (k.Length != 2) throw new ArgumentException("uvScale is a number or [u, v]");
+                input = UvTiling.Scale(input, k[0], k[1]);
+                what += $", UVs ×{k[0]:0.##}/{k[1]:0.##}";
+            }
             return input;
         }
 
@@ -821,6 +955,69 @@ namespace MapBuilder.Server.Services
         /// {"op":"batch","label":..,"ops":[...]}: runs the ops in order as one undo step. A failing op undoes the
         /// ones before it. Answers {revision, description, results} with each op's own answer.
         /// </summary>
+        // World parts a blank map keeps: the sky, clouds and sea (MP2's N000-N003).
+        private static readonly System.Text.RegularExpressions.Regex KeptWorldPart =
+            new(@"sky(?!line|light|scraper)|cloud|whispy|water|ocean|\bsea", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+        /// <summary>
+        /// clearMap {props?, clutter?, world?, collision?, keepModels?, keepVisuals?}: a blank map to build on, as one
+        /// undo step. It deletes every placed reference (except those of keepModels) and every clutter placement, hides
+        /// every world-model visual but the sky, clouds and sea (and keepVisuals), and removes the world's collision.
+        /// Each part can be turned off. The map keeps its settings, tables, AI grid and points.
+        /// </summary>
+        private static object ClearMap(AssetSession s, JsonElement a)
+        {
+            bool On(string key) => !a.TryGetProperty(key, out var v) || v.ValueKind != JsonValueKind.False;
+            var pkg = s.Package;
+            var map = pkg.MapScene() ?? throw new InvalidOperationException("The package has no map scene (no worldmodel)");
+            var keepModels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (a.TryGetProperty("keepModels", out var km) && km.ValueKind == JsonValueKind.Array) foreach (var m in km.EnumerateArray()) keepModels.Add(m.GetString() ?? "");
+            var keepVisuals = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (a.TryGetProperty("keepVisuals", out var kv) && kv.ValueKind == JsonValueKind.Array) foreach (var v in kv.EnumerateArray()) keepVisuals.Add(v.GetString() ?? "");
+
+            var ops = new List<object>();
+            int props = 0, clutter = 0;
+            var hidden = new List<string>();
+            var kept = new List<string>();
+            if (On("props"))
+                foreach (var i in SceneInstances.Collect(map.Scene.MapRoot, n => pkg.ResolveModel(n) != null)
+                    .Where(i => i.Kind == "reference" && i.Node != null && !keepModels.Contains(i.ModelName))
+                    .OrderByDescending(i => i.Node!.Index))
+                {
+                    ops.Add(new { op = "deleteInstance", geoIndex = i.Node!.Index });
+                    props++;
+                }
+            if (On("clutter") && pkg.Entry(PackageEdits.ClutterLeaf) is { } cz)
+            {
+                var placements = ClutterFile.Parse(pkg.Container(cz.Leaf));
+                for (int i = placements.Count - 1; i >= 0; i--)
+                    if (!keepModels.Contains(placements[i].ModelName)) { ops.Add(new { op = "deleteClutter", clutterIndex = i }); clutter++; }
+            }
+            if (On("world"))
+                foreach (var world in pkg.Models().Where(m => m.Archive.Equals("WORL_MDL.ZED", StringComparison.OrdinalIgnoreCase) || m.Archive.EndsWith("\\WORL_MDL.ZED", StringComparison.OrdinalIgnoreCase)))
+                {
+                    var mesh = ZipperModelMesh.TryBuild(pkg, world);
+                    if (mesh == null) continue;
+                    foreach (var g in mesh.Chunks.Where(c => c.Visual != null).GroupBy(c => c.Visual!))
+                    {
+                        bool keep = keepVisuals.Contains(g.Key) || g.Any(c => KeptWorldPart.IsMatch(c.Node ?? "") || KeptWorldPart.IsMatch(c.Texture ?? ""));
+                        // Already hidden: one zero-area speck.
+                        bool speck = g.All(c => c.Positions.Length <= 9 || c.Positions.Skip(3).Select((v, k) => v == c.Positions[k % 3]).All(x => x));
+                        if (keep) { kept.Add(g.Key); continue; }
+                        if (speck) continue;
+                        ops.Add(new { op = "hideVisual", archive = world.Archive, model = world.Name, visual = g.Key });
+                        hidden.Add(g.Key);
+                    }
+                }
+            if (On("collision")) ops.Add(new { op = "clearCollision", all = true });
+            // Doors, switches and bomb sites act on parts of the old map: a blank map has none.
+            if (On("actions") && pkg.Entry(MissionReader) != null) ops.Add(new { op = "clearActions" });
+            if (ops.Count == 0) return new { revision = s.Revision, props, clutter, hiddenVisuals = hidden, keptVisuals = kept };
+            var batch = JsonSerializer.SerializeToElement(new { ops, label = Str(a, "label") ?? "clear the map" });
+            var result = Batch(s, batch);
+            return new { result = new { s.Revision }, props, clutter, hiddenVisuals = hidden, keptVisuals = kept };
+        }
+
         private static object Batch(AssetSession s, JsonElement a)
         {
             if (!a.TryGetProperty("ops", out var ops) || ops.ValueKind != JsonValueKind.Array) throw new ArgumentException("\"ops\" [..] is required");
@@ -936,6 +1133,19 @@ namespace MapBuilder.Server.Services
                                 i.ClutterIndex >= 0 ? ("clutterIndex", i.ClutterIndex) : ("geoIndex", i.Node?.Index));
             }
 
+            // Object actions whose node is gone (deleted props): the game finds nothing to bind them to.
+            try
+            {
+                foreach (var (ordinal, node) in DanglingActions(s))
+                    Add("warning", "dangling-action", $"Action row {ordinal} acts on {node}, which is no longer in the scene (clearActions dangling: true removes it)", ("row", ordinal));
+            }
+            catch (InvalidDataException) { }
+
+            // Placed props with no collision faces are walked and shot through (on purpose for water and decals).
+            foreach (var i in instances.Where(i => i.Kind == "reference" && i.Node is { } n && n.Child("di") == null
+                && s.Package.ResolveModel(i.ModelName) is { Kind: not ("character" or "weapon") }))
+                Add("info", "no-collision", $"{i.InstanceName} ({i.ModelName}) has no collision: setCollision gives it some", ("geoIndex", i.Node!.Index));
+
             // Textures: names retail models cannot hold, and the total the map asks VRAM for.
             long textureBytes = 0;
             int textures = 0;
@@ -954,6 +1164,18 @@ namespace MapBuilder.Server.Services
             }
             if (args.VramBudget is long budget && textureBytes > budget)
                 Add("warning", "vram-budget", $"Textures take {textureBytes:N0} bytes, over the {budget:N0} budget");
+
+            // Models drawing with a texture the package does not have (after pruning or a bad import).
+            foreach (var m in s.Package.Models().Where(m => m.Kind is "prop" or "world" or "sky"))
+            {
+                ZedModelFile.Model decoded;
+                try { decoded = s.Package.DecodeModel(m); }
+                catch (Exception ex) when (ex is InvalidDataException or IndexOutOfRangeException or ArgumentException) { continue; }
+                string? ns = s.Package.TextureNamespace(m.Namespace);
+                foreach (string tif in decoded.Chunks.Select(c => c.TextureName).OfType<string>().Where(t => t.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase))
+                    if (s.Package.FindTexture(tif, ns) == null)
+                        Add("error", "missing-texture", $"{m.Name} draws with {tif}, which the package does not have", ("model", m.Name), ("texture", tif));
+            }
 
             return new
             {
@@ -1220,10 +1442,25 @@ namespace MapBuilder.Server.Services
                 return moved;
             }
             float yaw = a.TryGetProperty("yaw", out var y) ? Number(y, "yaw") : Matrix4.YawOf(current);
-            float scale = a.TryGetProperty("scale", out var sc) ? Number(sc, "scale") : Matrix4.ScaleOf(current);
-            if (scale <= 0) throw new ArgumentException("\"scale\" must be greater than 0");
-            return Matrix4.Compose(pos[0], pos[1], pos[2], yaw, scale);
+            // scale: a number, or [x, y, z] along the prop's own axes (a wall stretched to length); kept per axis.
+            float[] scale = !a.TryGetProperty("scale", out var sc)
+                ? new[] { Axis(current, 0), Axis(current, 1), Axis(current, 2) }
+                : sc.ValueKind == JsonValueKind.Array ? sc.EnumerateArray().Select(v => Number(v, "scale")).ToArray()
+                : Enumerable.Repeat(Number(sc, "scale"), 3).ToArray();
+            if (scale.Length != 3 || scale.Any(v => !(v > 0))) throw new ArgumentException("\"scale\" is a number or [x, y, z], each greater than 0");
+            float rad = yaw * MathF.PI / 180f, c = MathF.Cos(rad), s = MathF.Sin(rad);
+            return new[] { c * scale[0], 0, -s * scale[0], 0, 0, scale[1], 0, 0, s * scale[2], 0, c * scale[2], 0, pos[0], pos[1], pos[2], 1 };
         }
+
+        // Clutter keeps one scale (its scale_inverse), so it scales the same along every axis.
+        private static void UniformOnly(JsonElement a)
+        {
+            if (a.TryGetProperty("scale", out var sc) && sc.ValueKind == JsonValueKind.Array && sc.EnumerateArray().Select(v => v.GetSingle()).Distinct().Count() > 1)
+                throw new ArgumentException("Clutter scales the same on every axis: give scale as one number");
+        }
+
+        // The length of a transform's axis column (its scale along that axis).
+        private static float Axis(float[] m, int k) => MathF.Sqrt(m[k * 4] * m[k * 4] + m[k * 4 + 1] * m[k * 4 + 1] + m[k * 4 + 2] * m[k * 4 + 2]);
 
         private static string? Str(JsonElement a, string name) =>
             a.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
@@ -1672,8 +1909,17 @@ namespace MapBuilder.Server.Services
             var textures = decoded.Chunks.Select(c => c.TextureName).Where(t => t != null).Distinct(StringComparer.OrdinalIgnoreCase)
                 .Select(t => TextureInfo(s.Package, t!, texNs)).ToList();
 
+            // What it draws, in model space (the GEO's nparams bounds can be a template's until fitBounds).
+            (float[] Min, float[] Max)? drawn = null;
+            try { drawn = PackageEdits.GeometryBounds(s.Package, model); }
+            catch (Exception ex) when (ex is InvalidOperationException or InvalidDataException or ArgumentException or IndexOutOfRangeException) { }
+
             return new
             {
+                boundsMin = drawn?.Min,
+                boundsMax = drawn?.Max,
+                size3 = drawn is { } dd ? new[] { dd.Max[0] - dd.Min[0], dd.Max[1] - dd.Min[1], dd.Max[2] - dd.Min[2] } : null,
+                collisionFaces = CollisionEdits.Faces(s.Package, model).Count,
                 model.Archive,
                 model.Name,
                 model.Kind,

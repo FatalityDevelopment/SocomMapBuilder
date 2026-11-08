@@ -31,6 +31,7 @@ Guides for using Map Builder, references for its file formats, and notes for wor
 | [Textures and palettes](formats/textures.md) | `*_TXR.ZED` texture data, GS registers, `*_PAL.ZED` CLUTs |
 | [Clutter](formats/clutter.md) | `CLUTTER.ZAR` placements |
 | [AI maps and points](formats/aimaps.md) | `AIMAPS.MPS` grids, spawns and waypoints |
+| [Collision](formats/collision.md) | GEO `di` faces: what players and bullets hit |
 | [RDR tables](formats/rdr.md) | `.rdr` typed tables (READERM.ZAR, ZWEAPON …) |
 | [Map mission tables](formats/map-tables.md) | Objectives, actors, mission and world settings, valves, chartype loadouts |
 | [Disc survey](formats/disc-survey.md) | Every map file on the disc, known vs unknown, and what to decode next |
