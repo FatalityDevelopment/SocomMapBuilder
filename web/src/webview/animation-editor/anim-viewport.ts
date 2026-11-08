@@ -9,11 +9,16 @@ import type { ModelTexturePixels } from '../zipper-core/texture-pixels';
 import type { BoneWire, EditorChunk, EditorMesh } from '../model-editor/mesh-data';
 import type { FxNode } from '../model-editor/asset-client';
 import { FxInstance } from './zanim-player';
+import { gearLocal } from '../zipper-core/skinning';
+import { gameVisibility, type AttachmentSpec, type ClipMotionData } from './gear-state';
+
+export type { AttachmentSpec, ClipMotionData } from './gear-state';
 
 export interface ClipTrackData { name: string; rawName: string; kind: string; positions: number[][]; rotations: number[][] }
 
 export interface ClipData {
   name: string;
+  motion?: ClipMotionData | null;
   source: string;
   editable: boolean;
   duration: number;
@@ -66,6 +71,11 @@ export class AnimViewport extends ViewportCore {
   private readonly skeletonGroup = new THREE.Group();
   private readonly weaponGroup = new THREE.Group();
   private readonly fxGroup = new THREE.Group();
+  private readonly attachGroup = new THREE.Group();
+  private attachments = new Map<string, { spec: AttachmentSpec; group: THREE.Group; views: ChunkView[] }>();
+  // What the game shows (motion.rdr callbacks): as the previous clip left it, and at the current time.
+  private carry = new Map<string, boolean>();
+  private shownByGame = new Map<string, boolean>();
   private weaponViews: ChunkView[] = [];
   private fxViews: ChunkView[] = [];
   private locators = new Map<string, THREE.Matrix4>();
@@ -104,7 +114,7 @@ export class AnimViewport extends ViewportCore {
 
   constructor(canvas: HTMLCanvasElement, private readonly callbacks: AnimCallbacks = {}) {
     super(canvas);
-    this.scene.add(this.modelGroup, this.skeletonGroup, this.weaponGroup, this.fxGroup, this.muzzleLight);
+    this.scene.add(this.modelGroup, this.skeletonGroup, this.weaponGroup, this.fxGroup, this.attachGroup, this.muzzleLight);
     this.weaponGroup.matrixAutoUpdate = false;
     this.skeletonGroup.renderOrder = 10;
     canvas.addEventListener('pointerdown', this.onPointerDown);
@@ -112,13 +122,13 @@ export class AnimViewport extends ViewportCore {
   }
 
   dispose(): void {
-    for (const v of [...this.weaponViews, ...this.fxViews]) { v.geometry.dispose(); }
+    for (const v of [...this.weaponViews, ...this.fxViews, ...this.attachViews()]) { v.geometry.dispose(); }
     this.clearCharacter();
     this.disposeCore();
   }
 
   protected materialTargets(): Array<{ mesh: THREE.Mesh; spec: MaterialSpec }> {
-    return [...this.views, ...this.weaponViews, ...this.fxViews].map(v => ({ mesh: v.mesh, spec: v.chunk }));
+    return [...this.views, ...this.weaponViews, ...this.fxViews, ...this.attachViews()].map(v => ({ mesh: v.mesh, spec: v.chunk }));
   }
 
   // ------------------------------------------------------------------ content
@@ -164,6 +174,8 @@ export class AnimViewport extends ViewportCore {
 
   setClip(clip: ClipData | null): void {
     const keepBone = this.bones[this.selectedBone]?.name ?? null;
+    // Gear the last clip showed or hid stays that way into the next one, as in game (light, smoke, then toss).
+    if (clip?.name !== this.clip?.name) { this.carry = new Map(this.shownByGame); }
     this.clip = clip;
     this.override = null;
     if (clip && this.time > clip.duration) { this.time = 0; }
@@ -273,6 +285,7 @@ export class AnimViewport extends ViewportCore {
     this.skin();
     this.updateSkeleton();
     this.placeWeapon();
+    this.placeAttachments();
   }
 
   private skin(): void {
@@ -308,6 +321,79 @@ export class AnimViewport extends ViewportCore {
       nrm.needsUpdate = true;
     }
     this.modelGroup.visible = this.showMesh;
+  }
+
+  // ------------------------------------------------------------------ attachments (gear, models on bones)
+
+  private attachViews(): ChunkView[] { return [...(this.attachments?.values() ?? [])].flatMap(a => a.views); }
+
+  /** Adds (or replaces) a model carried on a bone. */
+  setAttachment(spec: AttachmentSpec, mesh: EditorMesh, textures: Record<string, ModelTexturePixels>): void {
+    this.removeAttachment(spec.id, false);
+    this.extraPixels = { ...this.extraPixels, ...textures };
+    this.setTexturePixels({ ...this.characterPixels, ...this.extraPixels });
+    const group = new THREE.Group();
+    group.matrixAutoUpdate = false;
+    const views: ChunkView[] = [];
+    for (const chunk of mesh.chunks) {
+      // Eyes carry a shut copy for blinking: draw them open.
+      if (/_shut/i.test(chunk.texture ?? '')) { continue; }
+      const geometry = chunkGeometry(chunk);
+      const m = new THREE.Mesh(geometry, this.materialFor(chunk));
+      group.add(m);
+      views.push({ chunk, mesh: m, geometry });
+    }
+    this.attachGroup.add(group);
+    this.attachments.set(spec.id, { spec: { ...spec }, group, views });
+    if (spec.hiddenAtStart && !this.carry.has(spec.id)) { this.carry.set(spec.id, false); }
+    this.placeAttachments();
+  }
+
+  /** Changes where an attachment sits, or whether it shows, keeping its mesh. */
+  updateAttachment(spec: AttachmentSpec): void {
+    const a = this.attachments.get(spec.id);
+    if (!a) { return; }
+    a.spec = { ...spec };
+    this.placeAttachments();
+  }
+
+  removeAttachment(id: string, place = true): void {
+    const a = this.attachments.get(id);
+    if (!a) { return; }
+    for (const v of a.views) { v.geometry.dispose(); }
+    this.attachGroup.remove(a.group);
+    this.attachments.delete(id);
+    if (place) { this.placeAttachments(); }
+  }
+
+  /** Drops the attachments of one kind (all when none is given; that also forgets what the game showed). */
+  clearAttachments(kind?: AttachmentSpec['kind']): void {
+    for (const [id, a] of [...this.attachments]) { if (!kind || a.spec.kind === kind) { this.removeAttachment(id, false); } }
+    if (!kind) { this.carry.clear(); this.shownByGame.clear(); }
+  }
+
+  /** Whether the game shows each attachment now (false: a callback hid it, or it waits for one to show it). */
+  gameShown(): Map<string, boolean> { return new Map(this.shownByGame); }
+
+  private boneIndex(name: string): number {
+    const n = name.toLowerCase();
+    const exact = (k: string) => this.bones.findIndex(b => b.name.toLowerCase() === k);
+    const i = exact(n);
+    return i >= 0 ? i : CA_ALIAS[n] ? exact(CA_ALIAS[n].toLowerCase()) : -1;
+  }
+
+  private placeAttachments(): void {
+    if (!this.attachments?.size) { return; }
+    const specs = [...this.attachments.values()].map(a => a.spec);
+    this.shownByGame = gameVisibility(specs, this.clip?.motion?.callbacks ?? [], this.time, this.carry);
+    for (const a of this.attachments.values()) {
+      const bone = this.boneIndex(a.spec.bone);
+      const shown = a.spec.visible && this.shownByGame.get(a.spec.id) !== false;
+      a.group.visible = shown && bone >= 0;
+      if (bone < 0) { continue; }
+      a.group.matrix.multiplyMatrices(this.world[bone], gearLocal(a.spec.position, a.spec.rotation));
+      a.group.matrixWorldNeedsUpdate = true;
+    }
   }
 
   // ------------------------------------------------------------------ skeleton overlay

@@ -35,6 +35,21 @@ Each track starts with an i32 kind:
 - **The static w word.** The fourth word of a static position is 612 in retail clips, with no known effect.
 - **Pad bytes.** The bytes between the positions and the rotations are not always zero. They are kept.
 
+### How the game plays a clip (`RUN/READERC.ZAR › motion.rdr`)
+
+The root's `animations` list has one row per clip, a flat run of keys and value lists (`RDR/MotionTable.cs`):
+
+```
+anim_name [guard_light_cigarette] SINGLEPLAYER [] NoFire [] NoPitchtwist [] max_velocity [-1] looped [0] playback [8]
+zanim_callback [name [show_cigarette] time [0.05]] zanim_callback [name [cigarette_flame] time [0.656]]
+```
+
+- A key with an empty list is a flag: `NoFire`, `NoTurn`, `NoInterrupt`, `DropWeapon`, `SINGLEPLAYER`, `MULTIPLAYER`, `LOADASNEEDED` ….
+- Single numbers: `looped`, `playback`, `BlendTime`, `max_velocity`, `transition_speed_A` / `_B`.
+- `zanim_callback` (repeated) runs a CZANIM effect at a time into the clip, in seconds. Effects that turn objects on or off with `OBJECT_ACTIVE_STATE` show and hide worn gear by name: `show_cigarette` turns on `cig` and `cigarette`, `toss_cigarette` turns off `cig` (see [characters.md](characters.md)). 398 rows on the retail disc.
+
+`ASSET_ANIMATION` answers a clip's row as `motion {flags, values, callbacks [{effect, time, found, shows, hides, spawns}]}`.
+
 ## ZANIM effect scripts (`CZANIM.ZAR`, `MZANIM.ZAR` …)
 
 Container tree:
@@ -61,4 +76,4 @@ Anim_Sets
 
 Weapons fire their muzzle effects through these scripts. The firepoint locators and `ZWEAPON` muzzle names select which script runs and where.
 
-**Editing.** `ZanimFile.Layout` gives each decoded argument's offset and storage (f32, i32, u16, an object or name index byte, three floats, a flag bit); decoding and `WithField` both go through it, so a field writes back to the bytes it was read from. `WithWord` sets any argument word of an instruction (not word 0, the opcode and size). Sizes never change, so nothing else in the sequence moves; an IF / ELSEIF / WHILE term count shapes the track and is not written. The Asset Viewer's ZANIM editor uses them through `VIEWER_EDIT` `zanimField` / `zanimWord`. Every field of the disc's ZANIM archives writes back byte for byte (`SceneEditTests`).
+**Editing.** `ZanimFile.Layout` gives each decoded argument's offset and storage (f32, i32, u16, an object or name index byte, three floats, a flag bit); decoding and `WithField` both go through it, so a field writes back to the bytes it was read from. `WithWord` sets any argument word of an instruction (not word 0, the opcode and size). Sizes never change, so nothing else in the sequence moves; an IF / ELSEIF / WHILE term count shapes the track and is not written. The Asset Viewer's ZANIM editor uses them through `VIEWER_EDIT` `zanimField` / `zanimWord`; the Animation Editor's effect cards, and `assets_edit`, through the package op `setEffectField {effect, offset, field, value}` on the package's `CZANIM.ZAR` (`ASSET_WEAPON_FX` answers each effect's `sequence` and each instruction's `offset`). Every field of the disc's ZANIM archives writes back byte for byte (`SceneEditTests`).

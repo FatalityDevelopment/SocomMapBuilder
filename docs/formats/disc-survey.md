@@ -116,6 +116,8 @@ Duplicate leaf names: a map ZDB holds two `DBUFFER.ZAR` (`RUN\SP\M51\` and `RUN\
 
 A type leaves fields out and inherits them: `m51_terror01 : albanian_terrorist01 : guard_alb` takes its model (`alban_ter01`) from the middle and sets its own weapons (`9mm Sub` 30×2, `Model 18`). M51's player `jungle_A51 : jungle_A_woodland_LO : able1 : basic_seal` resolves to model `seal_A_woodland_LO` with the M4A1 SD, Mark 23 SD, satchel and flashbang. 455 types have a parent, 303 a model, 301 their own weapons.
 
+The `gear` table and each clip's `motion.rdr` row (flags, values and timed `zanim_callback {name, time}` effects) are read by `CharacterTypes.GearTable` and `MotionTable`; see [characters.md](characters.md) and [animations.md](animations.md).
+
 So the chain for an actor's weapon is: `vehicles.rdr › character` → `character.rdr` type (with parents) → `default_weapons[].wep_name` → `zweapon.rdr` `InternalName` → `ModelName` → the model in `WEAP_MDL.ZED` / `WEAP_GEO.ZED`. MP maps also list their selectable characters in `READERM.ZAR › chartype.rdr`.
 
 Code: `RDR/CharacterTypes.cs` (`Parse`, `Resolve`, `ParseRoster`). `ASSET_MAP_TABLES` adds `chartype {chain, model, textureAsset, animSet, gear, weapons [{name, ammo, magazines, model}]}` to each actor when `READERC.ZAR` sits beside the package (the ZDB's folder or up to two above, as on the disc), and falls back to its model when `data/chartypes.tsv` has none. Tests: `Character_types_inherit_model_and_weapons_from_their_parents`, `A_multiplayer_roster_lists_each_teams_characters`, `Actors_carry_their_character_types_weapons_and_the_map_its_scrolling_textures`, `The_discs_character_types_give_m51s_smugglers_their_models_and_weapons` (needs `MAPBUILDER_DISC`).

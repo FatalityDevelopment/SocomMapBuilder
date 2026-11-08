@@ -177,11 +177,38 @@ export interface MapPointWire {
 
 export interface AnimationSummary { name: string; source: string; editable: boolean; duration: number; frames: number; samples: number; fps: number; bones: number }
 
+/** A worn item of character.rdr's gear table: the package model it draws as ("archive:name", null when missing), its
+ *  bone, and its offset in the bone's space (units, degrees). */
+export interface GearItem { name: string; modelFile: string; model: string | null; bone: string; position: number[]; rotation: number[]; hiddenAtStart?: boolean;
+  /** Named after a weapon (Satchel): worn only by a type whose weapons include it. */
+  weapon?: string | null }
+/** ASSET_CHARACTER_GEAR: the character types drawn with a model (each with its default_gear) and the gear table. */
+export interface CharacterGear { source: string | null; types: Array<{ name: string; chain: string[]; animSet: string | null; weapons?: string[]; gear: string[] }>; gear: GearItem[]; note?: string }
+/** A clip's motion.rdr row: flags, values and the ZANIM callbacks it runs (with the objects each turns on / off). */
+export interface ClipMotion {
+  flags: string[];
+  values: Record<string, number>;
+  callbacks: Array<{ effect: string; time: number; found: boolean; shows: string[]; hides: string[]; spawns: string[] }>;
+}
 export interface WeaponSummary { internalName: string; model: string; archive: string; fireAnimName: string; fireWait: number; tracerTextureName: string }
+
+export interface WeaponField {
+  key: string;
+  type: 'string' | 'int' | 'float';
+  value: string | number;
+}
+
+export interface WeaponDetails {
+  source: string;
+  revision: number;
+  weapons: Array<{ internalName: string; fields: WeaponField[] }>;
+}
 
 export interface FxInstruction {
   op: string;
   name: string;
+  /** The instruction's byte offset in its script (setEffectField's offset). */
+  offset?: number;
   depth: number;
   condition: boolean;
   flags: number;
@@ -193,6 +220,8 @@ export interface FxNode {
   name: string;
   found: boolean;
   set?: string;
+  /** The effect's Seq_Data record in CZANIM.ZAR (-1: no script). */
+  sequence?: number;
   names?: string[];
   models?: Array<{ archive: string; name: string }>;
   textures?: string[];
@@ -241,6 +270,8 @@ export interface MapActor {
   weapons: Array<{ name: string; model: string | null }> | null;
   /** "archive:name" of the weapon the chartype holds (its first gun the package has), or null. */
   weapon: string | null;
+  /** Its chartype's worn gear (character.rdr default_gear) the package has a model for: bone and offset (units, degrees). */
+  gear?: Array<{ name: string; model: string; bone: string; position: number[]; rotation: number[] }>;
   /** Its chartype's animation set (character.rdr) and that set's Stand clip (animset.rdr), when known. */
   animSet: string | null;
   stand: string | null;
@@ -360,6 +391,11 @@ export class AssetClient {
 
     // Weapons in the package (zweapon.rdr) and what firing one plays (its ZANIM effect tree).
   weapons(): Promise<WeaponSummary[]> { return this.call('ASSET_WEAPONS'); }
+  characterGear(model: string): Promise<CharacterGear> { return this.call('ASSET_CHARACTER_GEAR', { AssetName: model }); }
+
+  weaponDetails(archive: string, model: string): Promise<WeaponDetails> {
+    return this.call('ASSET_WEAPON_DETAILS', { AssetArchive: archive, AssetName: model });
+  }
 
   weaponFx(weapon: string): Promise<WeaponFx> { return this.call('ASSET_WEAPON_FX', { AssetName: weapon }); }
 

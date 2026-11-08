@@ -64,6 +64,7 @@ namespace MapBuilder.Server.Services
             reg.Add(c => CaRoute(c, "ASSET_LIST_ANIMATIONS") ?? WithSession(c.AssetSession, "ASSET_LIST_ANIMATIONS", s => ListAnimations(s, c.AssetJson)), "ASSET_LIST_ANIMATIONS");
             reg.Add(c => CaRoute(c, "ASSET_ANIMATION") ?? WithSession(c.AssetSession, "ASSET_ANIMATION", s => Animation(s, c.AssetName, c.AssetArchive)), "ASSET_ANIMATION");
             reg.Add(c => CaRoute(c, "ASSET_WEAPONS") ?? WithSession(c.AssetSession, "ASSET_WEAPONS", s => Weapons(s)), "ASSET_WEAPONS");
+            reg.Add(c => WithSession(c.AssetSession, "ASSET_CHARACTER_GEAR", s => CharacterGear(s, c.AssetName)), "ASSET_CHARACTER_GEAR");
             reg.Add(c => CaRoute(c, "ASSET_WEAPON_FX") ?? WithSession(c.AssetSession, "ASSET_WEAPON_FX", s => WeaponFx(s, c.AssetName)), "ASSET_WEAPON_FX");
             reg.Add(c => CaRoute(c, "ASSET_EFFECTS") ?? WithSession(c.AssetSession, "ASSET_EFFECTS", s => Effects(s, c.AssetJson)), "ASSET_EFFECTS");
             reg.Add(c => CaRoute(c, "ASSET_EFFECT") ?? WithSession(c.AssetSession, "ASSET_EFFECT", s => Effect(s, c.AssetName)), "ASSET_EFFECT");
@@ -599,6 +600,23 @@ namespace MapBuilder.Server.Services
                     var result = ApplyEdit(s, Str(a, "label") ?? $"paint {tif} on {m.Name}", p => PackageEdits.ReplaceTexture(p, tif, decoded.Namespace, rgba, w, h));
                     return new { result, pixels = painted };
                 }
+                case "setEffectField":
+                {
+                    // {effect, offset, field, value}: one value of a ZANIM effect instruction in the package's CZANIM.ZAR
+                    // (a weapon's fire effect, a cigarette's flame), as the Asset Viewer's zanimField does.
+                    string effect = Str(a, "effect") ?? throw new ArgumentException("\"effect\" (the ZANIM effect) is required");
+                    string field = Str(a, "field") ?? throw new ArgumentException("\"field\" is required");
+                    int offset = Int(a, "offset");
+                    if (!a.TryGetProperty("value", out var value)) throw new ArgumentException("\"value\" (a number, three numbers or true / false) is required");
+                    var entry = pkg.Entry("CZANIM.ZAR") ?? throw new InvalidOperationException("The package has no CZANIM.ZAR");
+                    var fx = ZanimFile.Parse(entry.Data).Find(effect) ?? throw new KeyNotFoundException($"No effect '{effect}' in CZANIM.ZAR");
+                    if (fx.SequenceIndex < 0) throw new InvalidOperationException($"{effect} has no script to edit");
+                    var nodes = ZedContainer.FromBytes(entry.Data).Nodes;
+                    byte[] seq = ZanimFile.WithField(nodes[fx.SequenceIndex].Data, offset, field, FieldValueOf(value));
+                    byte[] rebuilt = ZedSplice.Replace(entry.Data, fx.SequenceIndex, seq);
+                    return ApplyEdit(s, Str(a, "label") ?? $"set {field} of {effect} at {offset}",
+                        _ => new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase) { [entry.Leaf] = rebuilt });
+                }
                 case "addAnimation":
                 {
                     string name = Str(a, "name") ?? throw new ArgumentException("\"name\" (the new clip) is required");
@@ -1047,6 +1065,8 @@ namespace MapBuilder.Server.Services
             {
                 c.Name, c.Source, c.Editable, clip.Duration, frames = clip.Intervals, samples = clip.Samples, fps = clip.FramesPerSecond,
                 revision = s.Revision,
+                // How the game plays it (motion.rdr): flags, values and the ZANIM callbacks it runs.
+                motion = MotionOf(s, c.Name),
                 bones = clip.Tracks.Select(t => new
                 {
                     t.Name, t.RawName, kind = $"0x{t.Kind:X2}",
@@ -1058,15 +1078,8 @@ namespace MapBuilder.Server.Services
 
         // ------------------------------------------------------------------ weapons + effects
 
-        /// <summary>RUN/ZWEAPON.ZAR › zweapon.rdr next to the package, or null.</summary>
-        private static WeaponDefs? WeaponDefsOf(AssetSession s)
-        {
-            string dir = s.Package.IsZdb ? Path.GetDirectoryName(s.Package.SourcePath) ?? "." : s.Package.SourcePath;
-            string? path = new[] { Path.Combine(dir, "ZWEAPON.ZAR"), Path.Combine(Path.GetDirectoryName(dir) ?? dir, "ZWEAPON.ZAR") }.FirstOrDefault(File.Exists);
-            if (path == null) return null;
-            var rdr = ZedContainer.FromBytes(File.ReadAllBytes(path)).Nodes.FirstOrDefault(n => n.Name.EndsWith(".rdr", StringComparison.OrdinalIgnoreCase));
-            return rdr == null ? null : WeaponDefs.Parse(rdr.Data);
-        }
+        /// <summary>RUN/ZWEAPON.ZAR › zweapon.rdr next to the package or on the SOCOM II disc (see RunFile), or null.</summary>
+        private static WeaponDefs? WeaponDefsOf(AssetSession s) => CachedRunRecord(RunFile(s, "ZWEAPON.ZAR"), "*.rdr", WeaponDefs.Parse);
 
         private static ZanimFile? EffectsOf(AssetSession s) =>
             s.Package.Entry("CZANIM.ZAR") is { } e ? ZanimFile.Parse(e.Data) : null;
@@ -1078,7 +1091,7 @@ namespace MapBuilder.Server.Services
             headerFlags = $"0x{t.HeaderFlags:X}",
             instructions = t.Instructions.Select(i => new
             {
-                op = $"{i.Op:X2}", i.Name, i.Depth, i.Condition, i.Flags,
+                op = $"{i.Op:X2}", i.Name, i.Depth, i.Condition, i.Flags, i.Offset,
                 fields = i.Fields,
                 words = string.Join(' ', i.Words.Select(x => x.ToString("x8"))),
             }).ToList(),
@@ -1124,7 +1137,7 @@ namespace MapBuilder.Server.Services
         /// <summary>Weapons whose model is in the package, with what they play when fired.</summary>
         private static object Weapons(AssetSession s)
         {
-            var defs = WeaponDefsOf(s) ?? throw new InvalidOperationException("No RUN/ZWEAPON.ZAR next to the package");
+            var defs = WeaponDefsOf(s) ?? throw new InvalidOperationException("No RUN/ZWEAPON.ZAR next to the package or on a SOCOM II disc (mount it, or set MAPBUILDER_SOCOM2_DISC to its .ISO)");
             return defs.Weapons
                 .Select(w => (w, model: s.Package.Models().FirstOrDefault(m => m.Kind == "weapon" && m.Name.Equals(w.ModelName, StringComparison.OrdinalIgnoreCase))))
                 .Where(x => x.model != null)
@@ -1142,7 +1155,7 @@ namespace MapBuilder.Server.Services
         private static object WeaponFx(AssetSession s, string? weapon)
         {
             if (string.IsNullOrEmpty(weapon)) throw new ArgumentException("AssetName (weapon model or internal name) is required");
-            var defs = WeaponDefsOf(s) ?? throw new InvalidOperationException("No RUN/ZWEAPON.ZAR next to the package");
+            var defs = WeaponDefsOf(s) ?? throw new InvalidOperationException("No RUN/ZWEAPON.ZAR next to the package or on a SOCOM II disc (mount it, or set MAPBUILDER_SOCOM2_DISC to its .ISO)");
             var w = defs.ForModel(weapon) ?? defs.Weapons.FirstOrDefault(x => x.InternalName.Equals(weapon, StringComparison.OrdinalIgnoreCase))
                 ?? throw new KeyNotFoundException($"No weapon '{weapon}' in zweapon.rdr");
             var fx = EffectsOf(s);
@@ -1154,7 +1167,7 @@ namespace MapBuilder.Server.Services
                     .Select(m => new { archive = m!.Archive, name = m.Name }).ToList();
                 return new
                 {
-                    name, found = true, a.Set,
+                    name, found = true, a.Set, sequence = a.SequenceIndex,
                     names = a.Names,
                     nodeRefs = a.NodeRefs.Select(r => new { r.Name, r.Flags, r.Parent }).ToList(),
                     models,
