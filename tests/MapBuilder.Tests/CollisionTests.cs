@@ -216,6 +216,38 @@ public sealed class CollisionTests
         Assert.Contains("above the foot", b.EditFails(session, new { op = "addLadder", position = new[] { 0f, 50, 0 }, top = 40 }));
     }
 
+    /// <summary>
+    /// On a disc: MP1's grid fitted to MP1's own collision changes only the cells retail authored differently (the
+    /// walkable bit agrees for ~94% and the height for ~94%), a second fit changes nothing, and the points keep
+    /// their floors.
+    /// </summary>
+    [Fact]
+    public void Disc_mp1s_grid_fits_its_own_collision()
+    {
+        string? disc = Environment.GetEnvironmentVariable("MAPBUILDER_DISC");
+        string? zdb = string.IsNullOrEmpty(disc) ? null
+            : new[] { Path.Combine(disc, "RUN", "MP1.ZDB"), Path.Combine(disc, "MP1.ZDB") }.FirstOrDefault(File.Exists);
+        if (zdb == null) return;
+        string copy = Path.Combine(Path.GetTempPath(), $"mb-{Guid.NewGuid():N}", "MP1.ZDB");
+        Directory.CreateDirectory(Path.GetDirectoryName(copy)!);
+        File.Copy(zdb, copy);
+        var b = new Backend();
+        string session = b.Open(copy);
+        var before = b.Points(session).GetProperty("points").EnumerateArray().ToDictionary(p => p.GetProperty("name").GetString()!, p => p.GetProperty("y").ValueKind == JsonValueKind.Number ? p.GetProperty("y").GetSingle() : float.NaN);
+
+        var r = b.Edit(session, new { op = "fitGrid" });
+        int cells = r.GetProperty("cells").GetInt32(), changed = r.GetProperty("changed").GetInt32();
+        Assert.Equal(28805, cells);
+        Assert.True(changed < cells / 6, $"{changed} of {cells} cells changed");
+        Assert.True(r.GetProperty("walkable").GetInt32() > cells * 9 / 10);
+        Assert.Equal(0, b.Edit(session, new { op = "fitGrid" }).GetProperty("changed").GetInt32());
+
+        var after = b.Points(session).GetProperty("points").EnumerateArray().ToDictionary(p => p.GetProperty("name").GetString()!, p => p.GetProperty("y").ValueKind == JsonValueKind.Number ? p.GetProperty("y").GetSingle() : float.NaN);
+        Assert.Equal(before.Keys.OrderBy(k => k), after.Keys.OrderBy(k => k));
+        Assert.Equal(71.2f, after["StartBomb"], 1f); // terrain, as retail
+        Assert.True(before.Count(kv => float.IsNaN(kv.Value) || MathF.Abs(kv.Value - after[kv.Key]) < 2) >= before.Count - 2);
+    }
+
     /// <summary>On a disc: MP2 cleared keeps its sky and sea, hides the rig, and nothing of the rig stays solid.</summary>
     [Fact]
     public void Disc_mp2_clears_to_sky_and_sea()

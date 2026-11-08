@@ -120,6 +120,20 @@ namespace MapBuilder.Server.Services
                     return ClearActions(s, a);
                 case "addLadder":
                     return AddLadder(s, a);
+                case "fitGrid":
+                {
+                    // {map?, floor?: lowest | highest}: an AI map's cells fitted to the collision (walkable bit, floor height).
+                    int index = OptInt(a, "map") ?? 0;
+                    bool lowest = (Str(a, "floor") ?? "lowest") switch { "lowest" => true, "highest" => false, _ => throw new ArgumentException("floor is lowest or highest") };
+                    GridFit.Result? fit = null;
+                    string leaf = pkg.Entries.FirstOrDefault(e => e.Leaf.EndsWith(".MPS", StringComparison.OrdinalIgnoreCase))?.Leaf ?? throw new InvalidOperationException("The package has no AIMAPS.MPS");
+                    var result = ApplyEdit(s, Str(a, "label") ?? $"fit AI map #{index} to the collision", p =>
+                    {
+                        fit = GridFit.Fit(p, index, lowest);
+                        return fit.Changed == 0 ? new Dictionary<string, byte[]>() : new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase) { [leaf] = fit.Mps };
+                    });
+                    return new { result, cells = fit!.Cells, walkable = fit.Walkable, changed = fit.Changed, clamped = fit.Clamped };
+                }
                 case "pruneAssets":
                 {
                     // {models?, textures?, keep?}: props nothing places, then textures and palettes nothing draws with.

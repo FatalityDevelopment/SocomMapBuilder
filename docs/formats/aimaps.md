@@ -51,4 +51,17 @@ After each AI map's header (+0x58 from the marker) comes a sub-header, then the 
 
 A cell (8 bytes): byte 0 and byte 3 are flags, the u16 at +1 holds the floor height in its low 11 bits, and the u32 at +4 links to a stacked layer (a floor above, `0xFFFFFFFF` for none). Height: `min y + (u16 & 0x7FF) / 2047 × (max y − min y)`.
 
+Cell flags, read from MP2's grid drawn bit by bit against its layout and measured against the collision of MP1, MP2 and MP5:
+
+| Bits | Seen |
+|---|---|
+| byte 0 `0x01` / `0x0A` | Mutually exclusive: `0x01` on the deck, `0x0A` on the sea and off the map. `0x01` matches "a collision floor above the cell" for 92-94% of cells, so it is read as **walkable** |
+| byte 0 `0x40`, `0x80` | A handful of single cells (about 7 on MP2) |
+| byte 3 `0x80` | On every cell |
+| byte 3 `0x02` | Traces the deck's edge and fills the footprints of tanks, sheds and crates. It doesn't follow raised floors (MP1: mostly on flat cells), so it is authored for something else, perhaps cover |
+| byte 3 `0x08`, `0x01` | Long lines (railings?) and a few cells |
+| height word bits 13-15 | Large zones and diagonal lines; unknown |
+
+The stored height matches the floor under the cell for 61-95% of walkable cells; maps with upper storeys (MP5) keep those in their other AI maps. `fitGrid {map?, floor?}` refits a grid's cells to the collision. It sets the walkable bits and the height, and leaves every other bit and the grid's structure as they were. On MP1's own collision it changes fewer than a sixth of the cells, and a second fit changes none.
+
 A row entry: u16 first x, u16 end x (exclusive; empty rows have first = end = width), u32 index of the row's first cell, and a pointer the game fills at load. Cell (x, z) is cell `index + x − first` of row z when `first ≤ x < end`. On every retail map the rows add up to the cell count, and the decoded heights match the floors under the points (terrain, and floors inside buildings where the terrain has holes). `MpsMap.HeightAt` reads it; the Map Builder stands point markers on it. What follows the row table (per-cell links for the AI) is not decoded.

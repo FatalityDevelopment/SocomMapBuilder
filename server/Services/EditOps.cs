@@ -150,6 +150,8 @@ namespace MapBuilder.Server.Services
                 new[] { Vec("position", 3, "World [x, y, z]: the ladder's foot, centred on the face it climbs."), F("top", "number", "The height it climbs to (the floor above)."),
                     F("yaw", "number", "Degrees about Y the climbing face points (0 = +Z, 90 = +X): toward where the climber stands."),
                     F("width", "number", "Units across (MP2's are 8)."), F("name", "string", "The node's name (default ladderdown_N).") }),
+            new("fitGrid", "Fit an AI map's cells to the map's collision: each stored cell gets the walkable flag (0x01, else 0x0A) and the floor height under its centre. The grid keeps its size and cells, and its other, authored bits stay. Point heights follow. Not yet tried in game.", Array.Empty<string>(),
+                new[] { Int("map", "Which AI map (default 0, the one points sit on).", 0), OneOf("floor", "Under a cell: the lowest floor (the ground, default) or the highest (tops of props).", "lowest", "highest") }),
             new("clearActions", "Remove the map's object actions (actions.rdr rows: doors, switches, bomb sites, air strikes), all of them or only those whose node is no longer in the scene. One undo step.", Array.Empty<string>(),
                 new[] { F("dangling", "boolean", "Only rows whose node was deleted.") }),
             new("clearCollision", "Remove collision from the world's own scene nodes (under worldmodel): after hiding world visuals, so the hidden floors and walls stop being solid. Pick nodes by geoIndex, world-model visual, an area, or all.", Array.Empty<string>(),

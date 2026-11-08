@@ -137,6 +137,7 @@ MCP (`server/Services/McpServer.cs`):
   - `pruneAssets` (`Package/PackagePrune.cs`, tests `PruneTests`) and the `missing-texture` check. On the yard it removed 33 rig props, 43 textures and 31 palettes, and the file went from 7.50 MB to 6.92 MB.
   - `clearActions` and the `dangling-action` check. `clearMap` removes the old map's actions, and `pruneAssets` takes removed names out of the authoring tables. `addLadder` builds ladders like MP2's. The yard lost MP2's three stale door actions and gained two ladders up the perimeter wall, each with a visible `yard_ladder` prop.
   - `bakeLighting` (`Package/MeshLighting.cs`, tests `LightingTests`) prelights new props from the map's GlobalLighting. Checked against MP2's crane, which matches exactly in red; its green and blue are its paint's share. The yard's containers, slabs and ladder are lit with it.
+  - `fitGrid` (`Package/GridFit.cs`) and the cell flags written up in [aimaps.md](formats/aimaps.md). The yard's grid marks exactly its 400 × 400 pier walkable (1,600 cells).
   - Editor fixes:
     - Model edits on the package the Map Builder shows no longer pull the app into the Model Editor (`shared/aiBridge.ts`).
     - A closed session is reopened instead of leaving a "Session refresh failed" banner (`useMapSession.ts`).
@@ -145,7 +146,7 @@ MCP (`server/Services/McpServer.cs`):
   - *Left over:*
     - None of this has been tried in game.
     - Multiplayer team spawns are not AIMAPS points (see [map tables](formats/map-tables.md)), so they still can't be placed.
-    - The AI grid can't be resized or rebuilt from new floors.
+    - The AI grid can be refitted (fitGrid) but not resized. Its byte 3 and height-word flags are not decoded.
     - There is no way to write new world geometry.
 
 **Pipeline**

@@ -487,6 +487,7 @@ namespace MapBuilder.Server.Services
                 case "clearMap":
                 case "clearActions":
                 case "addLadder":
+                case "fitGrid":
                 case "pruneAssets":
                 case "setCollision":
                 case "clearCollision": return ("map", null, null);
@@ -824,6 +825,7 @@ namespace MapBuilder.Server.Services
                 "prop and clutter placement deleted, every world visual but sky / clouds / sea hidden, the world's collision and object actions removed)\n" +
                 "- addLadder {position (foot), top, yaw? (the way the climbing face points), width?, name?} (a ladder node as MP2's: two faces, no visual; answers newGeoIndex)\n" +
                 "- bakeLighting {archive, model, scale?, chunks?} (the map's GlobalLighting baked into a prop's vertex colours as retail prelights them; then bakeOcclusion)\n" +
+                "- fitGrid {map?, floor?: lowest|highest} (an AI map's cells fitted to the collision: walkable flag and floor height; authored bits kept; answers counts)\n" +
                 "- clearActions {dangling?} (remove the map's object actions, or only those whose node was deleted)\n" +
                 "- clearCollision {geoIndices? | visuals? | area?:[minX,minZ,maxX,maxZ] | all?, references?} (the world's own floors and walls: " +
                 "clear them under world visuals you hid; assets_map_collision shows what is solid)\n" +
