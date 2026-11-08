@@ -138,14 +138,47 @@ public sealed class CaWorldTests
         if (string.IsNullOrEmpty(disc) || !File.Exists(archive)) return;
 
         // POLAND_RURAL's farm_i2: road and grass are both 256x256 8-bit with TEX0 base 0, so TEX0 alone cannot tell
-        // them apart. Material 0x8190 binds fc701c5f (an object that uses it alone says so), 0x8990 c04aac7a.
+        // them apart. The object lists one texture per distinct material packet, in first-use order.
         var rural = CaPackage.Open(archive);
         var lib = rural.Libraries.Single(l => l.Res.Name == "farm_i2.src").Lib;
-        var known = lib.MaterialTextures();
-        Assert.Equal("ca_fc701c5f", CaLibrary.TextureName(lib.TextureHash(known[0x8190])));
-        Assert.Equal("ca_c04aac7a", CaLibrary.TextureName(lib.TextureHash(known[0x8990])));
         var road = lib.Sections(0x106CD0);
         Assert.Equal(new[] { "ca_09fde591", "ca_c04aac7a", "ca_fc701c5f" },
             road.Select(s => CaLibrary.TextureName(lib.TextureHash(s.TextureRecord!.Value))));
+        // An object that uses material 0x8190 alone binds it to fc701c5f too.
+        Assert.Equal("ca_fc701c5f", CaLibrary.TextureName(lib.TextureHash(lib.Sections(0xFF800).Single().TextureRecord!.Value)));
+    }
+
+    [Fact]
+    public void Retail_textures_follow_their_objects_material_order()
+    {
+        string? disc = Environment.GetEnvironmentVariable("MAPBUILDER_CA_DISC");
+        string archive = Path.Combine(disc ?? "", "RUN", "E8C3CD05.ZAR");
+        if (string.IsNullOrEmpty(disc) || !File.Exists(archive)) return;
+
+        // Wherever a material's TEX0 names exactly one of its object's textures, that texture is the one the section
+        // gets (BROKEN_ISLANDS: its beaches drew as rock when textures were bound per packet across the library).
+        var pkg = CaPackage.Open(archive);
+        int checkedSections = 0;
+        foreach (var (_, lib) in pkg.Libraries)
+            foreach (int obj in lib.Objects.Where(lib.IsStaticObject))
+            {
+                var textures = lib.Vector(obj + 0x40);
+                foreach (var s in lib.Sections(obj).Where(s => s.MaterialLength > 0))
+                {
+                    var tex0 = lib.AdRegisters(s.MaterialOffset, s.MaterialLength).GetValueOrDefault(CaLibrary.GsTex0);
+                    var same = textures.Where(t => lib.Tex0(t) is ulong t0 && SameTexture(t0, tex0)).ToList();
+                    if (same.Count != 1) continue;
+                    Assert.Equal(same[0], s.TextureRecord);
+                    checkedSections++;
+                }
+            }
+        Assert.True(checkedSections > 1000, $"{checkedSections}");
+    }
+
+    // TEX0's TBP0, TBW, PSM, TW / TH, CBP and CPSM.
+    private static bool SameTexture(ulong a, ulong b)
+    {
+        const ulong identity = 0x3FFFUL | (0x3FUL << 14) | (0x3FUL << 20) | (0xFFUL << 26) | (0x3FFFUL << 37) | (0xFUL << 51);
+        return (a & identity) == (b & identity);
     }
 }
